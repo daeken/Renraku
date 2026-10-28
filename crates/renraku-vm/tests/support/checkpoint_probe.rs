@@ -1,0 +1,71 @@
+//! Subprocess used by integration tests to force termination at commit boundaries.
+use renraku_vm::{
+    checkpoint::{CheckpointStore, CommitStage},
+    error::{Error, Result},
+    program::Program,
+    runtime::{RunOutcome, Vm},
+};
+use std::io::{Read, Write};
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("crash probe: {error}");
+        std::process::exit(1);
+    }
+}
+fn run() -> Result<()> {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("prepare") if matches!(args.len(), 6 | 7) => {
+            let core = std::fs::read(&args[2])?;
+            let guest = std::fs::read(&args[3])?;
+            let program = Program::load(&[&core, &guest])?;
+            let mut vm = Vm::new(&program);
+            let name = args.get(6).map(String::as_str).unwrap_or("DurableRun");
+            vm.start(
+                program.entry(&format!("Renraku.Guest.Simulation::{name}"))?,
+                vec![],
+            )?;
+            drive(&mut vm, &args[1], &args[4], &args[5])
+        }
+        Some("resume") if args.len() == 4 => {
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let mut vm = saved.snapshot.restore()?;
+            drop(store);
+            drive(&mut vm, &args[1], &args[2], &args[3])
+        }
+        _ => Err(Error("invalid crash probe arguments".into())),
+    }
+}
+fn drive(vm: &mut Vm<'_>, path: &str, steps: &str, stop: &str) -> Result<()> {
+    let steps = steps
+        .parse()
+        .map_err(|_| Error("invalid crash probe budget".into()))?;
+    if vm.run(steps)? != RunOutcome::Paused {
+        return Err(Error("crash probe completed too soon".into()));
+    }
+    let stop = match stop {
+        "prepared" => CommitStage::Prepared,
+        "written" => CommitStage::Written,
+        "committed" => CommitStage::Committed,
+        _ => return Err(Error("unknown crash probe stage".into())),
+    };
+    let mut store = CheckpointStore::open(path)?;
+    store.save_with_observer(vm, |stage| {
+        if stage == stop {
+            println!(
+                "READY {stage:?} {} {} {} {}",
+                vm.universe_id(),
+                vm.context().id,
+                vm.instructions_executed(),
+                vm.context().frames.len()
+            );
+            std::io::stdout().flush()?;
+            // The parent keeps stdin open and kills this process at the gate.
+            std::io::stdin().read_exact(&mut [0u8; 1])?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}

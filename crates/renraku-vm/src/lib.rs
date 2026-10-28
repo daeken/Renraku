@@ -1,0 +1,16 @@
+//! The Renraku CIL interpreter and persistent execution model.
+//!
+//! Guest call state lives in inspectable managed frames. Atomic checkpoints
+//! retain code, identity bindings, reachable objects, statics, and active frames.
+//! See docs/checkpoints.md for recovery and docs/cil-profile.md for compatibility.
+
+pub mod checkpoint;
+pub mod cil;
+pub mod error;
+pub mod execution;
+pub mod heap;
+pub mod identity;
+mod image;
+pub mod program;
+pub mod runtime;
+pub mod value;
