@@ -113,6 +113,13 @@ subscription adapter through compiler-error correction, full-history turns,
 lost results, and controller SIGKILL recovery without repeating the mutation.
 The foreground commands show bounded saved-turn progress on stderr and keep stdout
 as one JSON report with stop guidance and matching resume/inspection arguments.
+`agent-input` now accepts a follow-up goal after completion, retaining managed
+history, installed code, and existing objects. Input IDs make lost replies safe
+to retry, and turn-derived mutation IDs keep increasing across goals. Older saved
+agent schemas remain resumable and explicitly reject the new input operation.
+A [live two-goal run](docs/acceptance/live-followup-2026-10-29.md) reused the
+installed caller after restart, changing the same counter from 26 to 23 with
+delta -3 and no new compilation.
 
 ## Save and resume a universe
 

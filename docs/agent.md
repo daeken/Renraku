@@ -57,11 +57,59 @@ cargo run -p renraku-openai -- agent-drive target/agent-demo.db "$RENRAKU_RECEIP
 Keep the same universe, model receipt directory, compiler ledger, and profile
 identity across recovery. Published compilation results and completed managed
 calls need no compiler process to replay. A prepared compiler request still needs
-its exact pinned toolchain. Finishing the session permits no additional turns.
+its exact pinned toolchain. Finishing parks the current goal until explicit new
+input is accepted; it never starts another goal automatically.
 The CLI requires explicit `--allow-model-calls` on both commands. The user has
 authorized bounded live subscription inference, including recurring development.
 Local fixtures remain the regression suite; use live runs for meaningful model
 acceptance checks and retain their transcripts and receipts.
+
+## Add a follow-up goal
+
+For universes created with the current guest, a finished goal can accept another
+goal without replacing its objects, installed code, conversation, or turn IDs:
+
+```sh
+RENRAKU_FOLLOWUP="Inspect the installed caller, invoke it once again on the same saved Counter, and finish with the observed result."
+cargo run -p renraku-vm -- agent-input target/agent-demo.db goal-2 "$RENRAKU_FOLLOWUP" 1000
+cargo run -p renraku-openai -- agent-drive target/agent-demo.db "$RENRAKU_RECEIPTS" target/agent-compiler.db target/compiler/Renraku.Compiler.dll "$RENRAKU_PROFILE" "$RENRAKU_MODEL" 10000 4 16 --allow-model-calls
+```
+
+`agent-input` only appends managed user input; it performs no inference and needs
+no credentials. Its instruction budget defaults to 1,000 and permits zero. A
+`pending` reply means the private CIL append helper has saved frames; repeat the
+same input command with a budget or let `agent-drive` resume it. `accepted` means
+the append committed, not that the model has completed the new goal. A faulted
+helper retains its diagnostic and receipt rather than starting a second append.
+
+Input IDs contain 1..48 ASCII letters, digits, dots, underscores, or hyphens.
+Goals contain at most 4,096 UTF-8 bytes and cannot be blank. Retrying the same ID
+with exactly the same goal resumes or returns its original receipt, even after
+later goals finish. A different goal under that ID rejects without appending.
+Use a new ID for each new goal; receipt IDs are
+`agent/<universe>/input/<input-ID>`. The receipt pins the helper's method/code,
+original string references, the preceding turn number, and one execution.
+
+The append runs in ordinary CIL and links an `AgentInput` and `ChatMessage` into
+the session. Input intent and its arguments commit before any helper instruction;
+frames and receipts retain them through GC. Partial appends finish before the
+driver reads the stable journal or submits another model call. The transcript
+validator ties each extra user message to its input node, a completed finish
+turn, and the exact completed input receipt. `agent-inspect` adds
+`followupSupported` and an `inputs` array containing IDs, content, and `afterTurn`.
+The existing profile/model binding stays in effect.
+
+New inputs require a finished goal and an idle execution. The lifetime 32-turn
+and transcript limits continue across goals; accepting input cannot reset them
+or reuse old compile/install/invoke IDs. A known input ID can still be queried
+by replay after a limit is reached. This adds no native checkpoint fields:
+format 7 and its earlier readers remain unchanged.
+
+Older saved agent schemas lack the input list and private helper. They remain
+readable, inspectable, and resumable, with `followupSupported: false`; new input
+rejects explicitly. There is no automatic schema migration or method-body
+replacement. Recompiling guest DLLs on disk does not update types already saved
+inside an older universe.
 
 ## Progress and recovery output
 
@@ -216,7 +264,7 @@ security sandbox for hostile generated code. No shell, file, or general network
 tools are exposed. Generated invocations run with model capabilities disabled;
 only the coordinator's owned model turn enables submission. Existing CIL limits
 still apply, including no arrays, generics, exception handling, division, arbitrary
-host BCL, or C# async/await. Cancellation and interactive session editing are not
+host BCL, or C# async/await. Cancellation and in-place conversation editing are not
 implemented. A budget-paused invocation remains pending until explicitly resumed.
 
 ## Validation
@@ -227,7 +275,7 @@ cargo test -p renraku-openai --test cli
 cargo test -p renraku-openai --lib inference::tests::agent
 ```
 
-Eleven agent tests cover the selected search/read/compile/install/invoke/finish
+Fifteen agent tests cover the selected search/read/compile/install/invoke/finish
 sequence, lost results around every tool, SDK-free published replay, frozen
 static arguments and pre-invocation GC roots, uncertain inference with and without
 receipts, strict inputs and budgets, generated-code capability denial, compiler
@@ -239,7 +287,7 @@ component tests additionally exercise real process kills around compiler,
 installation, invocation, and inference commits. These automated fixtures use no
 live inference. The separately recorded live acceptance used ten real model turns.
 
-Four additional local HTTP integration tests run the actual asynchronous
+Five additional local HTTP integration tests run the actual asynchronous
 subscription adapter through the coding loop. The fixture chooses nine actions
 from the received full history: search, read CIL, describe a contract, compile an
 intentional type error, correct it using the saved CS1503 diagnostic, install,
@@ -261,3 +309,12 @@ recovery preserves its exact request/method/code/execution/argument receipt,
 returns 26 without another mutation, and finishes with the remaining two model
 calls. Its ignored child probe is launched by the parent test. Test endpoint
 overrides remain private to unit tests; none of these cases uses a real account.
+
+Follow-up tests recover the input append at every CIL instruction with GC between
+restores, resume pending input through the general driver, retry native CLI input
+IDs, reject conflicts/active goals/invalid inputs/lifetime overflow, and restore
+the original agent schema from a fixture captured before this addition. A second
+goal reads and invokes the installed caller to reach 33 without a compiler or a
+second installation; its original invocation receipt remains unchanged. The
+subscription HTTP fixture sends the full managed history plus the new user goal,
+preserving monotonic turns and the same object across both goals.

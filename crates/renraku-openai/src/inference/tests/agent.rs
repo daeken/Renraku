@@ -1,7 +1,9 @@
 //! Exercise the real subscription adapter against loopback HTTP, never a live account.
 use super::*;
 use renraku_vm::{
-    agent::{AgentEvent, AgentEventKind, AgentHost, AgentLimits, AgentStage, AgentStop},
+    agent::{
+        AgentEvent, AgentEventKind, AgentHost, AgentLimits, AgentStage, AgentStop, submit_input,
+    },
     compiler::CompilationStore,
     error::{Error as VmError, Result as VmResult},
     invocation::{InvocationRecord, InvocationState},
@@ -633,4 +635,89 @@ async fn sigkill_after_http_selected_invocation_restores_its_result_without_repe
     assert_eq!(invocation(&host), original);
     assert_eq!(server.posts(), 9);
     assert_eq!(receipt_counts(&directory.0), (9, 9));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_followup_goal_reuses_the_installed_caller_and_preserves_full_managed_history() {
+    const FOLLOWUP: &str = "Read the installed caller and use it once again, then finish.";
+    let directory = Directory::new();
+    let id = profile(&directory.0.join("auth"), "coding", "coding-token");
+    let mut host = host(&directory.0, compiler());
+    initialize(&host, id);
+    let server = Server::with_responder(
+        |request| {
+            let count = assistant_count(&request.body);
+            let selected = if count < 9 {
+                action(request)
+            } else {
+                assert_eq!(
+                    request.body["input"].as_array().unwrap().len(),
+                    3 + 2 * count
+                );
+                assert_eq!(
+                    request.body["input"][20],
+                    object!({"role":"user","content":FOLLOWUP})
+                );
+                assert_eq!(request.bearer, "Bearer coding-token");
+                match count {
+                    9 => object!({"op":"read_code","method":"Generated.Entry::Run"}),
+                    10 => {
+                        assert_eq!(
+                            last_result(&request.body)["output"]["sources"][0]["text"],
+                            SOURCE
+                        );
+                        object!({"op":"invoke","method":"Generated.Entry::Run","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]})
+                    }
+                    11 => {
+                        assert_eq!(last_result(&request.body)["result"]["value"], 33);
+                        object!({"op":"finish","message":"The same Counter is now 33."})
+                    }
+                    _ => panic!("unexpected extra follow-up HTTP request"),
+                }
+            };
+            FixtureReply::completed(&selected.to_string())
+        },
+        false,
+    );
+    let mut provider = async_adapter(&directory.0, id, &server.base).await;
+    assert!(matches!(
+        host.drive(&mut provider, budgets(9)).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    let original = invocation(&host);
+    inspect(&host, 26);
+    let mut store = CheckpointStore::open(&host.universe).unwrap();
+    let pending = submit_input(&mut store, "second-goal", FOLLOWUP, 0).unwrap();
+    assert_eq!(pending["state"], "pending");
+    drop(store);
+    // The restored ordinary CIL input append is owned by the driver. No SDK is
+    // needed to read/reuse code already installed for the first goal.
+    host.compiler_driver = directory.0.join("missing-compiler.dll");
+    let mut provider = async_adapter(&directory.0, id, &server.base).await;
+    let report = host
+        .drive_with_progress(&mut provider, budgets(3), |_| Ok(()))
+        .await
+        .unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    assert_eq!(report.provider_operations, 3);
+    let status = inspect(&host, 33);
+    assert_eq!(status["turn"], 12);
+    assert_eq!(status["transcript"].as_array().unwrap().len(), 27);
+    assert_eq!(
+        status["inputs"][0],
+        object!({"id":"second-goal","content":FOLLOWUP,"afterTurn":9})
+    );
+    assert_eq!(server.posts(), 12);
+    assert_eq!(receipt_counts(&directory.0), (12, 12));
+    let mut store = CheckpointStore::open(&host.universe).unwrap();
+    let replay = submit_input(&mut store, "second-goal", FOLLOWUP, 1000).unwrap();
+    assert_eq!(replay["state"], "accepted");
+    assert_eq!(replay["execution"], pending["execution"]);
+    assert_eq!(replay["instructions"], 0);
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.invocation(&original.0), Some(&original.1));
+    assert_eq!(vm.invocations().count(), 3);
+    assert_eq!(vm.installations().count(), 1);
+    assert_eq!(vm.agent_status().unwrap()["phase"], 3);
 }

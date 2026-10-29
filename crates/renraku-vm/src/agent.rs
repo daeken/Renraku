@@ -27,6 +27,7 @@ use std::{
 const HARNESS: &str = "Renraku.Guest.AgentHarness";
 const SESSION: &str = "Renraku.Guest.AgentSession";
 const TURN: &str = "Renraku.Guest.AgentTurn";
+const INPUT: &str = "Renraku.Guest.AgentInput";
 const MAX_TURNS: u32 = 32;
 const MAX_ACTION: usize = 64 * 1024;
 const MAX_OUTPUT: usize = 16 * 1024;
@@ -38,7 +39,7 @@ pub const SYSTEM_PROMPT: &str = r#"You control a persistent CIL runtime. Reply w
 {"op":"install","compilationTurn":3} installs the artifact compiled in that earlier numbered turn. Assembly names must be new; this does not replace existing bodies.
 {"op":"invoke","method":"logical method ID or Type::Method","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]} invokes a static entry with <=8 arguments. Other arguments: {"kind":"i32","value":7}, {"kind":"i64","value":"9007199254740993"}, {"kind":"object","id":"logical object ID"}, {"kind":"null"}. Calls have bounded instructions and cannot submit model requests. Static selectors freeze to their current values before execution.
 {"op":"finish","message":"short result"} ends the session.
-Search and inspect before coding. The initial test object is Renraku.Guest.Simulation::Saved, a persistent Counter (created with Value=19 only if absent). Use normal managed fields/methods and supported CIL: integers, references, strings, constructors, calls, branches. Arrays, generics, exceptions, division, .NET host BCL, native I/O and C# async/await are unsupported. Source/compiler/host paths are not accepted. Do not redefine live types: compile callers using referenceTypes. Examine errors and use a new turn to correct code. Tool outcomes and request identities are durable; no hidden retries or remote inference permissions are granted. Maximum 32 assistant turns, bounded transcript/tool output. Return finish when the goal is satisfied."#;
+Search and inspect before coding. The initial test object is Renraku.Guest.Simulation::Saved, a persistent Counter (created with Value=19 only if absent). Use normal managed fields/methods and supported CIL: integers, references, strings, constructors, calls, branches. Arrays, generics, exceptions, division, .NET host BCL, native I/O and C# async/await are unsupported. Source/compiler/host paths are not accepted. Do not redefine live types: compile callers using referenceTypes. Examine errors and use a new turn to correct code. Tool outcomes and request identities are durable; no hidden retries or remote inference permissions are granted. Maximum 32 assistant turns, bounded transcript/tool output. Return finish when the goal is satisfied. A later user message may provide a follow-up goal in the same universe; retain the prior history and existing objects/code, and use new turns rather than replaying earlier mutations."#;
 
 #[derive(Clone, Debug)]
 pub struct AgentHost {
@@ -171,6 +172,14 @@ struct SessionView {
     action: Option<Vec<u16>>,
     history_units: usize,
     result: Option<String>,
+    input_support: bool,
+    followups: Vec<InputView>,
+}
+struct InputView {
+    id: String,
+    content: String,
+    after_turn: u32,
+    message: ObjectId,
 }
 fn reference(value: Value) -> Result<ObjectId> {
     if let Value::Reference(id) = value {
@@ -183,22 +192,107 @@ fn owner(program: &Program, name: &str) -> Result<TypeId> {
     program.find_type(name)
 }
 fn field(vm: &Vm<'_>, id: ObjectId, ty: &str, name: &str) -> Result<Value> {
+    optional_field(vm, id, ty, name)?
+        .ok_or_else(|| Error(format!("agent field {ty}::{name} is missing")))
+}
+fn optional_field(vm: &Vm<'_>, id: ObjectId, ty: &str, name: &str) -> Result<Option<Value>> {
     let owner = owner(vm.program, ty)?;
     let object = vm.heap().object(id)?;
     require(
         object.type_id() == owner,
         "agent object has the wrong schema",
     )?;
-    let definition = vm
+    let Some(definition) = vm
         .program
         .fields()
         .find(|f| f.owner == owner && f.name == name && !f.is_static)
-        .ok_or_else(|| Error(format!("agent field {ty}::{name} is missing")))?;
+    else {
+        return Ok(None);
+    };
     object
         .fields()
         .get(&definition.id)
         .copied()
+        .map(Some)
         .ok_or_else(|| Error("agent field has no storage".into()))
+}
+fn validate_input_id(id: &str) -> Result<()> {
+    require(
+        !id.is_empty()
+            && id.len() <= 48
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
+        "input ID must contain 1..48 ASCII letters, digits, dots, underscores, or hyphens",
+    )
+}
+fn input_request_id(session: &str, id: &str) -> String {
+    format!("agent/{session}/input/{id}")
+}
+fn followup_inputs(vm: &Vm<'_>, saved: ObjectId, count: u32) -> Result<(bool, Vec<InputView>)> {
+    let first = optional_field(vm, saved, SESSION, "FirstInput")?;
+    let last = optional_field(vm, saved, SESSION, "LastInput")?;
+    if first.is_none() && last.is_none() {
+        return Ok((false, vec![]));
+    }
+    require(
+        first.is_some() && last.is_some(),
+        "incomplete follow-up input schema",
+    )?;
+    let entry = vm.program.entry(&format!("{HARNESS}::AcceptInput"))?;
+    let binding = vm.program.method(entry)?.binding;
+    let mut cursor = first.unwrap();
+    let mut tail = Value::Null;
+    let mut seen = BTreeSet::new();
+    let mut ids = BTreeSet::new();
+    let mut inputs = Vec::new();
+    let mut previous_turn = 0;
+    while cursor != Value::Null {
+        let node = reference(cursor)?;
+        require(
+            seen.insert(node) && seen.len() <= MAX_TURNS as usize,
+            "cyclic/oversized follow-up input list",
+        )?;
+        let id_ref = field(vm, node, INPUT, "Id")?;
+        let content_ref = field(vm, node, INPUT, "Content")?;
+        let id = text(vm, id_ref)?;
+        validate_input_id(&id)?;
+        let content = text(vm, content_ref)?;
+        let after_turn = integer(field(vm, node, INPUT, "AfterTurn")?)?;
+        require(
+            ids.insert(id.clone())
+                && !content.trim().is_empty()
+                && content.len() <= 4096
+                && after_turn > previous_turn
+                && after_turn <= count as i32,
+            "invalid follow-up input identity/content/turn",
+        )?;
+        let message = reference(field(vm, node, INPUT, "Message")?)?;
+        require(
+            field(vm, message, "Renraku.ChatMessage", "Content")? == content_ref,
+            "follow-up input/message content mismatch",
+        )?;
+        let receipt = vm
+            .invocation(&input_request_id(&vm.universe_id().to_string(), &id))
+            .ok_or_else(|| Error("follow-up input has no invocation receipt".into()))?;
+        require(
+            receipt.method == binding
+                && receipt.arguments == vec![id_ref, content_ref, Value::I32(after_turn)]
+                && receipt.state == (InvocationState::Completed { result: None }),
+            "follow-up input/receipt mismatch",
+        )?;
+        inputs.push(InputView {
+            id,
+            content,
+            after_turn: after_turn as u32,
+            message,
+        });
+        previous_turn = after_turn;
+        tail = cursor;
+        cursor = field(vm, node, INPUT, "Next")?;
+    }
+    require(last == Some(tail), "follow-up input tail mismatch")?;
+    Ok((true, inputs))
 }
 fn units(vm: &Vm<'_>, value: Value) -> Result<Vec<u16>> {
     Ok(vm
@@ -275,6 +369,7 @@ fn session(vm: &Vm<'_>) -> Result<SessionView> {
             && seen.len() == count as usize,
         "agent turn list/current mismatch",
     )?;
+    let (input_support, followups) = followup_inputs(vm, saved, count as u32)?;
     let mut message = field(vm, saved, SESSION, "First")?;
     let mut messages = BTreeSet::new();
     let mut history_units = 0;
@@ -304,7 +399,8 @@ fn session(vm: &Vm<'_>) -> Result<SessionView> {
         "agent transcript has no system/goal prefix",
     )?;
     let mut expected = 2;
-    for turn in turns {
+    let mut input_index = 0;
+    for (index, turn) in turns.into_iter().enumerate() {
         require(
             expected < chat.len(),
             "agent transcript has no matching assistant action",
@@ -329,9 +425,29 @@ fn session(vm: &Vm<'_>) -> Result<SessionView> {
             )?;
             expected += 1;
         }
+        if let Some(input) = followups.get(input_index)
+            && input.after_turn == index as u32 + 1
+        {
+            require(
+                result != Value::Null
+                    && matches!(
+                        parse_action(&units(vm, field(vm, turn, TURN, "Action")?)?),
+                        Ok(Action::Finish { .. })
+                    ),
+                "follow-up input does not follow a finished goal",
+            )?;
+            require(
+                expected < chat.len()
+                    && chat[expected] == input.message
+                    && integer(field(vm, input.message, "Renraku.ChatMessage", "Role")?)? == 1,
+                "agent transcript/follow-up input mismatch",
+            )?;
+            expected += 1;
+            input_index += 1;
+        }
     }
     require(
-        expected == chat.len(),
+        expected == chat.len() && input_index == followups.len(),
         "agent transcript contains unowned messages",
     )?;
     let (input, action, result) = if let Some(turn) = last {
@@ -352,6 +468,8 @@ fn session(vm: &Vm<'_>) -> Result<SessionView> {
         action,
         history_units,
         result,
+        input_support,
+        followups,
     })
 }
 fn active_owned(vm: &Vm<'_>) -> Result<Option<bool>> {
@@ -370,7 +488,7 @@ fn active_owned(vm: &Vm<'_>) -> Result<Option<bool>> {
     }
     match method.name.as_str() {
         "Initialize" | "Ask" => Ok(Some(true)),
-        "Freeze" | "Apply" => Ok(Some(false)),
+        "Freeze" | "Apply" | "AcceptInput" => Ok(Some(false)),
         _ => Ok(None),
     }
 }
@@ -678,6 +796,95 @@ fn start_apply(
     )?;
     store.save(vm)?;
     Ok(())
+}
+
+/// Queue one follow-up without inference. Existing IDs bind the original string
+/// references and pinned helper, so retries resume or return their receipt.
+pub fn submit_input(
+    store: &mut CheckpointStore,
+    id: &str,
+    goal: &str,
+    budget: u64,
+) -> Result<Json> {
+    validate_input_id(id)?;
+    require(
+        !goal.trim().is_empty() && goal.len() <= 4096,
+        "follow-up goal must contain 1..4096 UTF-8 bytes",
+    )?;
+    require(
+        budget <= 1_000_000,
+        "follow-up instruction budget exceeds policy",
+    )?;
+    let saved = store.load()?;
+    let mut vm = saved.snapshot.restore()?;
+    let method = vm.program.entry(&format!("{HARNESS}::AcceptInput"))
+        .map_err(|_| Error("saved agent schema does not support follow-up inputs; its original session remains readable/resumable".into()))?;
+    let request_id = input_request_id(&vm.universe_id().to_string(), id);
+    let (arguments, after_turn) = if let Some(record) = vm.invocation(&request_id) {
+        require(
+            record.method == vm.program.method(method)?.binding && record.arguments.len() == 3,
+            "input ID is bound to a different call",
+        )?;
+        require(
+            text(&vm, record.arguments[0])? == id && text(&vm, record.arguments[1])? == goal,
+            "input ID is already bound to different content",
+        )?;
+        (record.arguments.clone(), integer(record.arguments[2])?)
+    } else {
+        require(
+            idle(&vm),
+            "a new follow-up requires a finished goal and idle execution",
+        )?;
+        let state = session(&vm)?;
+        require(
+            state.input_support,
+            "saved agent schema does not support follow-up inputs",
+        )?;
+        require(
+            idle(&vm) && state.phase == 3 && state.count > 0,
+            "a new follow-up requires a finished goal and idle execution",
+        )?;
+        require(
+            state.count < MAX_TURNS,
+            "session turn limit reached; input was not accepted",
+        )?;
+        require(
+            state.history_units + goal.encode_utf16().count() < 500_000,
+            "session transcript limit reached; input was not accepted",
+        )?;
+        require(
+            matches!(
+                parse_action(state.action.as_deref().unwrap())?,
+                Action::Finish { .. }
+            ),
+            "saved goal is not finished",
+        )?;
+        let id = vm.new_string(id.encode_utf16().collect())?;
+        let goal = vm.new_string(goal.encode_utf16().collect())?;
+        (
+            vec![
+                Value::Reference(id),
+                Value::Reference(goal),
+                Value::I32(state.count as i32),
+            ],
+            state.count as i32,
+        )
+    };
+    let before = vm.instructions_executed();
+    let receipt = vm.invoke_once(store, &request_id, method, arguments, budget, 100)?;
+    let (state, diagnostic) = match &receipt.state {
+        InvocationState::Running => ("pending", None),
+        InvocationState::Completed { result: None } => ("accepted", None),
+        InvocationState::Completed { .. } => {
+            return Err(Error("invalid follow-up helper result".into()));
+        }
+        InvocationState::Faulted { message } => ("faulted", Some(message)),
+    };
+    Ok(
+        json!({"format":1,"inputId":id,"requestId":request_id,"afterTurn":after_turn,
+        "execution":receipt.execution.to_string(),"state":state,"diagnostic":diagnostic,
+        "instructions":vm.instructions_executed()-before}),
+    )
 }
 
 impl AgentHost {
@@ -1220,7 +1427,8 @@ impl Vm<'_> {
             cursor = field(self, id, "Renraku.ChatMessage", "Next")?;
         }
         Ok(
-            json!({"format":1,"sessionId":state.id,"turn":state.count,"phase":state.phase,"transcript":transcript,"pendingInput":state.input,"result":state.result}),
+            json!({"format":1,"sessionId":state.id,"turn":state.count,"phase":state.phase,"transcript":transcript,"pendingInput":state.input,"result":state.result,
+                "followupSupported":state.input_support,"inputs":state.followups.iter().map(|i|json!({"id":i.id,"content":i.content,"afterTurn":i.after_turn})).collect::<Vec<_>>()}),
         )
     }
 }

@@ -65,7 +65,9 @@ This demo handles one prompt. The [persistent coding agent](agent.md) adds a
 foreground `agent` / `agent-drive` command with bounded model-selected tools and
 a managed transcript. It uses one strict JSON action per final-text response;
 native Responses function calls remain unsupported. Both commands require
-explicit model opt-in. A general interactive conversation command is later work.
+explicit model opt-in. `renraku-vm agent-input` queues an idempotent managed
+follow-up after a finished goal; `agent-drive` then submits the full retained
+history under the same profile/model binding. General interactive UI work remains.
 Agent progress and compiler diagnostics appear on stderr after their managed
 turns commit. Stdout stays one JSON report, now including recovery guidance and
 resume/inspection arguments; see [agent output](agent.md#progress-and-recovery-output).

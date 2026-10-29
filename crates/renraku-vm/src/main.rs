@@ -31,6 +31,7 @@ fn execute() -> Result<()> {
         "       renraku-vm resume <universe.db> [budget] [checkpoint-interval]\n",
         "       renraku-vm inspect-checkpoint <universe.db>\n",
         "       renraku-vm agent-inspect <universe.db>\n",
+        "       renraku-vm agent-input <universe.db> <input-ID> <goal> [instruction-budget]\n",
         "       renraku-vm search <universe.db> <query> [limit]\n",
         "       renraku-vm read-code <universe.db> <method-or-code-ID>\n",
         "       renraku-vm export-reference <universe.db> <type-name-or-ID> [type ...]\n",
@@ -64,6 +65,17 @@ fn execute() -> Result<()> {
         return Err(Error(USAGE.into()));
     }
     match args.first().map(String::as_str) {
+        Some("agent-input") if (4..=5).contains(&args.len()) => {
+            let budget = number(args.get(4), 1000)?;
+            if !std::path::Path::new(&args[1]).is_file() {
+                return Err(Error("checkpoint does not exist".into()));
+            }
+            let mut store = CheckpointStore::open(&args[1])?;
+            print_json(&renraku_vm::agent::submit_input(
+                &mut store, &args[2], &args[3], budget,
+            )?)?;
+            return Ok(());
+        }
         Some(
             "compile-once"
             | "compile-prepare"

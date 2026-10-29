@@ -50,7 +50,7 @@ fn guidance(stop: &AgentStop) -> (&'static str, &'static str) {
     match stop {
         AgentStop::Finished(_) => (
             "finished",
-            "Finished. The result and conversation are saved; no continuation is needed.",
+            "Finished this goal. The result and conversation are saved. Use agent-inspect to check support for a follow-up via agent-input.",
         ),
         AgentStop::InstructionBudget => (
             "resume",

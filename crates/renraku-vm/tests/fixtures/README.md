@@ -38,3 +38,12 @@ instructions of StaticRoundTrip, already committing Total=4 while still paused.
 Its cumulative instruction count is 7. Recovery must resume that same execution
 to result 4 and return 4 on retries. Its SHA-256 is
 `61098f09377337a23bd3550c1a4979f3081216bc80f9513095cfbd00679fbf10`.
+
+`checkpoint-v7-agent.bin` was captured from the format 7 writer at commit
+6c6581e before adding managed follow-up input fields/helpers. It contains an
+unstarted AgentHarness.Initialize frame with synthetic profile/model identifiers,
+the original saved guest assemblies, and a short finish goal. No inference or
+real credentials were used. The original session must still finish under a local
+provider and report `followupSupported: false`; new input must reject without a
+checkpoint change. Its SHA-256 is
+`15f35a66e84919a8c0471d66317829b24ab9dde51308720f92e4fdd673016d4e`.

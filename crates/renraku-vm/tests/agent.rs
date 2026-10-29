@@ -2,7 +2,7 @@
 mod common;
 use common::{entry, fixtures, program};
 use renraku_vm::{
-    agent::{AgentEventKind, AgentHost, AgentLimits, AgentStage, AgentStop},
+    agent::{AgentEventKind, AgentHost, AgentLimits, AgentStage, AgentStop, submit_input},
     checkpoint::CheckpointStore,
     effects::AsyncModelProvider,
     error::{Error, Result},
@@ -86,6 +86,9 @@ enum Mode {
     Unsafe,
     Repeat,
     Huge,
+    Finish,
+    FinishAtLimit,
+    Followup,
 }
 impl Script {
     fn open(path: &Path) -> Self {
@@ -106,6 +109,14 @@ impl Script {
             .count();
         let last = String::from_utf16(&request.messages.last().unwrap().content).unwrap();
         match self.mode {
+            Mode::Finish => return Ok(json!({"op":"finish","message":"done"}).to_string()),
+            Mode::FinishAtLimit => return Ok(if assistants == 31 { json!({"op":"finish","message":"done"}) } else { json!({"op":"search","query":"Counter","limit":1}) }.to_string()),
+            Mode::Followup => return Ok(match assistants {
+                6 => { assert_eq!(last, "Use the installed caller again, then finish."); json!({"op":"read_code","method":"Generated.Entry::Run"}) },
+                7 => { let r:Json=serde_json::from_str(&last).unwrap(); assert_eq!(r["output"]["sourceAvailable"],true); json!({"op":"invoke","method":"Generated.Entry::Run","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]}) },
+                8 => { let r:Json=serde_json::from_str(&last).unwrap(); assert_eq!(r["result"]["value"],33); json!({"op":"finish","message":"Counter advanced to 33"}) },
+                _ => return Err(Error("unexpected follow-up model turn".into()))
+            }.to_string()),
             Mode::Unsafe=>return Ok(if assistants==0 {json!({"op":"compile","assembly":"Evil","source":"public class X { }","compilerPath":"/bin/sh"})}else{let result:Json=serde_json::from_str(&last).unwrap();assert_eq!(result["ok"],false);json!({"op":"finish","message":"unsupported action rejected"})}.to_string()),
             Mode::Repeat=>return Ok(json!({"op":"search","query":"Counter","limit":1}).to_string()),
             Mode::Huge=>return Ok("x".repeat(65537)),
@@ -185,6 +196,293 @@ impl Script {
             .query_row("SELECT count(*) FROM receipt", [], |row| row.get(0))
             .unwrap()
     }
+}
+
+fn copy_world(source: &Path, target: &Path) {
+    let db = Connection::open(source).unwrap();
+    let row: (Vec<u8>, u32, Vec<u8>, Vec<u8>) = db
+        .query_row(
+            "SELECT universe,format,digest,payload FROM checkpoint",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    let _store = CheckpointStore::open(target).unwrap();
+    Connection::open(target)
+        .unwrap()
+        .execute(
+            "INSERT INTO checkpoint VALUES(1,1,?1,?2,?3,?4)",
+            params![row.0, row.1, row.2, row.3],
+        )
+        .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn followup_goals_reuse_objects_code_and_monotonic_receipts_without_duplicate_input() {
+    let mut test = Test::new();
+    let mut provider = test.provider();
+    assert!(matches!(
+        test.host.drive(&mut provider, limits()).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let (original_id, original) = vm.invocations().next().unwrap();
+    let original_id = original_id.to_owned();
+    let original = original.clone();
+    let goal = "Use the installed caller again, then finish.";
+    let accepted = submit_input(&mut store, "goal-2", goal, 1000).unwrap();
+    assert_eq!(accepted["state"], "accepted");
+    assert_eq!(accepted["afterTurn"], 6);
+    let replay = submit_input(&mut store, "goal-2", goal, 0).unwrap();
+    assert_eq!(replay["execution"], accepted["execution"]);
+    assert_eq!(replay["instructions"], 0);
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    assert_eq!(
+        vm.agent_status().unwrap()["inputs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(vm.agent_status().unwrap()["turn"], 6);
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    drop(vm);
+    drop(store);
+    test.host.compiler_driver = test.directory.join("missing-compiler.dll");
+    provider.mode = Mode::Followup;
+    let report = test.host.drive(&mut provider, limits()).await.unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    assert_eq!(report.provider_operations, 3);
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let status = vm.agent_status().unwrap();
+    assert_eq!(status["turn"], 9);
+    assert_eq!(status["transcript"].as_array().unwrap().len(), 21);
+    assert_eq!(
+        status["inputs"][0],
+        json!({"id":"goal-2","content":goal,"afterTurn":6})
+    );
+    assert_eq!(vm.invocation(&original_id), Some(&original));
+    assert_eq!(vm.installations().count(), 1);
+    assert_eq!(vm.invocations().count(), 3);
+    assert_eq!(provider.receipts(), 9);
+    let before = store.generation();
+    assert!(
+        submit_input(&mut store, "goal-2", "different content", 1000)
+            .unwrap_err()
+            .0
+            .contains("different content")
+    );
+    assert_eq!(store.load().unwrap().generation, before);
+    let replay = submit_input(&mut store, "goal-2", goal, 1000).unwrap();
+    assert_eq!(replay["afterTurn"], 6);
+    assert_eq!(replay["instructions"], 0);
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.agent_status().unwrap()["phase"], 3);
+    assert_eq!(
+        vm.agent_status().unwrap()["inputs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn followup_append_recovers_every_cil_instruction_and_retains_pending_argument_roots() {
+    let test = Test::new();
+    let mut provider = test.provider();
+    provider.mode = Mode::Finish;
+    test.host.drive(&mut provider, limits()).await.unwrap();
+    let prototype = test.directory.join("prototype.db");
+    copy_world(&test.host.universe, &prototype);
+    let mut store = CheckpointStore::open(&prototype).unwrap();
+    let complete = submit_input(&mut store, "input", "a new goal\0🦀", 1000).unwrap();
+    let instructions = complete["instructions"].as_u64().unwrap();
+    assert!(instructions > 20);
+    for cut in 0..=instructions {
+        let database = test.directory.join(format!("cut-{cut}.db"));
+        copy_world(&test.host.universe, &database);
+        let mut store = CheckpointStore::open(&database).unwrap();
+        let first = submit_input(&mut store, "input", "a new goal\0🦀", cut).unwrap();
+        assert!(first["instructions"].as_u64().unwrap() <= cut);
+        let saved = store.load().unwrap();
+        let mut vm = saved.snapshot.restore().unwrap();
+        vm.collect_garbage().unwrap();
+        store.save(&vm).unwrap();
+        drop(vm);
+        drop(store);
+        let mut store = CheckpointStore::open(&database).unwrap();
+        let replay = submit_input(&mut store, "input", "a new goal\0🦀", 1000).unwrap();
+        assert_eq!(replay["state"], "accepted");
+        assert_eq!(replay["execution"], first["execution"]);
+        assert_eq!(
+            first["instructions"].as_u64().unwrap() + replay["instructions"].as_u64().unwrap(),
+            instructions
+        );
+        let saved = store.load().unwrap();
+        let vm = saved.snapshot.restore().unwrap();
+        let status = vm.agent_status().unwrap();
+        assert_eq!(status["inputs"].as_array().unwrap().len(), 1);
+        assert_eq!(status["transcript"].as_array().unwrap().len(), 5);
+        assert_eq!(status["turn"], 1);
+    }
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let pending = submit_input(&mut store, "driver-owned", "Finish a second goal.", 1).unwrap();
+    assert_eq!(pending["state"], "pending");
+    drop(store);
+    let report = test.host.drive(&mut provider, limits()).await.unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.agent_status().unwrap()["turn"], 2);
+    assert_eq!(
+        vm.agent_status().unwrap()["inputs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let replay = submit_input(&mut store, "driver-owned", "Finish a second goal.", 0).unwrap();
+    assert_eq!(replay["execution"], pending["execution"]);
+    assert_eq!(replay["state"], "accepted");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn input_cli_retries_are_safe_and_new_inputs_require_finished_goals_within_lifetime_limits() {
+    let test = Test::new();
+    let mut provider = test.provider();
+    provider.mode = Mode::Finish;
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let before = store.generation();
+    assert!(submit_input(&mut store, "early", "goal", 1000).is_err());
+    assert_eq!(store.load().unwrap().generation, before);
+    drop(store);
+    test.host.drive(&mut provider, limits()).await.unwrap();
+    let cli = |budget: &str| {
+        Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+            .arg("agent-input")
+            .arg(&test.host.universe)
+            .args(["request-1", "Follow up.", budget])
+            .output()
+            .unwrap()
+    };
+    let first = cli("0");
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let pending: Json = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(pending["state"], "pending");
+    let completed = cli("1000");
+    assert!(completed.status.success());
+    let accepted: Json = serde_json::from_slice(&completed.stdout).unwrap();
+    assert_eq!(accepted["execution"], pending["execution"]);
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let before = store.generation();
+    for (id, goal, budget) in [
+        ("request-1", "changed", 1000),
+        ("new-id", "too soon", 1000),
+        ("/bad", "goal", 1000),
+        ("long", "goal", 1_000_001),
+        ("empty", " ", 1000),
+    ] {
+        assert!(submit_input(&mut store, id, goal, budget).is_err());
+        assert_eq!(store.load().unwrap().generation, before);
+    }
+    assert!(submit_input(&mut store, "long-goal", &"x".repeat(4097), 1000).is_err());
+    let capped = Test::new();
+    let mut provider = capped.provider();
+    provider.mode = Mode::FinishAtLimit;
+    let report = capped
+        .host
+        .drive(
+            &mut provider,
+            AgentLimits {
+                instructions: 100_000,
+                provider_operations: 32,
+                tool_actions: 32,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    let mut store = CheckpointStore::open(&capped.host.universe).unwrap();
+    let before = store.generation();
+    assert!(
+        submit_input(&mut store, "over-cap", "more", 1000)
+            .unwrap_err()
+            .0
+            .contains("turn limit")
+    );
+    assert_eq!(store.load().unwrap().generation, before);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn original_agent_schema_remains_readable_and_resumable_but_rejects_followup_inputs() {
+    use sha2::{Digest, Sha256};
+    struct Legacy;
+    impl AsyncModelProvider for Legacy {
+        fn capability(&self) -> &str {
+            "openai.chatgpt.11111111-1111-4111-8111-111111111111"
+        }
+        fn supports_model(&self, model: &str) -> bool {
+            model == "fixture-model"
+        }
+        async fn submit(&mut self, _: &ModelRequest) -> Result<Vec<u16>> {
+            Ok(json!({"op":"finish","message":"legacy done"})
+                .to_string()
+                .encode_utf16()
+                .collect())
+        }
+        async fn reconcile(&mut self, _: &ModelRequest) -> Result<Option<Vec<u16>>> {
+            unreachable!()
+        }
+    }
+    let test = Test::new();
+    let database = test.directory.join("legacy.db");
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let payload = include_bytes!("fixtures/checkpoint-v7-agent.bin");
+    Connection::open(&database)
+        .unwrap()
+        .execute(
+            "INSERT INTO checkpoint VALUES(1,1,?1,7,?2,?3)",
+            params![
+                &payload[12..28],
+                Sha256::digest(payload).as_slice(),
+                payload.as_slice()
+            ],
+        )
+        .unwrap();
+    let before = store.generation();
+    assert!(
+        submit_input(&mut store, "new", "goal", 1000)
+            .unwrap_err()
+            .0
+            .contains("does not support follow-up")
+    );
+    assert_eq!(store.load().unwrap().generation, 1);
+    drop(store);
+    let mut host = test.host.clone();
+    host.universe = database;
+    assert!(matches!(
+        host.drive(&mut Legacy, limits()).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    let mut store = CheckpointStore::open(&host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.agent_status().unwrap()["followupSupported"], false);
+    assert_eq!(vm.agent_status().unwrap()["phase"], 3);
+    assert!(store.generation() > before);
 }
 impl AsyncModelProvider for Script {
     fn capability(&self) -> &str {

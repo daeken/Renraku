@@ -18,6 +18,16 @@ namespace Renraku.Guest
         public AgentTurn Next;
         public AgentTurn(int number, string action) { Number = number; Action = action; }
     }
+    public sealed class AgentInput
+    {
+        public string Id;
+        public string Content;
+        public int AfterTurn;
+        public Renraku.ChatMessage Message;
+        public AgentInput Next;
+        public AgentInput(string id, string content, int afterTurn)
+        { Id = id; Content = content; AfterTurn = afterTurn; }
+    }
     public sealed class AgentSession
     {
         public string Id;
@@ -26,6 +36,8 @@ namespace Renraku.Guest
         public Renraku.ChatMessage Last;
         public AgentTurn FirstTurn;
         public AgentTurn Current;
+        public AgentInput FirstInput;
+        public AgentInput LastInput;
         public int Count;
         public int Phase; // 0 model, 1 action, 2 next model, 3 finished.
         public AgentSession(string id, string capability, string model, string system, string prompt)
@@ -77,6 +89,20 @@ namespace Renraku.Guest
             Renraku.ChatMessage message = new Renraku.ChatMessage(1, result);
             session.Last.Next = message; session.Last = message;
             session.Phase = finish ? 3 : 2;
+        }
+        // The host pins this private entry and its arguments in an invocation
+        // receipt before any CIL executes. It appends input without inference.
+        private static void AcceptInput(string id, string content, int afterTurn)
+        {
+            AgentSession session = Saved;
+            AgentInput input = new AgentInput(id, content, afterTurn);
+            Renraku.ChatMessage message = new Renraku.ChatMessage(1, content);
+            input.Message = message;
+            if (session.LastInput == null) session.FirstInput = input;
+            else session.LastInput.Next = input;
+            session.LastInput = input;
+            session.Last.Next = message; session.Last = message;
+            session.Phase = 2;
         }
     }
     public sealed class Counter

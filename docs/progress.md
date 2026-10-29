@@ -175,6 +175,22 @@ and do not inherit persistence.
   and uncertain inference permits receipt reconciliation only. Source is omitted
   from progress, summaries cap at 512 UTF-8 bytes, and controls are escaped.
   Finished live-session replay verified this output with zero operations.
+- Durable `agent-input` / `agent::submit_input` accepts a follow-up after a finished
+  goal. A pinned private CIL helper appends linked AgentInput/ChatMessage objects;
+  invoke-once commits intent and exact arguments before any helper instruction.
+  Replays resume or return the original receipt; conflicting content rejects.
+  The driver owns pending append frames, counts stay monotonic, and all lifetime
+  limits remain in effect. Input adds no native snapshot fields or OAuth calls.
+- Agent transcript validation merges input nodes at completed finish boundaries
+  and verifies their exact messages/receipts. Inspection exposes input IDs/content,
+  `afterTurn`, and followupSupported. Older agent schemas remain readable and
+  resumable while explicitly rejecting follow-up; a pre-change format-7 agent
+  fixture preserves that coverage alongside the unchanged format 1–6 fixtures.
+- Live two-goal acceptance: GPT-6.1 Sol compiled a reusable caller, advanced the
+  saved Counter 19 -> 26, then handled a durable follow-up in a fresh process by
+  reusing the same caller with -3 to reach 23. The second goal used two model
+  turns and no compiler/installation. Repeated pending and completed input IDs
+  preserved one append/execution. See the [live follow-up report](acceptance/live-followup-2026-10-29.md).
 
 ## Validation
 
@@ -182,7 +198,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 177 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 182 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -247,7 +263,7 @@ inputs and compiler identity, failed preparation/publication, lost post-commit
 replies, foreign/corrupt ledgers, successful compilation with unsupported CIL,
 and actual SIGKILL at prepared, child-started, captured, written, and committed
 boundaries. Terminal replay is tested with an observer that fails if invoked.
-Eleven coding-agent tests cover full action selection from actual saved request
+Fifteen coding-agent tests cover full action selection from actual saved request
 history, lost results after all tools, SDK-free terminal replay, frozen static
 arguments, pre-invocation GC roots, uncertain inference without resubmission,
 strict inputs and all budgets, generated-code capability denial, compiler worker
@@ -255,7 +271,7 @@ yielding to another universe, and partial journal recovery with seven-instructio
 budgets. A foreground CLI test rejects missing opt-in and oversized budgets before
 touching universe/auth state. Existing field-name test lookups now include owners,
 so valid same-named fields in different managed classes cannot make tests flaky.
-Four further agent tests exercise the actual subscription adapter with local
+Five further agent tests exercise the actual subscription adapter with local
 HTTP: the nine-turn correction/installation/source-inspection sequence, interrupted
 and unsupported native-call streams without resubmission, signed-out receipt
 recovery into a single action/mutation, and actual controller SIGKILL after the
@@ -272,6 +288,13 @@ guidance and shell quoting of spaces, quotes, substitutions, and newlines. Anoth
 CLI integration test keeps progress on stderr and stdout parseable JSON, verifies
 bounded/control-escaped signed-out finished recovery without a new checkpoint,
 and retains error diagnostics plus frame-inspection guidance on preflight failure.
+Follow-up coverage restores every CIL append instruction with GC between saves,
+resumes pending input through the ordinary driver, retries native CLI requests,
+rejects conflicting/invalid/early/over-limit input without changing the checkpoint,
+and completes the original pre-input-schema agent under a local provider. A second
+goal reuses installed source/code without an SDK and preserves the first mutation
+receipt. The HTTP fixture sends both complete histories plus the new user message
+and reaches Counter 33 using only three new model requests and one installation.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -373,15 +396,20 @@ and tested error/correction/restart paths. Keep machine-readable inspection/repo
 output and stable replayable progress IDs; do not confuse presentation events with
 execution ownership or an exactly-once event-delivery protocol.
 
-**Next make the agent useful across follow-up goals in the same universe.**
-Add an explicit bounded user-input boundary after a finished goal, retain linked
-managed history, code, objects, and monotonic turn-derived request IDs, and give
-the input a durable identity so a lost CLI reply cannot append it twice. Begin
-with the existing lifetime limits; do not reset counters or reuse old mutation
-IDs. Prove that a second goal sees the already-mutated object and installed code
-without repeating the first goal's invocation. Use local HTTP fixtures, and live
-inference only when it answers a new acceptance question. Keep unsupported legacy
-guest schemas explicit. The longer-term website direction remains authorized.
+Follow-up input now works across goals in one universe, with durable IDs, linked
+managed history, monotonic turns/receipts, local recovery tests, and a live reuse
+demonstration. Keep the current limits and explicit legacy-schema boundary.
+
+**Next implement the first persistent localhost website milestone.** Use a host
+HTTP edge with persistent CIL handlers/state and a durable request inbox. Start
+with bounded parsing and one accepted request at a time, with an explicit client
+request ID bound to exact request data and a pinned handler. Save accepted work
+before executing; commit response and state before writing to the socket. A
+recovered retry must resume or return its receipt without repeating mutations.
+Demonstrate retained page/counter state and request deduplication across process
+recovery using local HTTP fixtures. Keep sockets outside the universe and preserve
+the one-context limit. The existing invocation/input protocols provide useful
+patterns; do not treat raw implementation DLLs or native futures as guest state.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a
@@ -394,12 +422,10 @@ captured installations also return exact original source inputs and manifests,
 even after deleting their bundles. Older/raw loads explicitly have no attached
 source. Method-level PDB/source maps and decompilation remain future work.
 
-An additional useful milestone is a persistent interactive conversation CLI: append
-ordinary linked guest messages, submit the complete captured history, and resume
-the same universe between turns. Keep conversation work in CIL and treat host
-input as an explicit boundary. Test restart/GC between turns and multiple calls
-with changing account UI selection. Avoid persisting native socket state or
-making the host's own Rust conversation vector the guest's source of truth.
+The input/drive/inspect CLI now supports a persistent conversation across finished
+goals. A general interactive UI and input cancellation/editing remain future work.
+Keep conversation work in CIL and treat host input as an explicit durable boundary.
+Avoid persisting native socket state or making a host vector authoritative.
 The coding agent already supplies one bounded tool policy; broader remote tools
 need explicit operation identities and uncertainty rules of their own.
 
