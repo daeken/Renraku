@@ -106,7 +106,9 @@ IDs reconcile compilation, installation, and invocation after a lost result.
 A scripted provider discovers Counter, inspects its code, writes and installs a
 caller, then changes the same persistent object from 19 to 26. A foreground
 subscription command is available; actual autonomous model acceptance still
-needs a live foreground run.
+needs a live foreground run. Local HTTP fixtures now exercise the actual
+subscription adapter through compiler-error correction, full-history turns,
+lost results, and controller SIGKILL recovery without repeating the mutation.
 
 ## Save and resume a universe
 

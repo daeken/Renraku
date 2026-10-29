@@ -24,6 +24,7 @@ use std::{
     },
     thread,
 };
+mod agent;
 #[allow(dead_code)]
 #[path = "../../../renraku-vm/tests/common/mod.rs"]
 mod common;
@@ -81,6 +82,22 @@ struct Observed {
     bearer: String,
     body: Value,
 }
+struct FixtureReply {
+    status: u16,
+    content_type: Option<String>,
+    payload: String,
+    tail: String,
+}
+impl FixtureReply {
+    fn completed(text: &str) -> Self {
+        Self {
+            status: 200,
+            content_type: Some("text/event-stream".into()),
+            payload: completion(text),
+            tail: String::new(),
+        }
+    }
+}
 struct Server {
     base: String,
     requests: Arc<Mutex<Vec<Observed>>>,
@@ -108,9 +125,21 @@ impl Server {
         content_type: Option<&str>,
         tail: String,
     ) -> Self {
-        let content_type = content_type
-            .map(|v| format!("Content-Type: {v}\r\n"))
-            .unwrap_or_default();
+        let content_type = content_type.map(str::to_owned);
+        Self::with_responder(
+            move |_| FixtureReply {
+                status,
+                content_type: content_type.clone(),
+                payload: payload.clone(),
+                tail: tail.clone(),
+            },
+            pause,
+        )
+    }
+    fn with_responder(
+        responder: impl Fn(&Observed) -> FixtureReply + Send + 'static,
+        pause: bool,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -177,11 +206,12 @@ impl Server {
                     .nth(1)
                     .unwrap()
                     .to_owned();
-                observed.lock().unwrap().push(Observed {
+                let request = Observed {
                     path: path.clone(),
                     bearer: field("authorization"),
                     body: serde_json::from_slice(&bytes[end..]).unwrap_or(Value::Null),
-                });
+                };
+                observed.lock().unwrap().push(request.clone());
                 if path == "/models" {
                     let body = object!({"models":[{"slug":"hidden","display_name":"Hidden","visibility":"hide"},
                         {"slug":"chosen-model","display_name":"Chosen","visibility":"list"},
@@ -192,6 +222,15 @@ impl Server {
                         body.len()
                     );
                 } else {
+                    let FixtureReply {
+                        status,
+                        content_type,
+                        payload,
+                        tail,
+                    } = responder(&request);
+                    let content_type = content_type
+                        .map(|v| format!("Content-Type: {v}\r\n"))
+                        .unwrap_or_default();
                     let _ = write!(
                         socket,
                         "HTTP/1.1 {status} Test\r\n{content_type}Connection: close\r\n\r\n"

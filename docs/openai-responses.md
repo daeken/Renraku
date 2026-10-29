@@ -148,6 +148,12 @@ a partial stream and after receipt commit but before VM response commit. They
 restore the original CIL frames and assert that no second POST occurs. CLI
 tests cover opt-in, durable preflight rejection, zero budgets, and token absence
 from checkpoints. The test-only HTTP endpoints are inaccessible in production.
+The [coding-agent HTTP tests](agent.md#validation) also run full managed tool
+histories through this adapter, recover a compiler type error, reconcile lost
+results, and preserve a committed invocation across SIGKILL. Interrupted or native
+function-call streams cannot become actions; a saved completion receipt recovers
+offline into one action and mutation. These fixtures do not establish autonomous
+model intelligence or perform live inference.
 Live validation on October 28, 2026 verified user-completed sign-in, granted plan
 permission, account-specific discovery, and a GPT-6 Luna request through the CIL
 harness returning `Persistent CIL is alive.` in 49 guest instructions and one

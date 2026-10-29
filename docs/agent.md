@@ -174,6 +174,7 @@ implemented. A budget-paused invocation remains pending until explicitly resumed
 ```sh
 cargo test -p renraku-vm --test agent
 cargo test -p renraku-openai --test cli
+cargo test -p renraku-openai --lib inference::tests::agent
 ```
 
 Ten agent tests cover the selected search/read/compile/install/invoke/finish
@@ -187,3 +188,26 @@ intelligence. Foreground CLI tests enforce opt-in and budget preflight. Existing
 component tests additionally exercise real process kills around compiler,
 installation, invocation, and inference commits. No new live inference was run
 for this milestone.
+
+Four additional local HTTP integration tests run the actual asynchronous
+subscription adapter through the coding loop. The fixture chooses nine actions
+from the received full history: search, read CIL, describe a contract, compile an
+intentional type error, correct it using the saved CS1503 diagnostic, install,
+invoke, read retained source, and finish. Every HTTP history is compared with the
+corresponding prefix of the managed transcript, including NUL and Unicode text.
+Reopening the adapter, changing active account selection, and losing published
+compile/install/invoke results retain the original profile and action identities.
+Published replay works with a missing compiler path, and finished recovery works
+offline after sign-out with zero operations.
+
+A complete action contained only in provisional stream deltas is never executed.
+Unsupported native function-call output also stays uncertain. Both cases preserve
+the completed installation, leave the counter unchanged, and perform only offline
+receipt lookups on resume. Conversely, a committed HTTP completion receipt whose
+reply is lost recovers the original assistant action while signed out, then
+executes its managed mutation once without another POST. A subprocess test kills
+the controller after the invocation checkpoint and before appending its result;
+recovery preserves its exact request/method/code/execution/argument receipt,
+returns 26 without another mutation, and finishes with the remaining two model
+calls. Its ignored child probe is launched by the parent test. Test endpoint
+overrides remain private to unit tests; none of these cases uses a real account.

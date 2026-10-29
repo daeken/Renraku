@@ -146,6 +146,15 @@ and do not inherit persistence.
   turns, including discovery and exact code inspection. This fixture demonstrates
   orchestration and persistence, not autonomous intelligence. No live inference
   ran in this milestone. See the [coding-agent guide](agent.md).
+- Subscription-adapter coding-loop HTTP acceptance fixture chooses actions from
+  actual wire history, recovers an intentional C# type error using saved CS1503
+  diagnostics, installs/invokes the corrected caller, reads its retained source,
+  and finishes in nine assistant turns. Each HTTP history matches the managed
+  transcript prefix. Lost compile/install/invoke results, changed UI account
+  selection, SDK-free published replay, signed-out offline receipt recovery, and
+  whole-controller SIGKILL retain their original action/execution identities.
+  Provisional delta text and native function calls cannot become agent actions.
+  Production wire/protocol/checkpoint/ledger behavior is unchanged; no live calls.
 
 ## Validation
 
@@ -153,7 +162,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 169 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 173 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -179,7 +188,7 @@ reservations, foreign ledgers, live CIL delivery, and actual SIGKILL before and
 after completion receipt commit, missing MIME headers, and non-SSE diagnostics.
 A CLI integration test verifies opt-in,
 durable preflight rejection, zero budgets, and credential absence from snapshots.
-Three ignored subprocess probes are launched by their parent crash tests. The
+Four ignored subprocess probes are launched by their parent crash tests. The
 Responses parent runs both adapters at partial-stream and post-receipt/pre-VM
 commit SIGKILL boundaries. Async HTTP tests also prove independent guest progress
 on one executor, abandoned-future uncertainty, profile pinning, offline receipt
@@ -226,6 +235,13 @@ yielding to another universe, and partial journal recovery with seven-instructio
 budgets. A foreground CLI test rejects missing opt-in and oversized budgets before
 touching universe/auth state. Existing field-name test lookups now include owners,
 so valid same-named fields in different managed classes cannot make tests flaky.
+Four further agent tests exercise the actual subscription adapter with local
+HTTP: the nine-turn correction/installation/source-inspection sequence, interrupted
+and unsupported native-call streams without resubmission, signed-out receipt
+recovery into a single action/mutation, and actual controller SIGKILL after the
+invocation commit but before its result append. Recovery preserves the exact
+invocation receipt and finishes with only the two remaining model POSTs. Fixtures
+select actions from received histories and do not prove real-model autonomy.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -311,12 +327,17 @@ authoritative and preserve partial helper-frame recovery. The strict text/JSON
 prototype reuses final-text transport; native Responses function calls still need
 an explicit wire/result representation and receipt compatibility work.
 
-**Next validate the agent through the subscription adapter using local HTTP
-fixtures**, including full-history JSON actions, corrective compiler diagnostics,
-and uncertain stream recovery. The foreground command is ready for the user to
+The subscription-adapter loop now has local HTTP coverage for full-history JSON
+actions, corrective compiler diagnostics, uncertain streams, durable receipts,
+and a whole-controller crash. The foreground command is ready for the user to
 try a real model. Do not run live subscription inference or login unattended, and
-do not claim a scripted fixture proves actual model intelligence. Improve bounded
-error feedback and foreground recovery based on evidence; avoid another unrelated
+do not claim a scripted fixture proves actual model intelligence.
+
+**Next improve foreground feedback and recovery ergonomics for that live trial.**
+The command currently reports only its final stop; expose bounded committed-turn
+progress and useful stop/recovery guidance while retaining the managed journal as
+the authority. Cover error/correction feedback and restart behavior with the local
+HTTP fixture. Keep machine-readable inspection available. Avoid another unrelated
 host-infrastructure detour. The longer-term website direction remains authorized.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
