@@ -96,14 +96,16 @@ reopens the checkpoint using the standalone native CLI with an empty PATH.
 
 ## Runtime compilation and installation
 
-The tool supplies the external compiler seam. It is not yet a managed
-`Compile` intrinsic or a durable compiler request. The
+The tool supplies the external compiler seam. The
+[durable compiler service](compiler-service.md) now captures pinned requests and
+publishes artifacts or diagnostics with recovery. It is not yet a managed
+`Compile` intrinsic or a guest suspension operation. The
 [runtime workbench](workbench.md) now supports reference views and append-only
 code installation into an existing universe, preserving its logical bindings.
 
-The next compilation capability should capture source bytes, exact reference
-images, compiler identity/options, and a stable request ID, then return a
-versioned artifact or diagnostics. Its guest call can suspend through portable
+The service captures source, core/reference views, compiler identity/options,
+and a stable request ID before execution; the terminal artifact captures emitted
+reference-image bytes as well. A future guest call can suspend through portable
 frames while the host compiler runs. Compiler process memory stays transient.
 
 Installing a returned DLL is a separate validated transaction. It must preserve

@@ -154,11 +154,12 @@ automatically. Large or accumulated artifacts can therefore hit the checkpoint
 limit earlier. This is append-only module installation; body replacement and
 type migrations need separate code-version/source association policies.
 
-This milestone makes successful compiled artifacts and installation durable.
-Compilation requests themselves still need an intent/diagnostic/recovery protocol
-before the model tool loop can own them. It must capture compiler inputs before
-launch, recover a published artifact after a lost reply, and retain failures;
-host compiler process memory is not a portable guest continuation.
+The [durable compiler service](compiler-service.md) now supplies preparation,
+terminal diagnostics/artifacts, and recovery through `compile-once`,
+`compile-prepare`, `compile-resume`, and `compilation`. `install-compilation`
+imports a published artifact directly from its service ledger. Compiler process
+memory is not a portable guest continuation; the next model loop must retain
+its action IDs and transcript in managed state before using these capabilities.
 
 `invoke` starts a new call only when the current context permits it, then runs
 within the explicit instruction budget. Arguments are `i32:N`, `i64:N`, `null`,
@@ -210,8 +211,8 @@ as a committed receipt after a failed save.
 These receipts cover managed invocation within one universe, not distributed
 execution ownership or exactly-once remote effects. Model delivery still uses
 the separate effect/receipt protocol and never resubmits an uncertain request.
-Compilation requests still need durable action identities of their own.
-Installation now uses the captured artifact and receipt protocol above.
+Compilation requests use their own universe-scoped service identities.
+Installation uses the captured artifact and receipt protocol above.
 
 The acceptance fixture invokes `OpenAIHarness` with a deterministic provider
 that receives actual symbol-search and CIL-inspection output. The completed
@@ -222,9 +223,9 @@ a new ID performs the next mutation. Live model inference is deliberately absent
 from recurring tests.
 Run it with `cargo test -p renraku-vm --test compiler scripted_codegen`.
 
-The remaining model integration should expose bounded read tools first, retain
-the model's tool transcript, and give compilation actions explicit request
-identities and recovery semantics. Successful build inputs/source are now retained
-with installations. Interrupted invocation recovery now
+The remaining model integration should expose bounded read tools first and retain
+the model's actual tool transcript and action IDs in managed state. Compiler,
+installation, and invocation requests now have explicit recovery protocols.
+Successful build inputs/source are retained with installations. Interrupted invocation recovery
 uses the saved receipt and frames. Unknown
 external outcomes must continue to reconcile receipts without automatic retries.

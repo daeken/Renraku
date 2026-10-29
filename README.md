@@ -97,6 +97,10 @@ repeating the mutation. Receipts commit with heap/code/frames and survive GC.
 `install-once` likewise commits a captured compiler bundle and installation
 receipt with the code. `read-code` can show its original source after the bundle
 is deleted; old/raw DLL loads still expose saved CIL.
+The [compiler service](docs/compiler-service.md) also saves pinned compilation
+requests before execution and retains completed artifacts or diagnostics. Its
+CLI can resume after deleting source files and install a published result without
+the SDK. A model-selected tool loop is the next integration milestone.
 
 ## Save and resume a universe
 

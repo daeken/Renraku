@@ -2,7 +2,9 @@
 use renraku_vm::{
     artifact::{BuildArtifact, install_once_with_observer},
     checkpoint::{CheckpointStore, CommitStage},
+    compiler::{CompilationStage, CompilationStore, CompilerToolchain},
     error::{Error, Result},
+    identity::UniverseId,
     program::Program,
     runtime::{RunOutcome, Vm},
 };
@@ -17,6 +19,32 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("compile") if args.len() == 7 => {
+            let universe = UniverseId::from_bytes(
+                *uuid::Uuid::parse_str(&args[2])
+                    .map_err(|_| Error("invalid compile probe universe".into()))?
+                    .as_bytes(),
+            );
+            let mut store = CompilationStore::open(&args[1])?;
+            let toolchain = CompilerToolchain::open(&args[4], &args[5])?;
+            let stop = match args[6].as_str() {
+                "prepared" => CompilationStage::Prepared,
+                "started" => CompilationStage::Started,
+                "captured" => CompilationStage::Captured,
+                "written" => CompilationStage::Written,
+                "committed" => CompilationStage::Committed,
+                _ => return Err(Error("invalid compile probe stage".into())),
+            };
+            store.drive_with_observer(universe, &args[3], &toolchain, |stage| {
+                if stage == stop {
+                    println!("READY {stage:?}");
+                    std::io::stdout().flush()?;
+                    std::io::stdin().read_exact(&mut [0u8; 1])?;
+                }
+                Ok(())
+            })?;
+            Ok(())
+        }
         Some("install") if args.len() == 5 => {
             let mut store = CheckpointStore::open(&args[1])?;
             let artifact = BuildArtifact::from_bundle(&args[3])?;

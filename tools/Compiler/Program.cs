@@ -19,6 +19,7 @@ static class Compiler
 
     public static int Run(string[] args)
     {
+        if (args is ["--identity"]) { Report(Identity()); return 0; }
         if (args.Length == 0 || args is ["--help"] or ["-h"])
         {
             Console.WriteLine("Usage: Renraku.Compiler --core <Renraku.CoreLib.dll> --output <new-directory> --name <assembly-name> [--reference-view <view.json> ...] <source.cs> [source.cs ...]");
@@ -104,7 +105,7 @@ static class Compiler
             }).ToArray();
             if (!result.Success)
             {
-                Report(new { success = false, diagnostics = report, diagnosticsTruncated = diagnostics.Length > 128 });
+                Report(new { success = false, diagnostics = report, diagnosticsTruncated = diagnostics.Length > 128, identity = Identity() });
                 return 1;
             }
             byte[] assembly = image.ToArray();
@@ -146,12 +147,14 @@ static class Compiler
             Directory.Move(staging, request.Output); // Never replaces an existing bundle.
             staging = null;
             Report(new { success = true, outputDirectory = request.Output, assemblyFile = request.Name + ".dll",
-                diagnostics = report, diagnosticsTruncated = diagnostics.Length > 128 });
+                diagnostics = report, diagnosticsTruncated = diagnostics.Length > 128, identity = Identity() });
             return 0;
         }
         catch (Exception error) when (error is ArgumentException or IOException or UnauthorizedAccessException or BadImageFormatException or InvalidOperationException or JsonException or KeyNotFoundException or FormatException)
         {
-            Report(new { success = false, error = Limit(error.Message, 2048) });
+            Report(new { success = false, error = Limit(error.Message, 2048),
+                failureKind = error is IOException or UnauthorizedAccessException ? "infrastructure" : "input",
+                identity = Identity() });
             return 2;
         }
         finally
@@ -217,6 +220,12 @@ static class Compiler
         using var file = File.OpenRead(assembly.Location);
         return new { name = assembly.GetName().FullName, sha256 = Convert.ToHexStringLower(SHA256.HashData(file)) };
     }
+    static object Identity() => new { format = 1,
+        compiler = new { csharp = CompilerRecord(typeof(CSharpCompilation).Assembly),
+            common = CompilerRecord(typeof(Compilation).Assembly), driver = CompilerRecord(typeof(Compiler).Assembly) },
+        runtime = new { framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+            architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
+            core = CompilerRecord(typeof(object).Assembly) } };
     static void Save(string path, byte[] bytes)
     {
         using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);

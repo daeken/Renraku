@@ -181,6 +181,14 @@ impl Manifest {
 }
 
 impl BuildArtifact {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        encode_capture(&self.manifest, &self.files)
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let (manifest, files) = decode_capture(bytes)?;
+        Self::from_files(manifest, files)
+    }
     pub fn from_files(manifest: Vec<u8>, files: BTreeMap<String, Vec<u8>>) -> Result<Self> {
         let artifact = Self { manifest, files };
         artifact.validate()?;
@@ -314,6 +322,74 @@ impl BuildArtifact {
             .map(Vec::as_slice)
             .ok_or_else(|| Error("missing core".into()))
     }
+}
+
+pub(crate) fn encode_capture(
+    manifest: &[u8],
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<u8>> {
+    require(
+        manifest.len() <= MAX_MANIFEST
+            && files.len() <= 66
+            && files.values().map(Vec::len).sum::<usize>() <= MAX_ARTIFACT_BYTES,
+        "captured input exceeds its limits",
+    )?;
+    let mut bytes = b"RENFILES\x01".to_vec();
+    let add = |out: &mut Vec<u8>, data: &[u8]| {
+        out.extend((data.len() as u32).to_le_bytes());
+        out.extend(data);
+    };
+    add(&mut bytes, manifest);
+    bytes.extend((files.len() as u32).to_le_bytes());
+    for (name, data) in files {
+        require(name.len() <= 512, "captured filename exceeds limit")?;
+        add(&mut bytes, name.as_bytes());
+        add(&mut bytes, data);
+    }
+    Ok(bytes)
+}
+pub(crate) type CapturedFiles = (Vec<u8>, BTreeMap<String, Vec<u8>>);
+pub(crate) fn decode_capture(bytes: &[u8]) -> Result<CapturedFiles> {
+    use crate::cil::Reader;
+    require(
+        bytes.len() <= MAX_ARTIFACT_BYTES + MAX_MANIFEST + 66 * 520 + 32,
+        "captured input exceeds its size limit",
+    )?;
+    fn blob<'a>(reader: &mut Reader<'a>, limit: usize) -> Result<&'a [u8]> {
+        let length = reader.u32()? as usize;
+        require(length <= limit, "captured field exceeds limit")?;
+        reader.take(length)
+    }
+    let mut reader = Reader::new(bytes);
+    require(
+        reader.take(9)? == b"RENFILES\x01",
+        "unknown captured input format",
+    )?;
+    let manifest = blob(&mut reader, MAX_MANIFEST)?.to_vec();
+    let count = reader.u32()?;
+    require(count <= 66, "too many captured files")?;
+    let mut files = BTreeMap::new();
+    let mut total = 0;
+    for _ in 0..count {
+        let name = std::str::from_utf8(blob(&mut reader, 512)?)
+            .map_err(|_| Error("invalid captured filename UTF-8".into()))?
+            .to_owned();
+        let data = blob(&mut reader, MAX_ARTIFACT_BYTES)?;
+        total += data.len();
+        require(
+            total <= MAX_ARTIFACT_BYTES,
+            "captured input exceeds aggregate limit",
+        )?;
+        require(
+            files.insert(name, data.to_vec()).is_none(),
+            "duplicate captured file",
+        )?;
+    }
+    require(
+        reader.position == bytes.len(),
+        "trailing captured input data",
+    )?;
+    Ok((manifest, files))
 }
 
 fn read_file(root: &Path, relative: &str, limit: usize) -> Result<Vec<u8>> {

@@ -1,6 +1,7 @@
 use renraku_vm::{
     artifact::{BuildArtifact, InstallationRecord, install_once},
     checkpoint::CheckpointStore,
+    compiler::{CompilationRequest, CompilationStore, CompilerToolchain},
     driver::{DriverLimits, DriverStop},
     effects::{EffectState, LocalModelProvider},
     error::{Error, Result},
@@ -35,6 +36,11 @@ fn execute() -> Result<()> {
         "       renraku-vm install <universe.db> <implementation.dll> [reference-view.json ...]\n",
         "       renraku-vm install-once <universe.db> <request-ID> <bundle-directory>\n",
         "       renraku-vm installation <universe.db> <request-ID>\n",
+        "       renraku-vm compile-once <universe.db> <compiler.db> <request-ID> <Renraku.Compiler.dll> <assembly-name> [--reference-view <view.json> ...] <source.cs> ...\n",
+        "       renraku-vm compile-prepare <universe.db> <compiler.db> <request-ID> <Renraku.Compiler.dll> <assembly-name> [--reference-view <view.json> ...] <source.cs> ...\n",
+        "       renraku-vm compile-resume <universe.db> <compiler.db> <request-ID> <Renraku.Compiler.dll>\n",
+        "       renraku-vm compilation <universe.db> <compiler.db> <request-ID>\n",
+        "       renraku-vm install-compilation <universe.db> <compiler.db> <compile-ID> <install-ID>\n",
         "       renraku-vm invoke <universe.db> <Type::Method> <instruction-budget> [i32:N|i64:N|object:ID|static:Type::Field|null ...]\n",
         "       renraku-vm invoke-once <universe.db> <request-ID> <Type::Method> <instruction-budget> [arguments ...]\n",
         "       renraku-vm invocation <universe.db> <request-ID>\n",
@@ -57,6 +63,101 @@ fn execute() -> Result<()> {
         return Err(Error(USAGE.into()));
     }
     match args.first().map(String::as_str) {
+        Some(
+            "compile-once"
+            | "compile-prepare"
+            | "compile-resume"
+            | "compilation"
+            | "install-compilation",
+        ) => {
+            let command = args[0].as_str();
+            let valid = match command {
+                "compile-once" | "compile-prepare" => (7..=70).contains(&args.len()),
+                "compile-resume" | "install-compilation" => args.len() == 5,
+                "compilation" => args.len() == 4,
+                _ => false,
+            };
+            if !valid {
+                return Err(Error(USAGE.into()));
+            }
+            if !std::path::Path::new(&args[1]).is_file() {
+                return Err(Error("checkpoint does not exist".into()));
+            }
+            let mut universe_store = CheckpointStore::open(&args[1])?;
+            let saved = universe_store.load()?;
+            let vm = saved.snapshot.restore()?;
+            let universe = vm.universe_id();
+            let mut store = CompilationStore::open(&args[2])?;
+            let compilation = match command {
+                "compilation" => store.get(universe, &args[3])?,
+                "install-compilation" => {
+                    let result = store.get(universe, &args[3])?;
+                    let artifact = result
+                        .artifact
+                        .ok_or_else(|| Error("compilation has no published artifact".into()))?;
+                    let record = install_once(&mut universe_store, &args[4], &artifact)?;
+                    print_json(&installation_json(
+                        &args[4],
+                        &record,
+                        universe_store.generation(),
+                    )?)?;
+                    return Ok(());
+                }
+                "compile-resume" => {
+                    let result = store.get(universe, &args[3])?;
+                    if result.report.is_some() {
+                        result
+                    } else {
+                        let toolchain = CompilerToolchain::open(find_dotnet()?, &args[4])?;
+                        store.drive(universe, &args[3], &toolchain)?
+                    }
+                }
+                _ => {
+                    let toolchain = CompilerToolchain::open(find_dotnet()?, &args[4])?;
+                    let mut index = 6;
+                    let mut views = Vec::new();
+                    while args.get(index).is_some_and(|arg| arg == "--reference-view") {
+                        let path = args
+                            .get(index + 1)
+                            .ok_or_else(|| Error("reference-view requires a filename".into()))?;
+                        views.push(ReferenceView::from_json(&bounded_read(
+                            path,
+                            4 * 1024 * 1024,
+                        )?)?);
+                        index += 2;
+                    }
+                    let sources = args[index..]
+                        .iter()
+                        .map(|path| {
+                            let name = std::path::Path::new(path)
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .ok_or_else(|| Error("invalid UTF-8 source filename".into()))?
+                                .to_owned();
+                            Ok((name, bounded_read(path, 1024 * 1024)?))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let request = CompilationRequest::capture(
+                        &saved.snapshot.program,
+                        universe,
+                        &toolchain,
+                        args[5].clone(),
+                        sources,
+                        views,
+                    )?;
+                    let result = store.prepare(&args[3], &request)?;
+                    if command == "compile-prepare" || result.report.is_some() {
+                        result
+                    } else {
+                        store.drive(universe, &args[3], &toolchain)?
+                    }
+                }
+            };
+            let mut summary = compilation.summary()?;
+            summary["requestId"] = serde_json::json!(args[3]);
+            print_json(&summary)?;
+            return Ok(());
+        }
         Some(
             "search" | "read-code" | "export-reference" | "install" | "invoke" | "invoke-once"
             | "invocation" | "install-once" | "installation",
@@ -490,6 +591,21 @@ fn execute() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn find_dotnet() -> Result<std::path::PathBuf> {
+    let paths =
+        std::env::var_os("PATH").ok_or_else(|| Error("dotnet host is not on PATH".into()))?;
+    std::env::split_paths(&paths)
+        .map(|path| {
+            path.join(if cfg!(windows) {
+                "dotnet.exe"
+            } else {
+                "dotnet"
+            })
+        })
+        .find(|path| path.is_file())
+        .ok_or_else(|| Error("dotnet host is not on PATH".into()))
 }
 
 fn invocation_json(

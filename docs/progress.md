@@ -118,6 +118,17 @@ and do not inherit persistence.
   hashes, artifact ID, and build manifest for captured modules after deleting
   the external bundle. CIL stays authoritative; source scope is explicitly the
   entire assembly, without fabricated per-method source locations or attestation.
+- Durable host compiler service with universe-scoped request IDs, exact captured
+  core/source/view bytes, C# options, and pinned compiler/package/host/runtime
+  profiles. Preparation commits before guest compilation; terminal artifacts or
+  diagnostics commit atomically in a separate WAL/FULL service ledger. Changed
+  inputs/toolchains reject under an existing ID; published jobs never rerun.
+  Prepared pure compilation may be explicitly resumed after failure or SIGKILL.
+  The universe checkpoint stays format 7. See [compiler service](compiler-service.md).
+- CLI `compile-once`, `compile-prepare`, `compile-resume`, `compilation`, and
+  `install-compilation`. Captured inputs work after deleting source/view files;
+  terminal recovery/install need neither the SDK nor compiler files. Installation
+  then retains all required build bytes in the universe without its service ledger.
 
 ## Validation
 
@@ -125,7 +136,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 151 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 158 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -184,6 +195,12 @@ source/receipt corruption, wrong-core/CIL rejection, cross-universe binding
 rejection, and concurrent-writer fencing that preserves the newer heap.
 A genuine format 6 paused invocation, captured before the writer change, upgrades
 with an empty installation registry and resumes/replays to 4 instead of 8.
+Seven compiler-service tests cover CLI preparation/resume/install after source
+deletion, SDK-free terminal recovery, retained syntax/input diagnostics, immutable
+inputs and compiler identity, failed preparation/publication, lost post-commit
+replies, foreign/corrupt ledgers, successful compilation with unsupported CIL,
+and actual SIGKILL at prepared, child-started, captured, written, and committed
+boundaries. Terminal replay is tested with an observer that fails if invoked.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -263,18 +280,10 @@ reading existing code, writing C#, pulling it in, and executing it.** The
 [workbench](workbench.md) supplies the host tools and a complete deterministic
 fixture. Next connect a bounded model-selected tool loop, retain its transcript
 and source provenance, and prove recovery across compile/install/invoke actions.
-`invoke-once` supplies the invocation identity/replay boundary. Captured build
-artifacts and `install-once` now supply atomic installation, receipts, and durable
-source/reference/compiler provenance. Compilation requests still need an intent
-and terminal diagnostics/artifact protocol before a bounded model-selected loop
-owns them. Capture source/reference/options/compiler identities before launching
-Roslyn; retain a stable request ID and published artifact or diagnostics after
-restart. Compilation is a pure host operation, so recovery may rerun a pinned
-compiler request under an explicit policy, but must never install a different
-artifact after publication or treat a changed compiler as the original request.
-Keep the next milestones independently demonstrable, then connect the loop.
-Keep the
-model's actual transcript/source and tool result ownership durable. Tool loop
+The read tools, durable compiler service, atomic installation receipts, and
+durable invocations now supply the required host operations. **Connect a bounded
+model-selected loop next**, rather than extending host infrastructure first.
+Keep the model's actual transcript/source and tool-result ownership durable. Tool loop
 state must not be an ephemeral Rust conversation vector. The existing linked
 managed conversation provides an initial source of truth.
 Use read-only search/code tools first. Existing subscription Responses transport
@@ -285,6 +294,25 @@ choice, but must validate every action and retain it before mutation. Give each
 mutation a durable request/execution identity so a lost reply resumes rather than
 reruns it. Do not claim the deterministic provider fixture is an actual model's
 autonomous acceptance. No new live inference ran in these milestones.
+An initial explicit JSON action per text response can reuse the existing final
+text transport without enabling native function calls. Put the instructions and
+actual assistant/tool-result messages in ordinary linked CIL objects. Stable IDs
+derived from a saved turn should identify compile/install/invoke operations.
+On recovery inspect the saved last action and reconcile its receipt, then append
+its result and make the next model call. Retain the transcript before host action
+execution and the next guest request before inference. Bound turns, instructions,
+provider operations, tool outputs, and source sizes; reject unknown operations
+and model-supplied host/compiler paths. Test a model-selected search -> read code
+-> compile -> install -> invoke -> finish sequence using a deterministic provider,
+with restart around action results, and expose a foreground subscription command
+with explicit opt-in when ready. Do not run live inference from a heartbeat.
+The compiler service ledger is outside the guest and must not replace managed
+conversation/action state. It serializes one bounded worker per ledger and may
+rerun explicitly resumed prepared pure jobs; inference uncertainty remains a
+separate receipt-only policy. Preserve terminal results and matching toolchain
+requirements. The service captures metadata views before execution and emitted
+reference images in the result; it does not capture a whole portable CLR or add
+a guest Compile intrinsic.
 Current `read-code` returns authoritative saved CIL with resolved logical targets;
 captured installations also return exact original source inputs and manifests,
 even after deleting their bundles. Older/raw loads explicitly have no attached

@@ -7,6 +7,7 @@
 pub mod artifact;
 pub mod checkpoint;
 pub mod cil;
+pub mod compiler;
 pub mod driver;
 pub mod effects;
 pub mod error;
