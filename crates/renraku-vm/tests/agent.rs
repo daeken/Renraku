@@ -99,6 +99,7 @@ enum Mode {
     Inspect,
     InspectFlow,
     InspectStrict,
+    CrossReference,
 }
 impl Script {
     fn open(path: &Path) -> Self {
@@ -119,6 +120,14 @@ impl Script {
             .count();
         let last = String::from_utf16(&request.messages.last().unwrap().content).unwrap();
         match self.mode {
+            Mode::CrossReference => return Ok(match assistants {
+                0=>json!({"op":"describe","type":"CrossOwner"}),
+                1=>{let result:Json=serde_json::from_str(&last).unwrap();assert_eq!(result["ok"],true);assert_eq!(result["dependencies"].as_array().unwrap().len(),1);json!({"op":"compile","assembly":"Generated.CrossCaller","referenceTypes":["CrossOwner","Renraku.Guest.Counter"],"source":"namespace Generated { public static class Cross { public static int Run() { return CrossOwner.Saved == null ? 0 : CrossOwner.Saved.Count(); } } }"})},
+                2=>{let result:Json=serde_json::from_str(&last).unwrap();assert_eq!(result["output"]["state"],"compiled");json!({"op":"install","compilationTurn":2})},
+                3=>json!({"op":"invoke","method":"Generated.Cross::Run","arguments":[]}),
+                4=>{let result:Json=serde_json::from_str(&last).unwrap();assert_eq!(result["ok"],true);json!({"op":"finish","message":"cross-module caller used frozen dependencies"})},
+                _=>return Err(Error("unexpected dependency workflow turn".into())),
+            }.to_string()),
             Mode::Inspect | Mode::InspectFlow => {
                 let object=||request.messages.iter().filter_map(|message|String::from_utf16(&message.content).ok())
                     .filter_map(|text|serde_json::from_str::<Json>(&text).ok()).find_map(|value|value["output"]["field"]["value"]["id"].as_str().map(str::to_owned)).unwrap();
@@ -699,6 +708,65 @@ fn limits() -> AgentLimits {
         provider_operations: 10,
         tool_actions: 20,
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn agent_describes_cross_module_contracts_and_compiles_mixed_module_roots() {
+    let test = Test::new();
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let checkpoint = store.load().unwrap();
+    let map = fs::read(fixtures().output.join("Renraku.Collections.dll")).unwrap();
+    let owner = fs::read(fixtures().output.join("Cross.Owner.dll")).unwrap();
+    let linked = checkpoint
+        .snapshot
+        .program
+        .link_modules(&[&map, &owner], &[])
+        .unwrap();
+    checkpoint
+        .snapshot
+        .restore()
+        .unwrap()
+        .install_program(&mut store, &linked)
+        .unwrap();
+    let mut provider = test.provider();
+    provider.mode = Mode::CrossReference;
+    let report = test.host.drive(&mut provider, limits()).await.unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    assert_eq!(provider.receipts(), 5);
+    let checkpoint = store.load().unwrap();
+    let vm = checkpoint.snapshot.restore().unwrap();
+    assert_eq!(vm.installations().count(), 1);
+    assert_eq!(vm.invocations().count(), 1);
+    let state = vm.agent_status().unwrap();
+    assert_eq!(state["turn"], 5);
+    let descriptions: Vec<Json> = state["transcript"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| serde_json::from_str::<Json>(m["content"].as_str()?).ok())
+        .filter(|r| r.get("referenceSetHash").is_some())
+        .collect();
+    assert_eq!(descriptions.len(), 1);
+    assert_eq!(
+        descriptions[0]["dependencies"][0]["moduleName"],
+        "Renraku.Collections"
+    );
+    let instructions = vm.instructions_executed();
+    drop(vm);
+    drop(checkpoint);
+    let report = test.host.drive(&mut provider, limits()).await.unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    assert_eq!(report.instructions, 0);
+    assert_eq!(report.provider_operations, 0);
+    let checkpoint = store.load().unwrap();
+    assert_eq!(
+        checkpoint
+            .snapshot
+            .restore()
+            .unwrap()
+            .instructions_executed(),
+        instructions
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

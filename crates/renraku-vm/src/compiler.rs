@@ -7,7 +7,7 @@ use crate::{
     image::Image,
     invocation::validate_request_id,
     program::Program,
-    workbench::ReferenceView,
+    workbench::{ReferenceView, check_reference_views, validate_reference_views},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -256,8 +256,8 @@ impl CompilationRequest {
             })
             .ok_or_else(|| Error("runtime core is missing".into()))?;
         files.insert("Renraku.CoreLib.dll".into(), core.clone());
+        validate_reference_views(&views, program)?;
         for (index, view) in views.iter().enumerate() {
-            view.validate(program)?;
             files.insert(format!("views/{index}.json"), view.to_json()?);
         }
         let manifest = RequestManifest {
@@ -376,6 +376,7 @@ impl CompilationRequest {
         }
         require(total <= 4 * 1024 * 1024, "compiler sources exceed 4 MiB")?;
         let mut modules = BTreeSet::new();
+        let mut reference_views = Vec::new();
         for index in 0..manifest.views {
             let view = ReferenceView::from_json(
                 self.files
@@ -394,7 +395,9 @@ impl CompilationRequest {
                     .is_some_and(|name| modules.insert(name.to_lowercase())),
                 "duplicate compiler reference module",
             )?;
+            reference_views.push(view);
         }
+        check_reference_views(&reference_views)?;
         Ok(())
     }
     fn verify_artifact(&self, artifact: &BuildArtifact) -> Result<()> {

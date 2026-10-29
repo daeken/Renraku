@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+mod references;
+pub use references::{ReferenceSet, check_reference_views, validate_reference_views};
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -25,7 +27,7 @@ pub struct ReferenceView {
     pub core_sha256: String,
     pub schema_json: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Schema {
     module_id: String,
@@ -33,8 +35,10 @@ struct Schema {
     roots: Vec<String>,
     declaration: String,
     bindings: Vec<Binding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dependencies: Vec<references::Dependency>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Binding {
     kind: String,
@@ -54,26 +58,27 @@ impl ReferenceView {
         let view: Self =
             serde_json::from_slice(bytes).map_err(|_| Error("invalid reference view".into()))?;
         require(
-            view.format == 1 && hash(view.schema_json.as_bytes()) == view.schema_hash,
+            matches!(view.format, 1 | 2) && hash(view.schema_json.as_bytes()) == view.schema_hash,
             "reference schema hash or format mismatch",
         )?;
-        let _: Schema = serde_json::from_str(&view.schema_json)
+        let schema: Schema = serde_json::from_str(&view.schema_json)
             .map_err(|_| Error("invalid reference schema".into()))?;
+        require(
+            (view.format == 1) == schema.dependencies.is_empty(),
+            "reference dependency format mismatch",
+        )?;
+        require(
+            !schema.roots.is_empty()
+                && schema.roots.len() <= 32
+                && schema.declaration.len() <= 1024 * 1024
+                && schema.bindings.len() <= 8192
+                && schema.dependencies.len() <= 16,
+            "reference schema exceeds limits",
+        )?;
         Ok(view)
     }
     pub fn validate(&self, program: &Program) -> Result<()> {
-        let verified = Self::from_json(&self.to_json()?)?;
-        let data: Schema = serde_json::from_str(&verified.schema_json).unwrap();
-        let roots = data
-            .roots
-            .iter()
-            .map(|id| program.find_type(id))
-            .collect::<Result<Vec<_>>>()?;
-        let actual = program.reference_view(&roots)?;
-        require(
-            actual.schema_hash == self.schema_hash && actual.core_sha256 == self.core_sha256,
-            "reference view does not match the runtime schema",
-        )
+        validate_reference_views(std::slice::from_ref(self), program)
     }
 }
 impl Program {
@@ -156,6 +161,14 @@ impl Program {
         )
     }
     pub fn reference_view(&self, roots: &[TypeId]) -> Result<ReferenceView> {
+        let (schema, core, _) = self.reference_schema(roots, false)?;
+        references::view(schema, core)
+    }
+    fn reference_schema(
+        &self,
+        roots: &[TypeId],
+        allow_foreign: bool,
+    ) -> Result<(Schema, String, BTreeMap<AssemblyId, BTreeSet<TypeId>>)> {
         require(
             !roots.is_empty() && roots.len() <= 32,
             "select between 1 and 32 reference roots",
@@ -204,6 +217,8 @@ impl Program {
             seen: BTreeSet::new(),
             declarations: BTreeMap::new(),
             bindings: Vec::new(),
+            allow_foreign,
+            foreign: BTreeMap::new(),
         };
         while let Some(id) = builder.pending.pop() {
             if builder.seen.insert(id) {
@@ -235,14 +250,9 @@ impl Program {
             roots: root_ids,
             declaration,
             bindings: builder.bindings,
+            dependencies: Vec::new(),
         };
-        let schema_json = serde_json::to_string(&schema).map_err(|e| Error(e.to_string()))?;
-        Ok(ReferenceView {
-            format: 1,
-            schema_hash: hash(schema_json.as_bytes()),
-            core_sha256: hash(core),
-            schema_json,
-        })
+        Ok((schema, hash(core), builder.foreign))
     }
 }
 struct ViewBuilder<'a> {
@@ -254,6 +264,8 @@ struct ViewBuilder<'a> {
     seen: BTreeSet<TypeId>,
     declarations: BTreeMap<String, String>,
     bindings: Vec<Binding>,
+    allow_foreign: bool,
+    foreign: BTreeMap<AssemblyId, BTreeSet<TypeId>>,
 }
 fn identifier(name: &str) -> Result<String> {
     require(
@@ -302,10 +314,13 @@ impl ViewBuilder<'_> {
             self.pending.push(id);
         } else {
             let image = Image::parse(&self.program.images[&owner])?;
-            require(
-                image.string(image.row(32, 1)?[7])? == "Renraku.CoreLib",
-                "reference closure across non-core modules is not supported yet",
-            )?;
+            if image.string(image.row(32, 1)?[7])? != "Renraku.CoreLib" {
+                require(
+                    self.allow_foreign,
+                    "reference closure across non-core modules requires a reference set",
+                )?;
+                self.foreign.entry(owner).or_default().insert(id);
+            }
         }
         Ok(format!("global::{}", qualified(&ty.name)?))
     }

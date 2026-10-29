@@ -68,6 +68,8 @@ existing core and powers a numbered-visit page with a decimal count precondition
 A [managed string map](docs/string-map.md) supplies bounded ordinal Get/Set/Remove
 over checkpointed linked objects. A grouped-visit handler combines both libraries
 and resumes a request between updates without repeating a committed visit.
+[Frozen reference sets](docs/reference-sets.md) let compiled callers use fields
+and APIs across installed modules while preserving their existing identities.
 
 ## Run the demonstration
 

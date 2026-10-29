@@ -9,7 +9,7 @@ use renraku_vm::{
     program::Program,
     runtime::{RunOutcome, Vm},
     value::Value,
-    workbench::ReferenceView,
+    workbench::ReferenceSet,
 };
 
 fn main() {
@@ -179,7 +179,7 @@ fn execute() -> Result<()> {
                         let path = args
                             .get(index + 1)
                             .ok_or_else(|| Error("reference-view requires a filename".into()))?;
-                        views.push(ReferenceView::from_json(&bounded_read(
+                        views.extend(ReferenceSet::parse_input(&bounded_read(
                             path,
                             4 * 1024 * 1024,
                         )?)?);
@@ -294,15 +294,18 @@ fn execute() -> Result<()> {
                         .collect::<Result<Vec<_>>>()?;
                     println!(
                         "{}",
-                        String::from_utf8(program.reference_view(&roots)?.to_json()?).unwrap()
+                        String::from_utf8(program.reference_set(&roots)?.export_json()?).unwrap()
                     );
                 }
                 "install" => {
                     let image = bounded_read(&args[2], 16 * 1024 * 1024)?;
                     let views = args[3..]
                         .iter()
-                        .map(|path| ReferenceView::from_json(&bounded_read(path, 4 * 1024 * 1024)?))
+                        .map(|path| {
+                            ReferenceSet::parse_input(&bounded_read(path, 4 * 1024 * 1024)?)
+                        })
                         .collect::<Result<Vec<_>>>()?;
+                    let views = views.into_iter().flatten().collect::<Vec<_>>();
                     let linked = program.link_modules(&[&image], &views)?;
                     let vm = saved
                         .snapshot

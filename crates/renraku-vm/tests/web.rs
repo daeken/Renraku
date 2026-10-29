@@ -170,8 +170,19 @@ fn managed_map_page_recovers_between_group_and_visit_mutations_then_replays_over
             .unwrap_err()
             .0
             .contains("closure across non-core modules"),
-        "foreign map fields require a future dependency-aware reference set"
+        "the legacy single-view API remains explicitly module-scoped"
     );
+    let dependency_set = exported
+        .snapshot
+        .program
+        .reference_set(&[exported
+            .snapshot
+            .program
+            .find_type("GroupedWebsite")
+            .unwrap()])
+        .unwrap();
+    assert_eq!(dependency_set.views.len(), 2);
+    dependency_set.validate(&exported.snapshot.program).unwrap();
     drop(compiler);
     fs::remove_file(compiler_path).unwrap();
     let host = WebHost::open_published(&test.database).unwrap();
@@ -305,6 +316,120 @@ fn managed_map_page_recovers_between_group_and_visit_mutations_then_replays_over
     assert_eq!(
         host.process(&request("before-groups"), 10000).unwrap().body,
         baseline.body
+    );
+    // Export a dependency set through the native read-only command, then compile
+    // a caller against the page's already-created map rather than a facade copy.
+    let saved = store.load().unwrap();
+    let program = &saved.snapshot.program;
+    let vm = saved.snapshot.restore().unwrap();
+    let owner = program.find_type("GroupedWebsite").unwrap();
+    let counts = program
+        .fields()
+        .find(|f| f.owner == owner && f.name == "Counts")
+        .unwrap()
+        .id;
+    let map = vm.static_fields()[&counts].referenced_object().unwrap();
+    let map_type = vm.heap().object(map).unwrap().type_id();
+    let envelope = web_cli(&[
+        "export-reference",
+        test.database.to_str().unwrap(),
+        "GroupedWebsite",
+    ]);
+    let set =
+        renraku_vm::workbench::ReferenceSet::from_json(&serde_json::to_vec(&envelope).unwrap())
+            .unwrap();
+    assert_eq!(set.set_hash, dependency_set.set_hash);
+    let path = test.directory.join("caller-compiler.db");
+    let mut compiler = CompilationStore::open(&path).unwrap();
+    let source=b"public static class ExistingGroups { public static string Run() { var map=GroupedWebsite.Counts; var old=map.Get(\"red\"); if (!old.Success || old.Value!=\"2\") return \"unexpected replay\"; return map.Set(\"red\",\"3\").Value; } }";
+    let input = CompilationRequest::capture(
+        program,
+        host.universe(),
+        toolchain(),
+        "Generated.ExistingGroups".into(),
+        vec![("Caller.cs".into(), source.to_vec())],
+        set.views.clone(),
+    )
+    .unwrap();
+    compiler.prepare("caller-build", &input).unwrap();
+    let built = compiler
+        .drive(host.universe(), "caller-build", toolchain())
+        .unwrap();
+    assert!(built.artifact.is_some(), "{:?}", built.report);
+    let artifact = built.artifact.unwrap();
+    let generation = store.generation();
+    let connection = Connection::open(&test.database).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_cross BEFORE UPDATE ON checkpoint BEGIN SELECT RAISE(ABORT,'injected dependency installation failure'); END;").unwrap();
+    assert!(install_once(&mut store, "caller-install", &artifact).is_err());
+    assert_eq!(store.generation(), generation);
+    assert!(
+        store
+            .load()
+            .unwrap()
+            .snapshot
+            .program
+            .entry("ExistingGroups::Run")
+            .is_err()
+    );
+    connection
+        .execute_batch("DROP TRIGGER reject_cross")
+        .unwrap();
+    install_once(&mut store, "caller-install", &artifact).unwrap();
+    drop(compiler);
+    let published = web_cli(&[
+        "compile-resume",
+        test.database.to_str().unwrap(),
+        path.to_str().unwrap(),
+        "caller-build",
+        "/missing/compiler.dll",
+    ]);
+    assert_eq!(published["state"], "compiled");
+    fs::remove_file(path).unwrap();
+    let caller_intent = web_cli(&[
+        "invoke-once",
+        test.database.to_str().unwrap(),
+        "caller-invoke",
+        "ExistingGroups::Run",
+        "0",
+    ]);
+    assert_eq!(caller_intent["state"], "running");
+    let completed = web_cli(&[
+        "invoke-once",
+        test.database.to_str().unwrap(),
+        "caller-invoke",
+        "ExistingGroups::Run",
+        "10000",
+    ]);
+    let replay = web_cli(&[
+        "invoke-once",
+        test.database.to_str().unwrap(),
+        "caller-invoke",
+        "ExistingGroups::Run",
+        "10000",
+    ]);
+    assert_eq!(completed["execution"], caller_intent["execution"]);
+    assert_eq!(replay["execution"], completed["execution"]);
+    assert_eq!(completed["result"], replay["result"]);
+    collect(&test.database);
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(
+        saved.snapshot.program.find_type("GroupedWebsite").unwrap(),
+        owner
+    );
+    assert_eq!(vm.static_fields()[&counts], Value::Reference(map));
+    assert_eq!(
+        vm.heap()
+            .objects()
+            .filter(|o| o.type_id() == map_type)
+            .count(),
+        1
+    );
+    assert_eq!(group_value("red").as_deref(), Some("3"));
+    assert_eq!(state(&test.database).0, 5);
+    assert_eq!(
+        host.process(&red, 10000).unwrap().body,
+        body(std::str::from_utf8(&first).unwrap())
     );
 }
 

@@ -106,12 +106,11 @@ in place. Invalid group keys and invalid/limited stored counts return explanator
 HTTP-v1 status-200 pages without recording a visit. Accepted retries replay their
 original page/execution after later map mutations; changed request data conflicts.
 
-The current reference exporter supports closure within one non-core module.
-GroupedWebsite's Counts field refers to another module, so exporting a facade
-for GroupedWebsite itself remains explicitly unsupported. Its saved source/CIL
-and static/object storage are inspectable. The three independent library/source
-views used to compile the handler work; cross-module facade dependency export is
-separate future work, not a reason to inline foreign types into the wrong module.
+The [dependency-aware exporter](reference-sets.md) can now freeze a reference set
+for GroupedWebsite and its foreign Counts declaration. A compiled caller can use
+the same existing map while each facade retains its own module and logical IDs.
+The legacy single-view Rust API remains module-scoped. Cross-module cycles and
+ambiguous names reject; foreign types are never inlined into the wrong module.
 
 ## Verification
 

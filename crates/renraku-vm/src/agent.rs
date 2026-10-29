@@ -37,7 +37,7 @@ pub const SYSTEM_PROMPT: &str = r#"You control a persistent CIL runtime. Reply w
 {"op":"describe","type":"type name or logical ID"} describes a compiler contract; unsupported shapes return an error.
 {"op":"inspect_static","field":"logical field ID or Declaring.Type::Field","stringUnits":64} observes one stored static field without executing guest code. Returns output.field with owner/declaredSlot/value; object values include a logical id. Scalar values show the runtime's signed i32/i64 storage bits, not source-language unsigned or enum formatting; describe the compiler contract for source declarations. Constants and ambiguous selectors reject. stringUnits defaults 64 and permits 0..256 exact UTF-16 units.
 {"op":"inspect_object","id":"logical object ID","maxFields":16,"stringUnits":64} observes one managed object's fields without recursively expanding reference graphs. Freeze retains this object through GC. maxFields defaults 16 and permits 1..32; stringUnits defaults 64 and permits 0..256. Views include stable identities, owners/types, scalar values or object IDs, observed checkpoint generation, and explicit truncation. Int64 values are decimal strings. String previews retain exact UTF-16 unit arrays; text is null if the displayed prefix contains an unpaired surrogate. Label previews may truncate. Reference IDs in old results are observations, not permanent retention promises. A lost unappended read may observe a later checkpoint on resume; committed tool results remain in managed history. No host paths or mutation/capability grants.
-{"op":"compile","assembly":"Generated.Example","source":"C# source","referenceTypes":["Renraku.Guest.Counter"]} compiles one Generated.cs against the core and selected live types. Roots must share one module. Source <=32768 UTF-8 bytes. Compilation alone does not install code.
+{"op":"compile","assembly":"Generated.Example","source":"C# source","referenceTypes":["Renraku.Guest.Counter"]} compiles one Generated.cs against the core and selected live types. Roots may span modules; acyclic declaration dependencies are frozen automatically. Source <=32768 UTF-8 bytes. Compilation alone does not install code.
 {"op":"install","compilationTurn":3} installs the artifact compiled in that earlier numbered turn. Assembly names must be new; this does not replace existing bodies.
 {"op":"invoke","method":"logical method ID or Type::Method","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]} invokes a static entry with <=8 arguments. Other arguments: {"kind":"i32","value":7}, {"kind":"i64","value":"9007199254740993"}, {"kind":"object","id":"logical object ID"}, {"kind":"null"}. Calls have bounded instructions and cannot submit model requests. Static selectors freeze to their current values before execution.
 {"op":"web_status"} inspects the saved default website publication, current host publication authority, and supported handler ABI. It performs no publication or HTTP request.
@@ -860,7 +860,7 @@ fn freeze(vm: &Vm<'_>, action: Action, count: u32) -> Result<Action> {
                 .map(|name| vm.program.find_type(name))
                 .collect::<Result<Vec<_>>>()?;
             if !roots.is_empty() {
-                vm.program.reference_view(&roots)?;
+                vm.program.reference_set(&roots)?;
             }
             Action::Compile {
                 assembly,
@@ -1413,10 +1413,35 @@ fn execute(
         Action::Describe { type_name } => match vm
             .program
             .find_type(&type_name)
-            .and_then(|id| vm.program.reference_view(&[id]))
+            .and_then(|id| vm.program.reference_set(&[id]).map(|set| (id, set)))
         {
-            Ok(view) => {
-                json!({"ok":true,"schemaHash":view.schema_hash,"output":serde_json::from_str::<Json>(&view.schema_json).map_err(|e|Error(e.to_string()))?})
+            Ok((id, set)) => {
+                let root = set
+                    .views
+                    .iter()
+                    .position(|v| {
+                        serde_json::from_str::<Json>(&v.schema_json).is_ok_and(|s| {
+                            s["roots"]
+                                .as_array()
+                                .is_some_and(|roots| roots.contains(&json!(id.to_string())))
+                        })
+                    })
+                    .ok_or_else(|| Error("missing description root".into()))?;
+                let view = &set.views[root];
+                let mut result = json!({"ok":true,"schemaHash":view.schema_hash,"output":serde_json::from_str::<Json>(&view.schema_json).map_err(|e|Error(e.to_string()))?});
+                if set.views.len() > 1 {
+                    result["referenceSetHash"] = json!(set.set_hash);
+                    result["dependencies"] = json!(
+                        set.views
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| *i != root)
+                            .map(|(_, v)| serde_json::from_str::<Json>(&v.schema_json))
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map_err(|e| Error(e.to_string()))?
+                    );
+                }
+                result
             }
             Err(error) => failed(error),
         },
@@ -1432,7 +1457,7 @@ fn execute(
             let views = if roots.is_empty() {
                 vec![]
             } else {
-                vec![vm.program.reference_view(&roots)?]
+                vm.program.reference_set(&roots)?.views
             };
             let sources = vec![("Generated.cs".into(), source.into_bytes())];
             let id = action_id(session_id, turn, "compile");

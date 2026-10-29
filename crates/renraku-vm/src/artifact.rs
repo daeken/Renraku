@@ -6,7 +6,7 @@ use crate::{
     image::Image,
     invocation::validate_request_id,
     runtime::Vm,
-    workbench::ReferenceView,
+    workbench::{ReferenceView, check_reference_views, validate_reference_views},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -289,6 +289,7 @@ impl BuildArtifact {
                 "invalid/duplicate captured reference module",
             )?;
         }
+        check_reference_views(&self.views()?)?;
         for row in image.rows(35) {
             require(
                 scopes.contains(image.string(row[6])?),
@@ -512,9 +513,7 @@ impl Vm<'_> {
                     .any(|bytes| bytes.as_slice() == core),
                 "installation core is absent",
             )?;
-            for view in record.artifact.views()? {
-                view.validate(self.program)?;
-            }
+            validate_reference_views(&record.artifact.views()?, self.program)?;
         }
         Ok(())
     }

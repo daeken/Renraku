@@ -194,7 +194,10 @@ unknown properties, and model-supplied host/compiler paths are rejected. Direct
 invocation of the coordinator's `AgentHarness` entries is reserved.
 
 Compilation emits one `Generated.cs` against the runtime core and optional frozen
-reference types from one logical module. Runtime schema and logical bindings stay
+reference types across modules with acyclic declaration dependencies. The
+complete [frozen reference set](reference-sets.md) is captured before compilation;
+describe adds dependency schemas/set hash within the existing output bound.
+Runtime schema and logical bindings stay
 authoritative. The model cannot redefine a referenced live type by compiling a
 facade. Installation adds a new assembly; replacing bodies on existing types is
 not implemented. Compilation success does not imply supported CIL: installation

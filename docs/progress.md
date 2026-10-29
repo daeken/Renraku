@@ -335,6 +335,32 @@ and do not inherit persistence.
   makes exporting a facade for GroupedWebsite itself reject explicitly, as tested.
   Source/CIL and raw state remain inspectable. See [managed string map](string-map.md).
   All legacy fixtures, format 7, and existing demos are unchanged; no live inference.
+- Dependency-aware frozen reference sets now span acyclic non-core declaration
+  graphs. `Program::reference_set` merges roots per original module, records
+  foreign module/type IDs and exact dependency schema hashes, and emits canonical
+  dependency-first sets. Isolated format-1 view bytes and the module-scoped
+  `reference_view` API remain intact; foreign declarations use view format 2
+  inside a hashed format-1 referenceSet envelope. No live facade types are minted
+  and implementation DLLs are not compiler-reference substitutes. Native export,
+  compile/install inputs, agent describe, and mixed-module compile roots use sets
+  under existing bounds. The external compiler emits metadata-only dependencies
+  before dependents; captured requests/artifacts and installation validate the
+  complete graph. Checkpoint format stays 7.
+  Two reference tests cover real cyclic/ambiguous C# metadata, merged/permuted
+  roots, canonical hashes, old wire/independent-view behavior, missing/changed
+  dependencies and wrong universes. A compiler test covers pretty/reordered set
+  envelopes, reversed view-file inputs, deterministic output and missing-input
+  rejection. A five-turn managed-agent fixture describes a cross-module owner,
+  compiles mixed-module roots, installs/invokes and finishes with zero-operation
+  finished replay. These are deterministic fixtures, not live-model evidence.
+  The grouped-website test now exports its Counts dependency set and compiles a
+  caller that gets/updates the original map. A failed install rolls back code;
+  published compilation replays with a missing compiler path, native SDK-free
+  invocation resumes/replays once, and GC preserves original map/type/field IDs,
+  one map object, page state, and old HTTP receipts. See
+  [reference sets](reference-sets.md). Cycles, ambiguous dependency names and other
+  unsupported declaration shapes still reject explicitly. Legacy fixtures and
+  both existing demos remain unchanged; no live inference was used.
 
 ## Validation
 
@@ -342,7 +368,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 231 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 235 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -611,29 +637,27 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next export dependency-aware frozen reference sets for acyclic cross-module
-declarations.** GroupedWebsite.Counts is a concrete case: its declared StringMap
-type belongs to another installed module, so exporting GroupedWebsite currently
-rejects. Keep each facade scoped to its original logical module. Never inline
-foreign types into the wrong assembly, mint replacement live identities, or
-compile callers against implementation DLLs as a shortcut. Discover bounded
-signature/base/field dependencies, merge roots per module, and produce a frozen
-hashed set with explicit module/type-ID bindings. Emit dependency facades before
-callers; reject cycles explicitly until a separate cycle contract is implemented.
-Keep original isolated format-1 reference views/compiled receipts usable. Version
-new host metadata shapes deliberately; heap checkpoint format need not change.
-Compilation captures the entire frozen dependency set and installation validates
-all bindings/provenance before mutating code. Extend existing native/agent tools
-within current view/root/source bounds instead of adding general host authority.
-Demonstrate an externally compiled caller reading GroupedWebsite.Counts and using
-its existing map, preserving map/object/type/field IDs, saved page state, durable
-compile/install/invoke receipts, GC, restart, and SDK-free replay. Test missing,
-changed, ambiguous and cyclic dependencies, deterministic ordering/hashes, failed
-publication, and old-view compatibility. Preserve all library/core modules,
-HTTP-v1, managed transcripts, capability denial, one-context limits, demos and
-legacy fixtures. This follows a verified limitation, rather than adding unrelated
-host infrastructure. Native functions, broad .NET compatibility, replacement
-bodies and same-universe concurrency remain unsupported.
+**Next validate a model using the installed libraries and cross-module website
+state through the subscription adapter.** Begin with deterministic local HTTP
+Responses actions/history that discover/inspect GroupedWebsite.Counts, describe
+its dependency contract, read retained library/page source, compile a caller or
+new handler against the complete set, install/invoke or explicitly publish it,
+and observe the same saved map. Exercise corrective diagnostics and lost
+compile/install/invoke/publication results with GC/restarts; reconcile receipts
+and preserve one-context ownership. Keep the actual linked managed transcript
+and frozen actions authoritative. No more host infrastructure is required first.
+Then use the already-authorized bounded live subscription path for this new
+multi-module acceptance question, with a fresh universe/session and explicitly
+available account model. Retain exact transcripts/private receipts and preserve
+original map/object/type/field IDs, old HTTP responses, and zero-operation finished
+recovery. Do not repeat earlier single-module demonstrations or imply scripted
+fixtures prove model autonomy. Do not touch either existing demo universe; use a
+bounded verification edge and stop it afterward. Never resubmit uncertain model
+outcomes or start unattended login. Preserve default publication denial, strict
+JSON final-text actions, all limits, compiler/profile binding, pure-CIL library
+semantics, native function-call limitations, legacy readers and checkpoint format.
+Cross-module cycles, extern aliases/ambiguous names, general BCL compatibility,
+replacement bodies and same-universe concurrency remain future work.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

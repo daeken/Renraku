@@ -253,9 +253,7 @@ impl Program {
             !additions.is_empty() && additions.len() <= 16,
             "link between 1 and 16 implementation modules",
         )?;
-        for view in views {
-            view.validate(self)?;
-        }
+        crate::workbench::validate_reference_views(views, self)?;
         let mut names = BTreeSet::new();
         for bytes in additions {
             require(

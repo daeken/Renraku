@@ -62,7 +62,8 @@ CIL remains the authoritative executable representation; captured source is buil
 provenance supplied by the trusted compiler boundary, not decompiled text or
 cryptographic proof that a particular compiler emitted those instructions.
 
-`export-reference` accepts 1–32 type names/IDs from one logical module. Its JSON
+`export-reference` accepts 1–32 type names/IDs and follows supported acyclic
+declaration dependencies across modules. An isolated view's unchanged JSON
 envelope includes `schemaHash`, `coreSha256`, and `schemaJson`. Parsing the latter
 gives C# declaration scaffolding and type/field/method bindings to existing IDs.
 The hash is SHA-256 of the exact UTF-8 `schemaJson` string, without an additional
@@ -70,20 +71,25 @@ newline; the core hash pins the bootstrap reference. Heap mutations and checkpoi
 generations do not affect the view. Another universe loaded from the same DLLs
 has different logical IDs and cannot substitute its view.
 
-The initial exporter supports unsigned, version-zero modules with nongeneric,
-top-level reference classes; it closes over same-module signature/base types and
+The exporter supports unsigned, version-zero modules with nongeneric,
+top-level reference classes; it closes over supported signature/base/field types and
 uses the original core for core dependencies. It preserves visibility, static
 and readonly fields, primitive signedness, and parameter names. Properties,
 events, declaration/parameter custom attributes, literal/default fields,
-optional/default parameters, value-type roots, non-ASCII identifiers, and
-dependencies on another non-core module are explicit errors. It does not silently
+optional/default parameters, value-type roots, non-ASCII identifiers, ambiguous
+cross-module names and cyclic module dependencies are explicit errors. It does not silently
 erase those contracts. Independent live schema authoring is still future work;
 today the authoritative registry is reconstructed from saved implementation bytes
 and their logical bindings.
+Cross-module exports use a hashed [reference set](reference-sets.md), retaining
+each declaration in its original module and pinning dependency hashes/type IDs.
+The original Rust `reference_view` API stays module-scoped; `reference_set` handles
+merged roots and dependencies. No facade becomes live code authority.
 
 ## Compile, install, invoke
 
-`--reference-view` is repeatable up to 16 times. The external compiler verifies
+`--reference-view` accepts a legacy view or whole set, up to 16 expanded modules.
+The external compiler verifies
 view/core hashes, emits deterministic metadata-only reference DLLs with
 `ReferenceAssemblyAttribute`, and references those images when compiling callers.
 Reference builds use `includePrivateMembers: false`. Bundles using views have

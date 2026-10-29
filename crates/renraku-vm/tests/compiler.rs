@@ -10,8 +10,73 @@ use renraku_vm::{
     program::Program,
     runtime::{RunOutcome, Vm},
     value::Value,
-    workbench::ReferenceView,
+    workbench::{ReferenceSet, ReferenceView},
 };
+
+#[test]
+fn external_compiler_emits_dependency_facades_from_set_envelopes_and_reversed_inputs() {
+    let directory = Directory::new();
+    let map = fs::read(fixtures().output.join("Renraku.Collections.dll")).unwrap();
+    let owner = fs::read(fixtures().output.join("Cross.Owner.dll")).unwrap();
+    let program = Program::load(&[&fixtures().core, &map, &owner]).unwrap();
+    let set = program
+        .reference_set(&[program.find_type("CrossOwner").unwrap()])
+        .unwrap();
+    let path = directory.0.join("set.json");
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(
+            &serde_json::from_slice::<Json>(&set.to_json().unwrap()).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let source=directory.source("Caller.cs","public static class Caller { public static int Run() { return CrossOwner.Saved == null ? 0 : CrossOwner.Saved.Count(); } }");
+    let (output, report) = directory.compile_with_views(
+        std::slice::from_ref(&source),
+        "set-bundle",
+        std::slice::from_ref(&path),
+    );
+    assert_success(&output, &report);
+    let artifact = BuildArtifact::from_bundle(directory.0.join("set-bundle")).unwrap();
+    artifact.validate().unwrap();
+    let mut reordered: Json = serde_json::from_slice(&set.to_json().unwrap()).unwrap();
+    reordered["views"].as_array_mut().unwrap().reverse();
+    let reordered_path = directory.0.join("reordered-set.json");
+    fs::write(
+        &reordered_path,
+        serde_json::to_vec_pretty(&reordered).unwrap(),
+    )
+    .unwrap();
+    let (output, report) = directory.compile_with_views(
+        std::slice::from_ref(&source),
+        "reordered-set-bundle",
+        &[reordered_path],
+    );
+    assert_success(&output, &report);
+    let mut paths = Vec::new();
+    for (index, view) in set.views.iter().rev().enumerate() {
+        let path = directory.0.join(format!("view-{index}.json"));
+        fs::write(&path, view.to_json().unwrap()).unwrap();
+        paths.push(path);
+    }
+    let (output, report) = directory.compile_with_views(&[source], "reversed-bundle", &paths);
+    assert_success(&output, &report);
+    assert_eq!(
+        fs::read(directory.0.join("set-bundle/Compiled.Example.dll")).unwrap(),
+        fs::read(directory.0.join("reversed-bundle/Compiled.Example.dll")).unwrap()
+    );
+    let missing = ReferenceSet::from_views(vec![set.views[1].clone()]);
+    assert!(missing.is_err());
+    let (output, report) = directory.compile_with_views(
+        &[directory.source("Missing.cs", "public class Missing {}")],
+        "missing",
+        &paths[..1],
+    );
+    assert!(!output.status.success());
+    assert!(report["error"].as_str().unwrap().contains("missing"));
+    assert!(!directory.0.join("missing").exists());
+}
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use std::{

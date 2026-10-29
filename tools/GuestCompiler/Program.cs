@@ -43,6 +43,20 @@ try
     byte[] collectionTests = Compile("Renraku.CollectionTests", File.ReadAllText(Path.Combine(root, "guest/StringMapHarness.cs")),
         new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(collectionLibrary) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.CollectionTests.dll"), collectionTests);
+    // Real metadata dependency/collision fixtures, never executed by the host.
+    var coreReference = MetadataReference.CreateFromImage(core);
+    byte[] cycleStub = Compile("Cycle.Left", "namespace Cycle.Left { public class Node { } }", new[] { coreReference });
+    byte[] cycleRight = Compile("Cycle.Right", "namespace Cycle.Right { public class Node { public global::Cycle.Left.Node Other; } }",
+        new[] { coreReference, MetadataReference.CreateFromImage(cycleStub) });
+    byte[] cycleLeft = Compile("Cycle.Left", "namespace Cycle.Left { public class Node { public global::Cycle.Right.Node Other; } }",
+        new[] { coreReference, MetadataReference.CreateFromImage(cycleRight) });
+    File.WriteAllBytes(Path.Combine(output, "Cycle.Left.dll"), cycleLeft);
+    File.WriteAllBytes(Path.Combine(output, "Cycle.Right.dll"), cycleRight);
+    foreach (string name in new[] { "Ambiguous.One", "Ambiguous.Two" })
+        File.WriteAllBytes(Path.Combine(output, name + ".dll"), Compile(name, "namespace Duplicate { public class Node { } }", new[] { coreReference }));
+    File.WriteAllBytes(Path.Combine(output, "Cross.Owner.dll"), Compile("Cross.Owner",
+        "public static class CrossOwner { public static Renraku.Collections.StringMap Saved; }",
+        new[] { coreReference, MetadataReference.CreateFromImage(collectionLibrary) }));
     string source = File.ReadAllText(Path.Combine(root, "guest/Simulation.cs")) + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/IntegerArithmetic.cs"));
     byte[] guest = Compile("Renraku.Simulation", source,

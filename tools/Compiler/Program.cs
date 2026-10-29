@@ -10,7 +10,7 @@ using Microsoft.CodeAnalysis.CSharp;
 // This process runs on the host CLR. Emitted guest code is never loaded here.
 return Compiler.Run(args);
 
-static class Compiler
+static partial class Compiler
 {
     const int MaxSource = 1024 * 1024;
     const int MaxSources = 4 * MaxSource;
@@ -57,37 +57,10 @@ static class Compiler
             var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
                 optimizationLevel: OptimizationLevel.Release, deterministic: true,
                 concurrentBuild: false, checkOverflow: false, allowUnsafe: false);
-            var referenceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Renraku.CoreLib", request.Name };
-            var views = request.Views.Select(path =>
-            {
-                byte[] bytes = ReadBounded(path, MaxSources);
-                using var envelope = JsonDocument.Parse(bytes);
-                var root = envelope.RootElement;
-                string schema = root.GetProperty("schemaJson").GetString() ?? throw new ArgumentException("missing schemaJson");
-                string schemaHash = root.GetProperty("schemaHash").GetString() ?? throw new ArgumentException("missing schemaHash");
-                if (root.GetProperty("format").GetInt32() != 1 || Hash(Encoding.UTF8.GetBytes(schema)) != schemaHash
-                    || root.GetProperty("coreSha256").GetString() != Hash(core))
-                    throw new ArgumentException("reference view hash, core, or format mismatch");
-                using var metadata = JsonDocument.Parse(schema);
-                string name = metadata.RootElement.GetProperty("moduleName").GetString() ?? throw new ArgumentException("missing moduleName");
-                ValidateName(name);
-                if (!referenceNames.Add(name)) throw new ArgumentException("duplicate reference module name");
-                string declaration = "[assembly: global::System.Runtime.CompilerServices.ReferenceAssembly]\n" +
-                    (metadata.RootElement.GetProperty("declaration").GetString() ?? throw new ArgumentException("missing declaration"));
-                var facade = CSharpCompilation.Create(name,
-                    new[] { CSharpSyntaxTree.ParseText(declaration, parse, "reference.cs", Encoding.UTF8) },
-                    new[] { MetadataReference.CreateFromImage(core) }, options);
-                using var buffer = new BoundedImage(MaxAssembly);
-                var emitted = facade.Emit(buffer, options: new Microsoft.CodeAnalysis.Emit.EmitOptions(
-                    metadataOnly: true, includePrivateMembers: false, runtimeMetadataVersion: "v4.0.30319"));
-                if (!emitted.Success) throw new ArgumentException("invalid reference declaration: " +
-                    string.Join("; ", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Take(8)
-                        .Select(d => Limit(d.GetMessage(CultureInfo.InvariantCulture), 256))));
-                return new ReferenceInput(name, bytes, buffer.ToArray(), schemaHash);
-            }).ToArray();
+            var views = BuildReferences(request, core, parse, options);
             var compilation = CSharpCompilation.Create(request.Name,
                 inputs.Select(input => CSharpSyntaxTree.ParseText(input.Text, parse, input.Name, Encoding.UTF8)),
-                new[] { MetadataReference.CreateFromImage(core) }.Concat(views.Select(view => MetadataReference.CreateFromImage(view.Image))), options);
+                new[] { MetadataReference.CreateFromImage(core) }.Concat(views.OrderBy(view=>view.Name,StringComparer.Ordinal).Select(view => MetadataReference.CreateFromImage(view.Image))), options);
             using var image = new BoundedImage(MaxAssembly);
             var result = compilation.Emit(image, options:
                 new Microsoft.CodeAnalysis.Emit.EmitOptions(runtimeMetadataVersion: "v4.0.30319"));
