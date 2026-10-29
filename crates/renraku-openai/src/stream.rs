@@ -2,7 +2,7 @@
 use crate::{Result, fail, require};
 use renraku_vm::heap::MAX_STRING_UNITS;
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 
 const MAX_EVENT: usize = 8 * 1024 * 1024;
 const MAX_STREAM: usize = 32 * 1024 * 1024;
@@ -10,70 +10,102 @@ pub(crate) struct Completion {
     pub id: String,
     pub text: Vec<u16>,
 }
-pub(crate) fn completed(reader: impl Read) -> Result<Completion> {
-    let mut reader = BufReader::new(reader);
-    let mut data = Vec::new();
-    let mut name = String::new();
-    let mut total = 0usize;
-    let mut event_size = 0usize;
-    let mut created_id: Option<String> = None;
+pub(crate) fn completed(mut reader: impl Read) -> Result<Completion> {
+    let mut decoder = Decoder::default();
+    let mut buffer = [0u8; 16 * 1024];
     loop {
-        let mut line = Vec::new();
-        let count = reader
-            .by_ref()
-            .take((MAX_EVENT + 1) as u64)
-            .read_until(b'\n', &mut line)
-            .map_err(|_| fail("Responses stream interrupted; outcome is unknown"))?;
-        require(
-            count > 0,
-            "Responses stream ended without response.completed; outcome is unknown",
-        )?;
-        total += count;
-        event_size += count;
-        require(
-            event_size <= MAX_EVENT && total <= MAX_STREAM,
-            "Responses stream exceeds its size limit",
-        )?;
-        require(
-            line.last() == Some(&b'\n'),
-            "Responses stream has an unfinished event",
-        )?;
-        line.pop();
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-        let line = std::str::from_utf8(&line).map_err(|_| fail("Responses stream is not UTF-8"))?;
-        let line = if total == count {
-            line.trim_start_matches('\u{feff}')
-        } else {
-            line
+        let count = match reader.read(&mut buffer) {
+            Ok(0) => return decoder.end(),
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(fail("Responses stream interrupted; outcome is unknown")),
         };
+        if let Some(completion) = decoder.push(&buffer[..count])? {
+            return Ok(completion);
+        }
+    }
+}
+/// The same bounded parser serves blocking reads and asynchronous HTTP chunks.
+/// Its provisional bytes are native transport state, never guest checkpoint data.
+#[derive(Default)]
+pub(crate) struct Decoder {
+    line: Vec<u8>,
+    data: Vec<u8>,
+    name: String,
+    total: usize,
+    event_size: usize,
+    lines: usize,
+    created_id: Option<String>,
+}
+impl Decoder {
+    pub fn push(&mut self, bytes: &[u8]) -> Result<Option<Completion>> {
+        for part in bytes.split_inclusive(|byte| *byte == b'\n') {
+            self.total += part.len();
+            self.event_size += part.len();
+            require(
+                self.event_size <= MAX_EVENT && self.total <= MAX_STREAM,
+                "Responses stream exceeds its size limit",
+            )?;
+            self.line.extend_from_slice(part);
+            if part.last() != Some(&b'\n') {
+                continue;
+            }
+            let mut raw = std::mem::take(&mut self.line);
+            raw.pop();
+            if raw.last() == Some(&b'\r') {
+                raw.pop();
+            }
+            let line =
+                std::str::from_utf8(&raw).map_err(|_| fail("Responses stream is not UTF-8"))?;
+            let line = if self.lines == 0 {
+                line.trim_start_matches('\u{feff}')
+            } else {
+                line
+            };
+            self.lines += 1;
+            if let Some(completion) = self.on_line(line)? {
+                return Ok(Some(completion));
+            }
+            raw.clear();
+            self.line = raw;
+        }
+        Ok(None)
+    }
+    pub fn end(self) -> Result<Completion> {
+        if !self.line.is_empty() {
+            return Err(fail("Responses stream has an unfinished event"));
+        }
+        Err(fail(
+            "Responses stream ended without response.completed; outcome is unknown",
+        ))
+    }
+    fn on_line(&mut self, line: &str) -> Result<Option<Completion>> {
         if line.is_empty() {
-            event_size = 0;
-            if !data.is_empty() {
-                let value: Value = serde_json::from_slice(&data)
+            self.event_size = 0;
+            if !self.data.is_empty() {
+                let value: Value = serde_json::from_slice(&self.data)
                     .map_err(|_| fail("invalid Responses event JSON"))?;
                 let kind = value["type"]
                     .as_str()
                     .ok_or_else(|| fail("Responses event has no type"))?;
                 require(
-                    name.is_empty() || name == kind,
+                    self.name.is_empty() || self.name == kind,
                     "Responses event name and type disagree",
                 )?;
                 match kind {
                     "response.created" => {
                         let id = response_id(&value["response"])?;
                         require(
-                            created_id.as_ref().is_none_or(|old| old == id),
+                            self.created_id.as_ref().is_none_or(|old| old == id),
                             "Responses stream changed response identity",
                         )?;
-                        created_id = Some(id.to_owned());
+                        self.created_id = Some(id.to_owned());
                     }
                     "response.completed" => {
                         let response = &value["response"];
                         let id = response_id(response)?;
                         require(
-                            created_id.as_ref().is_none_or(|old| old == id),
+                            self.created_id.as_ref().is_none_or(|old| old == id),
                             "Responses stream changed response identity",
                         )?;
                         require(
@@ -82,10 +114,10 @@ pub(crate) fn completed(reader: impl Read) -> Result<Completion> {
                                 && response["incomplete_details"].is_null(),
                             "invalid completed Responses status",
                         )?;
-                        return Ok(Completion {
+                        return Ok(Some(Completion {
                             id: id.to_owned(),
                             text: text(response)?,
-                        });
+                        }));
                     }
                     "response.failed" | "response.incomplete" | "error" => {
                         let code = value["response"]["error"]["code"]
@@ -97,23 +129,24 @@ pub(crate) fn completed(reader: impl Read) -> Result<Completion> {
                             diagnostic(code)
                         )));
                     }
-                    _ => {} // Text deltas and reasoning are never completion evidence.
+                    _ => {} // Deltas and reasoning never prove completion.
                 }
             }
-            data.clear();
-            name.clear();
+            self.data.clear();
+            self.name.clear();
         } else if !line.starts_with(':') {
             let (field, value) = line.split_once(':').unwrap_or((line, ""));
             let value = value.strip_prefix(' ').unwrap_or(value);
             match field {
-                "event" => name = value.to_owned(),
+                "event" => self.name = value.to_owned(),
                 "data" => {
-                    data.extend_from_slice(value.as_bytes());
-                    data.push(b'\n');
+                    self.data.extend_from_slice(value.as_bytes());
+                    self.data.push(b'\n');
                 }
                 _ => {}
             }
         }
+        Ok(None)
     }
 }
 fn response_id(response: &Value) -> Result<&str> {

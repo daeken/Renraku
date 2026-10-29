@@ -1,5 +1,8 @@
 use super::*;
+use crate::AsyncOpenAIProvider;
 use crate::{ISSUER, storage::Session};
+use renraku_vm::effects::AsyncModelProvider;
+use renraku_vm::model::MessageRole;
 use renraku_vm::{
     checkpoint::CheckpointStore,
     driver::{DriverLimits, DriverStop},
@@ -10,6 +13,7 @@ use renraku_vm::{
     runtime::{RunOutcome, Vm},
     value::Value as GuestValue,
 };
+use serde_json::json as object;
 use std::{
     fs,
     io::{Read, Write},
@@ -94,6 +98,15 @@ impl Server {
         status: u16,
         pause: bool,
         content_type: Option<&str>,
+    ) -> Self {
+        Self::with_tail(payload, status, pause, content_type, String::new())
+    }
+    fn with_tail(
+        payload: String,
+        status: u16,
+        pause: bool,
+        content_type: Option<&str>,
+        tail: String,
     ) -> Self {
         let content_type = content_type
             .map(|v| format!("Content-Type: {v}\r\n"))
@@ -189,6 +202,7 @@ impl Server {
                     while !released.load(Ordering::SeqCst) && !stopped.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(2));
                     }
+                    let _ = socket.write_all(tail.as_bytes());
                 }
             }
         });
@@ -282,6 +296,26 @@ fn adapter(directory: &Path, id: Uuid, base: &str) -> OpenAIProvider {
     result.transport.models = format!("{base}/models");
     result.transport.responses = format!("{base}/responses");
     result
+}
+async fn async_adapter(directory: &Path, id: Uuid, base: &str) -> AsyncOpenAIProvider {
+    AsyncOpenAIProvider::open(
+        directory.join("auth"),
+        directory.join("receipts"),
+        id,
+        "chosen-model",
+    )
+    .await
+    .unwrap()
+    .test_endpoints(base)
+}
+async fn arrived(server: &Server) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !server.arrived.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("HTTP request did not reach the fixture server");
 }
 fn request(id: Uuid) -> ModelRequest {
     ModelRequest {
@@ -565,6 +599,248 @@ fn cil_harness_receives_a_durable_reply_and_restores_without_network() {
     assert_eq!(server.posts(), 1);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn asynchronous_http_stream_yields_to_another_guest_universe_and_pins_the_profile() {
+    let directory = Directory::new();
+    let id = profile(&directory.0.join("auth"), "a", "token-a");
+    profile(&directory.0.join("auth"), "b", "token-b");
+    let server = Server::with_tail(
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n".into(),
+        200,
+        true,
+        None,
+        completion("hello from model\0🦀"),
+    );
+    let mut provider = async_adapter(&directory.0, id, &server.base).await;
+    let mut fast_provider = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+    let program = common::program();
+    let mut vm = start(&program, id);
+    let mut store = CheckpointStore::open(directory.0.join("vm.db")).unwrap();
+    let mut fast = Vm::new(&program);
+    fast.set_model_calls_enabled(true);
+    fast.start(common::entry(&program, "Run"), Vec::new())
+        .unwrap();
+    let mut fast_store = CheckpointStore::open(directory.0.join("fast.db")).unwrap();
+    let delivery = vm.drive_model_async(&mut store, &mut provider, limits());
+    let progress = async {
+        arrived(&server).await;
+        let report = fast
+            .drive_model_async(&mut fast_store, &mut fast_provider, limits())
+            .await
+            .unwrap();
+        assert_eq!(
+            report.stop,
+            DriverStop::Completed(Some(GuestValue::I32(48)))
+        );
+        assert_eq!(report.provider_operations, 0);
+        server.release.store(true, Ordering::SeqCst);
+    };
+    let (result, ()) = tokio::join!(delivery, progress);
+    let report = result.unwrap();
+    assert_result(&vm, report.stop);
+    assert_eq!(report.provider_operations, 1);
+    assert_eq!(server.posts(), 1);
+    let requests = server.requests.lock().unwrap();
+    assert!(requests.iter().all(|r| r.bearer == "Bearer token-a"));
+    let body = &requests
+        .iter()
+        .find(|r| r.path == "/responses")
+        .unwrap()
+        .body;
+    assert_eq!(body["store"], false);
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["input"][0]["content"], "hello\0🦀");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn abandoning_async_http_keeps_uncertainty_and_never_sends_again() {
+    let directory = Directory::new();
+    let id = profile(&directory.0.join("auth"), "a", "token-a");
+    let server = Server::new(
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n".into(),
+        200,
+        true,
+    );
+    let mut provider = async_adapter(&directory.0, id, &server.base).await;
+    let program = common::program();
+    let mut vm = start(&program, id);
+    let mut store = CheckpointStore::open(directory.0.join("vm.db")).unwrap();
+    {
+        let driving = vm.drive_model_async(&mut store, &mut provider, limits());
+        tokio::pin!(driving);
+        tokio::select! { result = &mut driving => panic!("stream unexpectedly ended: {result:?}"), () = arrived(&server) => {} }
+    }
+    let frames = vm.context().frames.clone();
+    assert_eq!(vm.effects().next().unwrap().state, EffectState::InFlight);
+    server.release.store(true, Ordering::SeqCst);
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    vm.set_model_calls_enabled(true);
+    assert_eq!(vm.context().frames, frames);
+    let mut offline = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+    let report = vm
+        .drive_model_async(&mut store, &mut offline, limits())
+        .await
+        .unwrap();
+    assert!(matches!(report.stop, DriverStop::OutcomeUnknown { .. }));
+    assert_eq!(report.instructions, 0);
+    assert_eq!(server.posts(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn async_and_blocking_receipts_interoperate_offline_and_reject_changed_requests() {
+    let directory = Directory::new();
+    let id = profile(&directory.0.join("auth"), "a", "token-a");
+    let server = Server::new(completion("reply"), 200, false);
+    let request = request(id);
+    let path = directory.0.clone();
+    let base = server.base.clone();
+    let submitted = request.clone();
+    tokio::task::spawn_blocking(move || adapter(&path, id, &base).submit(&submitted))
+        .await
+        .unwrap()
+        .unwrap();
+    let auth = Store::open(&directory.0.join("auth")).unwrap();
+    let mut guard = auth.lock().unwrap();
+    guard.vault.profiles[0].session = None;
+    guard.save().unwrap();
+    drop(guard);
+    let mut provider = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+    assert_eq!(
+        provider.reconcile(&request).await.unwrap(),
+        Some("reply".encode_utf16().collect())
+    );
+    assert_eq!(
+        provider.submit(&request).await.unwrap(),
+        "reply".encode_utf16().collect::<Vec<_>>()
+    );
+    let mut changed = request;
+    changed.messages[0].content.push(33);
+    assert!(
+        provider
+            .reconcile(&changed)
+            .await
+            .unwrap_err()
+            .0
+            .contains("match")
+    );
+    assert_eq!(server.posts(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn async_preflight_and_failed_streams_share_the_bounded_transport_policy() {
+    for (content_type, payload, status, expected) in [
+        (
+            None,
+            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_unavailable\"}}}\n\n",
+            200,
+            "subscription_sharing_usage_unavailable",
+        ),
+        (
+            Some("application/json"),
+            "{\"object\":\"response\",\"status\":\"completed\",\"output_text\":\"secret-output\"}",
+            200,
+            "completed response JSON",
+        ),
+        (
+            Some("application/json"),
+            "{\"error\":{\"code\":\"permission_denied\",\"message\":\"secret-bearer\"}}",
+            403,
+            "permission_denied",
+        ),
+    ] {
+        let directory = Directory::new();
+        let id = profile(&directory.0.join("auth"), "a", "secret-bearer");
+        let server = Server::with_content_type(payload.into(), status, false, content_type);
+        let mut provider = async_adapter(&directory.0, id, &server.base).await;
+        let request = request(id);
+        let mut invalid = request.clone();
+        invalid.messages[2].content = vec![0xd800];
+        assert!(
+            provider
+                .validate_request(&invalid)
+                .await
+                .unwrap_err()
+                .0
+                .contains("UTF-16")
+        );
+        assert!(server.requests.lock().unwrap().is_empty());
+        let error = provider.submit(&request).await.unwrap_err().0;
+        assert!(error.contains(expected), "{error}");
+        assert!(!error.contains("secret-"));
+        assert!(provider.reconcile(&request).await.unwrap().is_none());
+        assert!(
+            provider
+                .submit(&request)
+                .await
+                .unwrap_err()
+                .0
+                .contains("already attempted")
+        );
+        assert_eq!(server.posts(), 1);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "launched only by the Responses crash-recovery test"]
+async fn responses_async_kill_probe() {
+    let directory = PathBuf::from(std::env::var("RENRAKU_RESPONSES_PROBE_DIR").unwrap());
+    let id = std::env::var("RENRAKU_RESPONSES_PROBE_PROFILE")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut provider = async_adapter(
+        &directory,
+        id,
+        &std::env::var("RENRAKU_RESPONSES_PROBE_URL").unwrap(),
+    )
+    .await;
+    let mut store = CheckpointStore::open(directory.join("vm.db")).unwrap();
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    vm.set_model_calls_enabled(true);
+    if std::env::var("RENRAKU_RESPONSES_PROBE_PHASE").unwrap() == "receipt" {
+        struct PauseAfterReceipt(AsyncOpenAIProvider, PathBuf);
+        impl AsyncModelProvider for PauseAfterReceipt {
+            fn capability(&self) -> &str {
+                self.0.capability()
+            }
+            fn supports_model(&self, model: &str) -> bool {
+                self.0.supports_model(model)
+            }
+            async fn validate_request(
+                &mut self,
+                r: &ModelRequest,
+            ) -> renraku_vm::error::Result<()> {
+                self.0.validate_request(r).await
+            }
+            async fn submit(&mut self, r: &ModelRequest) -> renraku_vm::error::Result<Vec<u16>> {
+                let response = self.0.submit(r).await?;
+                fs::write(self.1.join("receipt-committed"), b"ready").unwrap();
+                std::future::pending::<()>().await;
+                Ok(response)
+            }
+            async fn reconcile(
+                &mut self,
+                r: &ModelRequest,
+            ) -> renraku_vm::error::Result<Option<Vec<u16>>> {
+                self.0.reconcile(r).await
+            }
+        }
+        vm.drive_model_async(
+            &mut store,
+            &mut PauseAfterReceipt(provider, directory),
+            limits(),
+        )
+        .await
+        .unwrap();
+    } else {
+        vm.drive_model_async(&mut store, &mut provider, limits())
+            .await
+            .unwrap();
+    }
+}
+
 #[test]
 #[ignore = "launched only by the Responses crash-recovery test"]
 fn responses_kill_probe() {
@@ -626,7 +902,12 @@ fn responses_kill_probe() {
 #[test]
 fn sigkill_preserves_uncertain_streams_and_recovers_committed_receipts_into_cil() {
     use std::process::{Command, Stdio};
-    for phase in ["stream", "receipt"] {
+    for (asynchronous, phase) in [
+        (false, "stream"),
+        (false, "receipt"),
+        (true, "stream"),
+        (true, "receipt"),
+    ] {
         let directory = Directory::new();
         let id = profile(&directory.0.join("auth"), "a", "token-a");
         let server = Server::new(
@@ -646,12 +927,13 @@ fn sigkill_preserves_uncertain_streams_and_recovers_committed_receipts_into_cil(
             RunOutcome::Waiting(_)
         ));
         drop(store);
+        let probe = if asynchronous {
+            "inference::tests::responses_async_kill_probe"
+        } else {
+            "inference::tests::responses_kill_probe"
+        };
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "inference::tests::responses_kill_probe",
-                "--ignored",
-            ])
+            .args(["--exact", probe, "--ignored"])
             .env("RENRAKU_RESPONSES_PROBE_DIR", &directory.0)
             .env("RENRAKU_RESPONSES_PROBE_PROFILE", id.to_string())
             .env("RENRAKU_RESPONSES_PROBE_URL", &server.base)
@@ -696,8 +978,21 @@ fn sigkill_preserves_uncertain_streams_and_recovers_committed_receipts_into_cil(
             EffectState::OutcomeUnknown { .. }
         ));
         vm.set_model_calls_enabled(true);
-        let mut provider = adapter(&directory.0, id, "http://127.0.0.1:1"); // recovery must be offline
-        let report = vm.drive_model(&mut store, &mut provider, limits()).unwrap();
+        let report = if asynchronous {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let mut provider = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+                    vm.drive_model_async(&mut store, &mut provider, limits())
+                        .await
+                        .unwrap()
+                })
+        } else {
+            let mut provider = adapter(&directory.0, id, "http://127.0.0.1:1");
+            vm.drive_model(&mut store, &mut provider, limits()).unwrap()
+        };
         if phase == "receipt" {
             assert_result(&vm, report.stop);
         } else {

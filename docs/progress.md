@@ -78,8 +78,12 @@ and do not inherit persistence.
   Blocking and async paths share checkpoint transitions and driver accounting.
   Independent universes progress on one executor thread while delivery waits;
   async guest quanta yield after at most 1024 instructions. Dropped delivery
-  futures recover via receipts, without automatic resubmission. The native
-  OpenAI transport is still blocking pending the next integration step.
+  futures recover via receipts, without automatic resubmission.
+- AsyncOpenAIProvider uses asynchronous HTTP/SSE and offloads profile/refresh and
+  receipt I/O to the host blocking pool. OpenAI demo/drive now use it by default
+  on a current-thread executor with at most four blocking workers. Request,
+  catalog, transport-diagnostic, SSE, and receipt policies are shared with the
+  blocking compatibility adapter. Checkpoint format and ledger schema are unchanged.
 
 ## Validation
 
@@ -87,7 +91,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 125 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 129 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -106,14 +110,18 @@ request encoding preserves exact UTF-16. ChatHarnessScore returns 11 like CoreCL
 Sixteen auth tests cover protocol validation, invalid identities, scopes,
 registration reuse, profiles, redaction, storage, sign-out, and actual refresh
 SIGKILL recovery, and refreshing a profile independently of active selection.
-Ten inference tests cover SSE framing/fragmentation, terminal validation and
+Fourteen inference tests cover SSE framing/fragmentation, terminal validation and
 bounds, full wire requests, fixed profiles, offline and mismatched receipts,
 preflight rejections, uncertain errors, receipt commit failure, concurrent
 reservations, foreign ledgers, live CIL delivery, and actual SIGKILL before and
 after completion receipt commit, missing MIME headers, and non-SSE diagnostics.
 A CLI integration test verifies opt-in,
 durable preflight rejection, zero budgets, and credential absence from snapshots.
-Both ignored subprocess probes are launched by their parent crash tests.
+Three ignored subprocess probes are launched by their parent crash tests. The
+Responses parent runs both adapters at partial-stream and post-receipt/pre-VM
+commit SIGKILL boundaries. Async HTTP tests also prove independent guest progress
+on one executor, abandoned-future uncertainty, profile pinning, offline receipt
+interoperability, changed-request rejection, and shared preflight/error handling.
 Five compiler tests verify deterministic multi-file output and exact manifests,
 structured diagnostics, no implicit host framework references, preserved outputs,
 input limits, and explicit loader rejection of unsupported emitted CIL. A nested
@@ -173,12 +181,27 @@ and no-suspend is separate from transaction isolation. Cancellation never proves
 remote non-acceptance. This is design direction, not newly implemented scheduling,
 Task<T>, C# async/await, or cancellation support.
 
-Prioritize asynchronous host delivery as the next runtime milestone: the current
-provider trait and reqwest transport still block the caller despite guest-frame
-suspension. Demonstrate independent progress while a local provider waits,
-retain generation fencing and receipt/wakeup crash tests, and keep native futures
-outside snapshots. Multi-context scheduling requires atomically checkpointing
-every context, wait relationship, heap, and code together, plus old-format readers.
+Asynchronous host delivery is now implemented and is the OpenAI CLI default.
+Keep native futures out of snapshots and retain the blocking API for existing
+embedders. Auth/receipt operations use blocking workers; universe checkpoint I/O
+still blocks a bounded poll. Each VM still has only one context. Multi-context
+scheduling must atomically checkpoint all contexts, wait relationships, shared
+heap, and code together, with readers for old snapshots. Do not confuse progress
+of independent universes with concurrency inside one universe.
+
+The latest user clarification is runtime-generated metadata reference DLLs for
+Roslyn when live classes are not defined by conventional implementation DLLs.
+The [reference-assembly contract](compilation.md#reference-assemblies-for-live-runtime-types)
+is recorded. A local /refonly counter facade successfully compiled a caller
+using its field/method against only our core, but no live-registry exporter or
+ID-aware installer exists yet. Make the runtime schema authoritative; export
+deterministic per-logical-module views and pin their hashes plus symbol-to-ID
+bindings. Separate metadata/API revisions from heap generations and method-body
+versions. Facade tokens must never allocate replacement runtime type identities.
+Compiling a member body on an existing type needs explicit owning-type context
+and generated-definition-to-ID mappings; ordinary partial classes cannot extend
+a referenced compiled type. Current compiler inputs remain one core plus source
+files; additional reference inputs and durable schema authoring are next work.
 
 The next useful milestone is a persistent interactive conversation CLI: append
 ordinary linked guest messages, submit the complete captured history, and resume

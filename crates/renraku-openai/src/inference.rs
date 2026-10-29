@@ -1,20 +1,17 @@
 use crate::{
-    AuthClient, Identity, Result, fail, json, now,
+    AuthClient, Identity, Result, fail, now, protocol,
     receipts::Receipts,
     require,
     storage::{Profile, Store},
     stream,
 };
-use renraku_vm::{
-    effects::ModelProvider,
-    model::{MessageRole, ModelRequest},
-};
+use renraku_vm::{effects::ModelProvider, model::ModelRequest};
 use reqwest::{
     blocking::{Client, Response},
     redirect::Policy,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json as object};
+use serde_json::Value;
 use std::{
     io::Read,
     path::{Path, PathBuf},
@@ -28,7 +25,7 @@ pub struct AvailableModel {
     pub display_name: String,
 }
 #[derive(Clone, Serialize, Eq, PartialEq)]
-struct Binding {
+pub(crate) struct Binding {
     id: Uuid,
     issuer: String,
     subject: String,
@@ -52,7 +49,7 @@ impl Binding {
                 .ok_or_else(|| fail("profile has no client registration"))?,
         })
     }
-    fn load(directory: &Path, id: Uuid) -> Result<Self> {
+    pub(crate) fn load(directory: &Path, id: Uuid) -> Result<Self> {
         let store = Store::open(directory)?;
         let guard = store.lock()?;
         Self::from_profile(
@@ -64,10 +61,10 @@ impl Binding {
                 .ok_or_else(|| fail("authentication profile does not exist"))?,
         )
     }
-    fn bytes(&self) -> Result<Vec<u8>> {
+    pub(crate) fn bytes(&self) -> Result<Vec<u8>> {
         serde_json::to_vec(self).map_err(|_| fail("could not encode profile binding"))
     }
-    fn bearer(&self, directory: &Path) -> Result<String> {
+    pub(crate) fn bearer(&self, directory: &Path) -> Result<String> {
         let store = Store::open(directory)?;
         for refresh in [false, true] {
             let guard = store.lock()?;
@@ -133,84 +130,31 @@ impl Transport {
         })
     }
     fn models(&self, bearer: &str) -> Result<Vec<AvailableModel>> {
-        #[derive(Deserialize)]
-        struct Entry {
-            slug: Option<String>,
-            display_name: Option<String>,
-            visibility: Option<String>,
-        }
-        #[derive(Deserialize)]
-        struct Catalog {
-            models: Vec<Entry>,
-        }
         let response = self
             .http
             .get(&self.models)
             .bearer_auth(bearer)
             .send()
             .map_err(|_| fail("OpenAI model discovery failed"))?;
-        let catalog: Catalog = json(checked(response)?)?;
-        require(
-            catalog.models.len() <= 4096,
-            "OpenAI model catalog exceeds its count limit",
-        )?;
-        let mut slugs = std::collections::BTreeSet::new();
-        catalog
-            .models
-            .into_iter()
-            .filter(|m| m.visibility.as_deref() == Some("list"))
-            .map(|model| {
-                let slug = model
-                    .slug
-                    .ok_or_else(|| fail("visible model has no slug"))?;
-                let display_name = model
-                    .display_name
-                    .ok_or_else(|| fail("visible model has no display name"))?;
-                require(
-                    valid_model(&slug)
-                        && slugs.insert(slug.clone())
-                        && !display_name.is_empty()
-                        && display_name.len() <= 512
-                        && !display_name.chars().any(char::is_control),
-                    "invalid or duplicate OpenAI model entry",
-                )?;
-                Ok(AvailableModel { slug, display_name })
-            })
-            .collect()
+        protocol::parse_models(&read_body(checked(response)?)?)
     }
 }
-fn valid_model(model: &str) -> bool {
-    !model.is_empty()
-        && model.len() <= 128
-        && model
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-/:".contains(&b))
+fn read_body(response: Response) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    response
+        .take(crate::MAX_BODY + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| fail("could not read OpenAI response"))?;
+    Ok(bytes)
 }
 fn checked(response: Response) -> Result<Response> {
     if response.status().is_success() {
         return Ok(response);
     }
-    let request_id = response
-        .headers()
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .map(stream::diagnostic)
-        .unwrap_or_else(|| "unavailable".into());
     let status = response.status().as_u16();
-    let mut bytes = Vec::new();
-    let read = response.take(crate::MAX_BODY + 1).read_to_end(&mut bytes);
-    // Preserve a bounded machine code, never arbitrary messages or detail text.
-    let code = if read.is_ok() && bytes.len() as u64 <= crate::MAX_BODY {
-        serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .and_then(|body| body["error"]["code"].as_str().map(stream::diagnostic))
-    } else {
-        None
-    }
-    .unwrap_or_else(|| "unavailable".into());
-    Err(fail(&format!(
-        "OpenAI HTTP {status}; code {code}; request ID {request_id}"
-    )))
+    let headers = response.headers().clone();
+    let body = read_body(response);
+    Err(protocol::http_error(status, &headers, body.as_deref().ok()))
 }
 /// Discover the explicitly selected account's displayable models, in server order.
 pub fn models(directory: impl AsRef<Path>, profile: Uuid) -> Result<Vec<AvailableModel>> {
@@ -239,7 +183,7 @@ impl OpenAIProvider {
         profile: Uuid,
         model: &str,
     ) -> Result<Self> {
-        require(valid_model(model), "invalid OpenAI model slug")?;
+        require(protocol::valid_model(model), "invalid OpenAI model slug")?;
         Ok(Self {
             auth_directory: auth_directory.as_ref().to_path_buf(),
             binding: Binding::load(auth_directory.as_ref(), profile)?,
@@ -251,30 +195,7 @@ impl OpenAIProvider {
         })
     }
     fn request(&self, request: &ModelRequest) -> Result<(Vec<u8>, Value)> {
-        require(
-            request.capability == self.capability && request.model == self.model,
-            "request does not match the bound profile and model",
-        )?;
-        let bytes = request.encode().map_err(|e| fail(&e.to_string()))?;
-        let input: Result<Vec<_>> = request
-            .messages
-            .iter()
-            .map(|message| {
-                let role = match message.role {
-                    MessageRole::System => "developer",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                };
-                let content = String::from_utf16(&message.content).map_err(|_| {
-                    fail("OpenAI text transport cannot represent unpaired UTF-16 surrogates")
-                })?;
-                Ok(object!({"role":role,"content":content}))
-            })
-            .collect();
-        Ok((
-            bytes,
-            object!({"model":self.model,"input":input?,"store":false,"stream":true}),
-        ))
+        protocol::request_body(&self.capability, &self.model, request)
     }
     fn validate(&mut self, request: &ModelRequest) -> Result<()> {
         let (bytes, _) = self.request(request)?;
@@ -314,19 +235,15 @@ impl OpenAIProvider {
             .send()
             .map_err(|_| fail("Responses request failed; outcome is unknown"))?;
         let response = checked(response)?;
-        // Some live responses omit Content-Type. Framing and the terminal
-        // event, rather than the presence of a MIME header, prove completion.
-        // An explicitly different declared transport remains unsupported.
-        let is_sse = response.headers().get("content-type").is_none_or(|header| {
-            header.to_str().is_ok_and(|value| {
-                value
-                    .split(';')
-                    .next()
-                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
-            })
-        });
-        if !is_sse {
-            return Err(unexpected_transport(response));
+        if !protocol::accepts_sse(response.headers()) {
+            let status = response.status().as_u16();
+            let headers = response.headers().clone();
+            let body = read_body(response);
+            return Err(protocol::unexpected_transport(
+                status,
+                &headers,
+                body.as_deref().ok(),
+            ));
         }
         let completion = stream::completed(response)?;
         self.receipts
@@ -334,50 +251,7 @@ impl OpenAIProvider {
         Ok(completion.text)
     }
 }
-fn unexpected_transport(response: Response) -> crate::Error {
-    let status = response.status().as_u16();
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(';').next())
-        .map(str::trim)
-        .filter(|v| {
-            v.len() <= 100
-                && v.contains('/')
-                && v.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"/+.-".contains(&b))
-        })
-        .unwrap_or("unavailable")
-        .to_owned();
-    let mut bytes = Vec::new();
-    let read = response.take(crate::MAX_BODY + 1).read_to_end(&mut bytes);
-    let shape = if read.is_err() {
-        "unreadable body"
-    } else if bytes.len() as u64 > crate::MAX_BODY {
-        "oversized body"
-    } else if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
-        if value["object"] == "response" && value["status"] == "completed" {
-            "completed response JSON"
-        } else if value["type"] == "response.completed" {
-            "completion event JSON"
-        } else if value.get("error").is_some() || value.get("detail").is_some() {
-            "error JSON"
-        } else {
-            "other JSON"
-        }
-    } else if bytes.starts_with(b"data:") || bytes.starts_with(b"event:") || bytes.starts_with(b":")
-    {
-        "SSE with an unexpected content type"
-    } else {
-        "unrecognized body"
-    };
-    // Report only fixed shape labels, never arbitrary response text or credentials.
-    fail(&format!(
-        "Responses expected SSE; HTTP {status}; content type {content_type}; {shape}; outcome is unknown"
-    ))
-}
-fn vm_error(error: crate::Error) -> renraku_vm::error::Error {
+pub(crate) fn vm_error(error: crate::Error) -> renraku_vm::error::Error {
     renraku_vm::error::Error(error.to_string())
 }
 impl ModelProvider for OpenAIProvider {

@@ -1,5 +1,6 @@
 use renraku_openai::{
-    AuthClient, OpenAIProvider, ProfileSummary, logout, models, profiles, select_profile,
+    AsyncOpenAIProvider, AuthClient, OpenAIProvider, ProfileSummary, logout, models, profiles,
+    select_profile,
 };
 use renraku_vm::{
     checkpoint::CheckpointStore,
@@ -100,8 +101,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 arguments,
             )?;
             store.save(&vm)?;
-            let mut provider = OpenAIProvider::open(&directory, receipts, profile, model)?;
-            drive(&mut vm, &mut store, &mut provider, 10_000, 1)?;
+            runtime()?.block_on(async {
+                let mut provider =
+                    AsyncOpenAIProvider::open(&directory, receipts, profile, model).await?;
+                drive(&mut vm, &mut store, &mut provider, 10_000, 1).await
+            })?;
         }
         [
             command,
@@ -120,8 +124,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut store = CheckpointStore::open(universe)?;
             let saved = store.load()?;
             let mut vm = saved.snapshot.restore()?;
-            let mut provider = OpenAIProvider::open(&directory, receipts, profile.parse()?, model)?;
-            drive(&mut vm, &mut store, &mut provider, instructions, operations)?;
+            runtime()?.block_on(async {
+                let mut provider =
+                    AsyncOpenAIProvider::open(&directory, receipts, profile.parse()?, model)
+                        .await?;
+                drive(&mut vm, &mut store, &mut provider, instructions, operations).await
+            })?;
         }
         [command] if command == "status" => {
             let saved = profiles(directory)?;
@@ -171,23 +179,31 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn drive(
+fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(4)
+        .build()
+}
+async fn drive(
     vm: &mut Vm<'_>,
     store: &mut CheckpointStore,
-    provider: &mut OpenAIProvider,
+    provider: &mut AsyncOpenAIProvider,
     instructions: u64,
     operations: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     vm.set_model_calls_enabled(true);
-    let report = vm.drive_model(
-        store,
-        provider,
-        DriverLimits {
-            instructions,
-            provider_operations: operations,
-            checkpoint_interval: 100,
-        },
-    )?;
+    let report = vm
+        .drive_model_async(
+            store,
+            provider,
+            DriverLimits {
+                instructions,
+                provider_operations: operations,
+                checkpoint_interval: 100,
+            },
+        )
+        .await?;
     println!(
         "checkpoint: {}\ninstructions this run: {}\nprovider operations: {}",
         store.generation(),

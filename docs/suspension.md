@@ -90,13 +90,16 @@ CancellationToken or timeout support.
 
 ## Implementation sequence and acceptance
 
-The current VM has one active context. Model calls already park portable guest
-frames, but ModelProvider and the reqwest adapter still block the calling host
-while performing delivery. This is the first host limitation to remove.
+The current VM has one active context. Model calls park portable guest frames,
+and asynchronous host delivery is now implemented. The OpenAI CLI's network and
+stream waits yield to other work, while auth/receipt I/O uses a bounded blocking
+pool. Independent universes can progress on one executor. Universe checkpoint
+I/O remains synchronous, and scheduling multiple contexts in a universe remains
+future work. See [asynchronous host delivery](async-delivery.md).
 
-1. Introduce asynchronous host delivery while retaining the existing durable
+1. Implemented: asynchronous host delivery retains the existing durable
    intent, one-attempt receipt, generation-fence, and response/wakeup protocol.
-   Keep native futures outside snapshots and retain a bounded CLI driver.
+   Native futures stay outside snapshots and the CLI driver remains bounded.
 2. Add logical context scheduling and checkpoint all contexts, shared heap, code,
    and wait relationships together, with backward readers for existing snapshots.
 3. Add managed futures, structured scopes, cancellation/deadline state, and

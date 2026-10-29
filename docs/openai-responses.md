@@ -6,6 +6,11 @@ OAuth, networking, and completion receipts. The guest owns its linked messages,
 model binding, waiting frame, and returned managed string. Checkpoint format 5
 is unchanged.
 
+The CLI's `demo` and `drive` commands use AsyncOpenAIProvider and the asynchronous
+VM driver. Network/stream waits yield; profile/refresh and receipt I/O use a
+bounded blocking pool. The existing blocking host adapter remains compatible
+with the same receipts. See [async delivery and cancellation boundaries](async-delivery.md).
+
 ## Try it
 
 From the repository root, compile the sample guest and sign in:

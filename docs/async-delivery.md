@@ -29,8 +29,22 @@ This is not a multi-context scheduler inside a universe. Each VM still has one
 active context, and a driving future holds exclusive mutable access to its VM
 and store. Pure interpreter work and universe checkpoint I/O remain synchronous
 within each bounded poll. Native futures, executor state, and network handles
-are not written to checkpoints. The existing OpenAI provider is still blocking;
-an asynchronous HTTP adapter is the next host integration step.
+are not written to checkpoints.
+
+`AsyncOpenAIProvider` uses asynchronous reqwest HTTP and streaming reads on a
+Tokio runtime. Protected profile access/refresh and receipt transactions run in
+the runtime's blocking pool. Both OpenAI adapters use one request/catalog and
+diagnostic policy, one incremental SSE decoder, and the same schema 1 ledger.
+The original OpenAIProvider remains a blocking compatibility API.
+
+The `renraku-openai demo` and `drive` commands now use the async path on a
+current-thread runtime with at most four blocking workers. Their arguments and
+budgets are unchanged. Auth commands and standalone model discovery remain
+blocking command-line operations. Async hosts should use AsyncOpenAIProvider;
+the blocking compatibility adapter is unsuitable inside an executor worker.
+Universe checkpoint I/O and bounded native parsing still run synchronously.
+This milestone frees model network waits; it does not claim all host I/O is
+nonblocking or add several guest contexts to one universe.
 
 ## Dropped futures and recovery
 
@@ -56,3 +70,10 @@ recovery into the same frames, abandoned/rejected preflight, per-instruction
 checkpoint recovery and budgets, and stale-writer fencing. Existing blocking
 driver, outbox, checkpoint, and process-kill tests remain in force. Local receipts
 are shared across the blocking and asynchronous host entry points.
+
+Four async HTTP tests cover a paused real local stream while another universe
+finishes on the same executor, active-account changes, abandoned HTTP futures,
+offline cross-adapter receipt reuse, changed-request rejection, invalid UTF-16,
+bounded diagnostics, and failed streams without retry. The Responses SIGKILL
+parent now runs both adapters at partial-stream and post-receipt/pre-VM-commit
+boundaries. The original continuation resumes from a receipt without another POST.

@@ -260,8 +260,9 @@ on the architecture roadmap.
 
 The replacement BCL's direction is [suspension by default](docs/suspension.md):
 waiting operations park portable guest contexts, with explicit concurrency and
-durable operation ownership. The current single-context VM and blocking host
-adapter remain explicit implementation limits.
+durable operation ownership. [Asynchronous host delivery](docs/async-delivery.md)
+is implemented and used by the OpenAI demo/driver. Each universe still has one
+guest context, and universe checkpoint I/O remains synchronous.
 
 [Progress and handoff](docs/progress.md) records the current state and the next
 implementation targets for recurring development.

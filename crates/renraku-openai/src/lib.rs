@@ -2,10 +2,13 @@
 //! No tokens or native network state enter the guest universe.
 mod callback;
 mod inference;
+mod inference_async;
+mod protocol;
 mod receipts;
 mod storage;
 mod stream;
 pub use inference::{AvailableModel, OpenAIProvider, models};
+pub use inference_async::AsyncOpenAIProvider;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};

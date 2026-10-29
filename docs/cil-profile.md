@@ -101,9 +101,9 @@ frame operands and continuation.
 ## Execution and validation
 
 One VM represents one universe with one active execution context.
-The [suspension-first BCL direction](suspension.md) describes future asynchronous
-host delivery and multi-context scheduling. Those features and C# async/await
-remain unsupported in this execution profile.
+The [asynchronous host driver](async-delivery.md) can drive independent universes
+on one executor. Multi-context scheduling inside a universe and C# async/await
+remain unsupported; see the [suspension-first BCL direction](suspension.md).
 Completed or faulted contexts can be replaced by starting another execution
 while retaining the heap and static storage. The default managed frame limit
 is 1024 and is adjustable.

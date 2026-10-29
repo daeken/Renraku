@@ -110,6 +110,74 @@ code for active frames. Type-shape changes and active-frame migration need their
 own policy; a new DLL must not silently reinterpret existing objects or stacks.
 The loader is not a full CIL verifier or a hostile-code isolation boundary.
 
+## Reference assemblies for live runtime types
+
+The user identified the next compiler bridge: runtime-defined classes need not
+have conventional implementation DLLs, while Roslyn still needs metadata for
+their shapes. Export frozen reference-assembly images from the runtime's type
+and member registry. They describe the compilation contract; they do not become
+the authority for live types or supply their runtime implementations.
+
+The target flow is:
+
+```text
+frozen runtime schema -> reference images + binding manifest
+source + those images -> external Roslyn -> compiled CIL artifact
+artifact + pinned bindings -> validated runtime installation
+```
+
+Preserve logical module/assembly scope so identically named types from different
+modules remain distinct. Each exported symbol must map back to its existing
+TypeId, FieldId, or MethodId. Emitted metadata tokens are image-local locators,
+not logical identities. The installer resolves a compiled TypeRef/MemberRef
+through the exact reference image and symbol signature to those IDs. It must
+not import the facade's TypeDefs as newly allocated runtime classes.
+
+The durable schema must retain compiler-facing metadata as well as execution
+tables: accessibility, properties/indexers and their accessors, constants,
+attributes, and other supported signature relationships. A list of executable
+fields and methods alone cannot reconstruct that contract. Export the transitive
+signature/base-type closure and reject unsupported shapes explicitly.
+
+Capture deterministic reference bytes, content hashes, schema/API revision,
+and the symbol-to-logical-ID manifest with each compilation request/artifact.
+Installation must check compatibility with that pinned contract before changing
+code or bindings. Cache views by metadata content, independently of ordinary
+heap checkpoint generations and implementation-body versions. Heap writes and
+body-only edits should not invalidate unchanged reference metadata. Visibility
+and logical assembly boundaries must remain deliberate compiler policy.
+
+Reference images can be supplied in memory with MetadataReference.CreateFromImage;
+disk DLLs are a transport/artifact choice. Roslyn's reference emission uses
+EmitMetadataOnly=true and IncludePrivateMembers=false. Bootstrap generation may
+use valid C# declaration scaffolding, with direct metadata emission available
+for shapes that C# source cannot represent. Treat the resulting artifacts as
+compile-only and reject them as executable implementation inputs.
+
+Compiling callers of existing types is distinct from compiling a new body *on*
+an existing type. A reference does not let a normal C# partial declaration extend
+an already compiled class. Member-body compilation needs an explicit owning-type
+context (including needed nonpublic members), visibility policy, and installation manifest that maps generated
+definitions back to the intended existing IDs. Shadow declarations must never
+silently create duplicate types or replace unrelated members.
+
+Today the registry is reconstructed from saved implementation images/bindings.
+Live type authoring will also require durable schema definitions independent of
+those original images. The exporter, additional compiler reference inputs, and
+ID-aware installation are not implemented by the current host compiler tool.
+
+A local SDK experiment emitted a /refonly Live.Counter contract and compiled a
+consumer that accesses its field and method, referencing only that facade and
+Renraku.CoreLib. This proves the compiler boundary, not live-registry export or
+installation. The tested SDK required well-formed C# stub declarations; a bare
+non-abstract method declaration produced CS0501, so an exporter should not rely
+on bodyless C# declarations being accepted.
+
+See Microsoft's [reference assembly contract](https://learn.microsoft.com/en-us/dotnet/standard/assembly/reference-assemblies)
+and Roslyn's [reference output design](https://github.com/dotnet/roslyn/blob/main/docs/features/refout.md).
+The [partial-type rules](https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/partial-classes-and-methods)
+describe the compilation boundary for ordinary C# partial declarations.
+
 ## Website workload
 
 A small website is a useful next integration workload after asynchronous host
