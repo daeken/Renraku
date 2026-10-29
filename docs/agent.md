@@ -471,6 +471,14 @@ Its methods require a non-null receiver; missing/null stored values are distinct
 Map mutators have intermediate instruction safe points, so resume their original
 invocation rather than starting a new call after a lost result.
 
+The separately installed [ObjectMap module](object-map.md) exposes the same
+bounded key operations with nullable object references. Search/describe
+`Renraku.Collections.ObjectMap` and select its own frozen root. Value no-ops use
+reference identity, including strings with equal text; casts recover supported
+installed classes. There is no implicit boxing. Readonly results retain mutable
+targets rather than snapshots of their fields. Use the same recovery rules and
+existing lifetime barriers.
+
 ## Validation
 
 ```sh

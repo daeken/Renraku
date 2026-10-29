@@ -57,6 +57,13 @@ try
     byte[] collectionTests = Compile("Renraku.CollectionTests", File.ReadAllText(Path.Combine(root, "guest/StringMapHarness.cs")),
         new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(collectionLibrary) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.CollectionTests.dll"), collectionTests);
+    string objectCollections = File.ReadAllText(Path.Combine(root, "guest/ObjectMap.cs"));
+    string objectHarness = File.ReadAllText(Path.Combine(root, "guest/ObjectMapHarness.cs"));
+    byte[] objectLibrary = Compile("Renraku.ObjectCollections", objectCollections, new[] { MetadataReference.CreateFromImage(core) });
+    File.WriteAllBytes(Path.Combine(output, "Renraku.ObjectCollections.dll"), objectLibrary);
+    File.WriteAllBytes(Path.Combine(output, "Renraku.ObjectCollectionTests.dll"), Compile("Renraku.ObjectCollectionTests", objectHarness,
+        new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(objectLibrary) }));
+
     // Real metadata dependency/collision fixtures, never executed by the host.
     var coreReference = MetadataReference.CreateFromImage(core);
     byte[] cycleStub = Compile("Cycle.Left", "namespace Cycle.Left { public class Node { } }", new[] { coreReference });
@@ -124,7 +131,7 @@ try
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", referenceCasts + Environment.NewLine + smallCheckedConversions + Environment.NewLine + checkedConversions + Environment.NewLine + checkedArithmetic + Environment.NewLine + switches + Environment.NewLine + ordinalText + Environment.NewLine + smallConversions + Environment.NewLine + negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
+    byte[] reference = Compile("Renraku.Reference", objectCollections + Environment.NewLine + objectHarness + Environment.NewLine + referenceCasts + Environment.NewLine + smallCheckedConversions + Environment.NewLine + checkedConversions + Environment.NewLine + checkedArithmetic + Environment.NewLine + switches + Environment.NewLine + ordinalText + Environment.NewLine + smallConversions + Environment.NewLine + negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
@@ -193,6 +200,7 @@ try
     SmallCheckedConversionReference.Write(assembly, output);
     ReferenceCastReference.Write(assembly, output);
     StringMapReference.Write(assembly, output);
+    ObjectMapReference.Write(assembly, output);
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))
         File.WriteAllBytes(Path.Combine(output, Path.GetFileNameWithoutExtension(path) + ".dll"),
             Compile(Path.GetFileNameWithoutExtension(path), File.ReadAllText(path),

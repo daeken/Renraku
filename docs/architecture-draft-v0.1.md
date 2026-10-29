@@ -3,7 +3,7 @@
 
 *Working title: TBD — spiritual successor to RenrakuOS*
 
-**Status:** Initial design  
+**Status:** Original design; see [current rollout and network priority](distributed-objects.md) for implemented status and the October 29 direction.
 **Primary implementation:** Rust  
 **Initial guest language:** C# compiled to CIL  
 **Frontend:** Web  

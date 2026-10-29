@@ -432,6 +432,9 @@ it adds no InternalCall or instruction. Existing core images remain unchanged.
 The separate [managed string map](string-map.md) likewise uses ordinary classes,
 calls, and fields. Its bounded mutators can pause with partial updates; method
 boundaries, one-context exclusion, and durable receipts retain their distinct roles.
+The separate [object map](object-map.md) uses nullable reference values and
+identity-based updates, with ordinary reference casts and existing lifetime
+barriers; no boxing or new heap kind is involved.
 The separate [unsigned decimal module](unsigned-text.md) builds UInt32/UInt64
 text from fixed-width conversion and unsigned division/remainder, with explicit
 overflow results and no native formatter.

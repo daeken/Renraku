@@ -76,6 +76,396 @@ fn web_cli(args: &[&str]) -> serde_json::Value {
 }
 
 #[test]
+fn object_map_page_and_frozen_caller_keep_the_original_counter_across_sdk_free_recovery() {
+    use renraku_vm::{cil::Op, execution::Continuation, identity::ObjectId, program::Program};
+    fn field(vm: &Vm<'_>, p: &Program, id: ObjectId, name: &str) -> Value {
+        let object = vm.heap().object(id).unwrap();
+        object.fields()[&p
+            .fields()
+            .find(|f| f.owner == object.type_id() && f.name == name)
+            .unwrap()
+            .id]
+    }
+    let test = Test::new();
+    let mut store = CheckpointStore::open(&test.database).unwrap();
+    let original = store.load().unwrap();
+    let p = &original.snapshot.program;
+    let counter_type = p.find_type("Renraku.Guest.Counter").unwrap();
+    let root = p
+        .fields()
+        .find(|f| f.owner == p.find_type("Renraku.Guest.Simulation").unwrap() && f.name == "Saved")
+        .unwrap()
+        .id;
+    let mut vm = original.snapshot.restore().unwrap();
+    vm.start(common::entry(p, "SaveObject"), vec![]).unwrap();
+    assert_eq!(
+        vm.run(1000).unwrap(),
+        RunOutcome::Completed(Some(Value::I32(19)))
+    );
+    let counter = vm.static_fields()[&root].referenced_object().unwrap();
+    store.save(&vm).unwrap();
+    let baseline = test
+        .host()
+        .process(&request("before-objects"), 10000)
+        .unwrap();
+    let compiler_path = test.directory.join("objects-compiler.db");
+    let mut compiler = CompilationStore::open(&compiler_path).unwrap();
+    let universe = test.host().universe();
+    let mut installations = Vec::new();
+    for (id, name, file, source) in [
+        (
+            "text",
+            "Renraku.Library",
+            "IntegerText.cs",
+            include_bytes!("../../../guest/IntegerText.cs").as_slice(),
+        ),
+        (
+            "objects",
+            "Renraku.ObjectCollections",
+            "ObjectMap.cs",
+            include_bytes!("../../../guest/ObjectMap.cs").as_slice(),
+        ),
+    ] {
+        let saved = store.load().unwrap();
+        let input = CompilationRequest::capture(
+            &saved.snapshot.program,
+            universe,
+            toolchain(),
+            name.into(),
+            vec![(file.into(), source.to_vec())],
+            vec![],
+        )
+        .unwrap();
+        compiler.prepare(id, &input).unwrap();
+        let built = compiler.drive(universe, id, toolchain()).unwrap();
+        assert!(built.artifact.is_some(), "{:?}", built.report);
+        let artifact = built.artifact.unwrap();
+        let receipt = install_once(&mut store, id, &artifact).unwrap();
+        installations.push((id, artifact, receipt));
+    }
+    let saved = store.load().unwrap();
+    let p = &saved.snapshot.program;
+    let selected = [
+        "Renraku.Guest.Counter",
+        "Renraku.Guest.Website",
+        "Renraku.Collections.ObjectMap",
+        "Renraku.Text.IntegerText",
+    ]
+    .map(|name| p.find_type(name).unwrap());
+    let views = p.reference_set(&selected).unwrap();
+    assert_eq!(views.views.len(), 3);
+    let input = CompilationRequest::capture(
+        p,
+        universe,
+        toolchain(),
+        "Generated.ObjectWebsite".into(),
+        vec![(
+            "ObjectWebsite.cs".into(),
+            include_bytes!("../../../guest/examples/ObjectWebsite.cs").to_vec(),
+        )],
+        views.views,
+    )
+    .unwrap();
+    compiler.prepare("page", &input).unwrap();
+    let built = compiler.drive(universe, "page", toolchain()).unwrap();
+    assert!(built.artifact.is_some(), "{:?}", built.report);
+    let page = built.artifact.unwrap();
+    let page_receipt = install_once(&mut store, "page", &page).unwrap();
+    let saved = store.load().unwrap();
+    let p = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    vm.invoke_once(
+        &mut store,
+        "page-init",
+        p.entry("ObjectWebsite::Initialize").unwrap(),
+        vec![Value::Reference(counter)],
+        10000,
+        100,
+    )
+    .unwrap();
+    let owner = p.find_type("ObjectWebsite").unwrap();
+    let state_field = p
+        .fields()
+        .find(|f| f.owner == owner && f.name == "State")
+        .unwrap()
+        .id;
+    let map = vm.static_fields()[&state_field]
+        .referenced_object()
+        .unwrap();
+    let map_type = vm.heap().object(map).unwrap().type_id();
+    let counter_node = field(&vm, p, map, "head").referenced_object().unwrap();
+    let counter_key = field(&vm, p, counter_node, "Key");
+    assert_eq!(
+        field(&vm, p, counter_node, "Value"),
+        Value::Reference(counter)
+    );
+    publish_handler(&mut store, "object-page", "ObjectWebsite::Handle").unwrap();
+    let host = WebHost::open_published(&test.database).unwrap();
+    let mut first_request = request("object-one");
+    first_request.body = "7".into();
+    let intent = host.process(&first_request, 0).unwrap();
+    assert_eq!(intent.status, 202);
+    let mut cut = false;
+    for _ in 0..2000 {
+        collect(&test.database);
+        let saved = store.load().unwrap();
+        let p = &saved.snapshot.program;
+        let vm = saved.snapshot.restore().unwrap();
+        let head = field(&vm, p, map, "head").referenced_object().unwrap();
+        if head != counter_node {
+            assert_eq!(field(&vm, p, map, "count"), Value::I32(1));
+            assert_eq!(field(&vm, p, head, "Next"), Value::Reference(counter_node));
+            assert_eq!(field(&vm, p, counter, "Value"), Value::I32(19));
+            cut = true;
+            break;
+        }
+        let partial = host.process(&first_request, 1).unwrap();
+        assert_eq!(partial.status, 202);
+        assert_eq!(partial.execution, intent.execution);
+    }
+    assert!(
+        cut,
+        "pause after linking last-body, before Count/counter/visit changes"
+    );
+    assert_eq!(state(&test.database).0, 1);
+    assert_eq!(
+        host.process(&request("excluded-object-request"), 10000)
+            .unwrap_err()
+            .status,
+        503
+    );
+    // Freeze the complete page dependency set and compile a separate caller.
+    // Installation runs no guest instructions and retains the HTTP continuation.
+    let saved = store.load().unwrap();
+    let p = &saved.snapshot.program;
+    let set = p.reference_set(&[owner]).unwrap();
+    assert_eq!(set.views.len(), 3);
+    let set_json = set.to_json().unwrap();
+    let source = "public static class ObjectCaller { public static int Calls; public static Renraku.Guest.Counter Last; public static int Run(int delta) { object value=ObjectWebsite.State.Get(\"counter\").Value; Renraku.Guest.Counter same=value as Renraku.Guest.Counter; if(same==null)return -1; Last=(Renraku.Guest.Counter)value; Calls=Calls+1; return same.Add(delta); } }";
+    let input = CompilationRequest::capture(
+        p,
+        universe,
+        toolchain(),
+        "Generated.ObjectCaller".into(),
+        vec![("Caller.cs".into(), source.as_bytes().to_vec())],
+        set.views,
+    )
+    .unwrap();
+    compiler.prepare("caller", &input).unwrap();
+    let built = compiler.drive(universe, "caller", toolchain()).unwrap();
+    assert!(built.artifact.is_some(), "{:?}", built.report);
+    let caller = built.artifact.unwrap();
+    let caller_receipt = install_once(&mut store, "caller", &caller).unwrap();
+    drop(compiler);
+    let published = web_cli(&[
+        "compile-resume",
+        test.database.to_str().unwrap(),
+        compiler_path.to_str().unwrap(),
+        "caller",
+        "/missing/compiler.dll",
+    ]);
+    assert_eq!(published["state"], "compiled");
+    fs::remove_file(compiler_path).unwrap();
+    // A fresh SDK-free TCP edge resumes the partial linked update and replays
+    // its immutable response after a later mutation of the exact same Counter.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+        .args([
+            "web-serve",
+            test.database.to_str().unwrap(),
+            "@published",
+            "127.0.0.1:0",
+            "20000",
+            "3",
+        ])
+        .env("PATH", "/no-object-page-tools")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::BufRead;
+    let mut ready = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    ready.read_line(&mut line).unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let address = metadata["listening"].as_str().unwrap().parse().unwrap();
+    let first = exchange_at(address, &wire("POST", "/visit", Some("object-one"), b"7"));
+    assert!(
+        body(std::str::from_utf8(&first).unwrap()).contains("Counter: 26; visits: 2; entries: 2")
+    );
+    let second = exchange_at(address, &wire("POST", "/visit", Some("object-two"), b"-3"));
+    assert!(
+        body(std::str::from_utf8(&second).unwrap()).contains("Counter: 23; visits: 3; entries: 2")
+    );
+    assert_eq!(
+        exchange_at(address, &wire("POST", "/visit", Some("object-one"), b"7")),
+        first
+    );
+    assert!(child.wait().unwrap().success());
+    let mut invalid = request("object-invalid");
+    invalid.body = "11".into();
+    assert!(
+        host.process(&invalid, 20000)
+            .unwrap()
+            .body
+            .contains("Delta must be")
+    );
+    assert_eq!(state(&test.database).0, 3);
+    let mut conflict = first_request.clone();
+    conflict.body = "6".into();
+    assert_eq!(host.process(&conflict, 10000).unwrap_err().status, 409);
+    assert_eq!(
+        host.process(&request("before-objects"), 10000)
+            .unwrap()
+            .body,
+        baseline.body
+    );
+    let saved = store.load().unwrap();
+    let p = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    let method = p.entry("ObjectCaller::Run").unwrap();
+    let binding = p.method(method).unwrap().binding;
+    let invoke = vm
+        .invoke_once(
+            &mut store,
+            "object-caller",
+            method,
+            vec![Value::I32(1)],
+            0,
+            1,
+        )
+        .unwrap();
+    let mut cast_cut = false;
+    for _ in 0..2000 {
+        let frame = vm.context().frames.last().unwrap();
+        if frame.method.method == method
+            && let Continuation::Execute { next } = frame.continuation
+            && matches!(
+                p.method(method).unwrap().instructions[&next].op,
+                Op::ReferenceCast { test: true, .. }
+            )
+        {
+            assert_eq!(frame.evaluation_stack, vec![Value::Reference(counter)]);
+            cast_cut = true;
+            break;
+        }
+        vm.invoke_once(
+            &mut store,
+            "object-caller",
+            method,
+            vec![Value::I32(1)],
+            1,
+            1,
+        )
+        .unwrap();
+    }
+    assert!(cast_cut);
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    let run = || {
+        web_cli(&[
+            "invoke-once",
+            test.database.to_str().unwrap(),
+            "object-caller",
+            "ObjectCaller::Run",
+            "20000",
+            "i32:1",
+        ])
+    };
+    let completed = run();
+    assert_eq!(completed["execution"], invoke.execution.to_string());
+    assert_eq!(completed["state"], "completed");
+    let mut later = request("object-later");
+    later.body = "".into();
+    assert!(
+        host.process(&later, 20000)
+            .unwrap()
+            .body
+            .contains("Counter: 25; visits: 4; entries: 2")
+    );
+    collect(&test.database);
+    let replay = run();
+    assert_eq!(completed["execution"], replay["execution"]);
+    assert_eq!(completed["result"], replay["result"]);
+    let saved = store.load().unwrap();
+    let p = &saved.snapshot.program;
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(
+        vm.invocation("object-caller").unwrap().state,
+        InvocationState::Completed {
+            result: Some(Value::I32(24))
+        }
+    );
+    assert_eq!(p.method(method).unwrap().binding, binding);
+    assert_eq!(
+        p.reference_set(&[owner]).unwrap().to_json().unwrap(),
+        set_json
+    );
+    assert_eq!(p.find_type("Renraku.Guest.Counter").unwrap(), counter_type);
+    assert_eq!(vm.static_fields()[&root], Value::Reference(counter));
+    assert_eq!(vm.static_fields()[&state_field], Value::Reference(map));
+    assert_eq!(field(&vm, p, counter_node, "Key"), counter_key);
+    assert_eq!(
+        field(&vm, p, counter_node, "Value"),
+        Value::Reference(counter)
+    );
+    assert_eq!(field(&vm, p, counter, "Value"), Value::I32(25));
+    assert_eq!(
+        vm.heap()
+            .objects()
+            .filter(|o| o.type_id() == counter_type)
+            .count(),
+        1
+    );
+    assert_eq!(
+        vm.heap()
+            .objects()
+            .filter(|o| o.type_id() == map_type)
+            .count(),
+        1
+    );
+    let caller_type = p.find_type("ObjectCaller").unwrap();
+    let caller_field = |name| {
+        p.fields()
+            .find(|f| f.owner == caller_type && f.name == name)
+            .unwrap()
+            .id
+    };
+    assert_eq!(vm.static_fields()[&caller_field("Calls")], Value::I32(1));
+    assert_eq!(
+        vm.static_fields()[&caller_field("Last")],
+        Value::Reference(counter)
+    );
+    for old in original.snapshot.program.methods() {
+        assert_eq!(p.method(old.binding.method).unwrap().binding, old.binding);
+    }
+    for old in original.snapshot.program.fields() {
+        assert!(
+            p.fields()
+                .any(|f| f.id == old.id && f.owner == old.owner && f.value_type == old.value_type)
+        );
+    }
+    let code = vm.read_code(&method.to_string()).unwrap();
+    assert_eq!(code["sourceAvailable"], true);
+    assert_eq!(code["sources"][0]["text"], source);
+    assert_eq!(host.process(&first_request, 10000).unwrap().instructions, 0);
+    assert_eq!(
+        host.process(&first_request, 10000).unwrap().body,
+        body(std::str::from_utf8(&first).unwrap())
+    );
+    assert_eq!(
+        install_once(&mut store, "page", &page).unwrap(),
+        page_receipt
+    );
+    assert_eq!(
+        install_once(&mut store, "caller", &caller).unwrap(),
+        caller_receipt
+    );
+    for (id, artifact, receipt) in installations {
+        assert_eq!(install_once(&mut store, id, &artifact).unwrap(), receipt);
+    }
+}
+
+#[test]
 fn managed_map_page_recovers_between_group_and_visit_mutations_then_replays_over_native_tcp() {
     let test = Test::new();
     let mut store = CheckpointStore::open(&test.database).unwrap();

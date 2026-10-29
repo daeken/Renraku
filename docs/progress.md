@@ -684,13 +684,40 @@ and do not inherit persistence.
   no live inference was needed.
 
 
+- Bounded managed object maps now install append-only as Renraku.ObjectCollections
+  from guest/ObjectMap.cs. ObjectMap Get/Set/Remove/Count uses 64 linked entries,
+  128-unit ordinal UTF-16 keys and nullable object references. ObjectMapResult's
+  readonly Success/Found/Changed/Value/Error/Count fields distinguish stored null
+  from missing/invalid/full. Set compares value reference identity, including
+  different strings with equal text, and preserves existing node/key IDs.
+  Existing lifetime barriers remain in force; no implicit boxing or promotion.
+  Result references retain mutable targets without freezing their state. Four
+  library tests compare a 454-operation CoreCLR ordinal/reference-identity trace,
+  preserve shared/cyclic values, collect removed nodes while receipt results
+  retain values, recover eight mutations after every instruction with GC/root
+  replacement, and resume partial links/replay in an SDK-free native process.
+  A fifth test externally compiles/installs the map and ObjectWebsite against
+  frozen declarations into an existing Counter=19/visit universe. It pauses
+  after a last-body link, before Count/counter/visit changes, and resumes through
+  native SDK-free TCP to Counter=26, then 23, while old pages replay unchanged.
+  A separately compiled three-facade caller gets/casts that same Counter, pauses
+  before isinst and resumes SDK-free to 24 once. A later HTTP request reaches 25;
+  old caller replay returns 24 without changing Calls=1/Counter=25. Exactly one
+  original map/Counter, node/key/type/field/method/code IDs, byte-identical frozen
+  sets, source/install/invoke receipts and old HTTP responses survive GC/restarts
+  without the compiler ledger. Mutators remain multi-instruction CIL with partial
+  fields, one-context exclusion and durable receipts, rather than whole-method
+  transactions. CoreLib/old module bodies, format 7/every fixture and both demos
+  are unchanged. See [ObjectMap](object-map.md); no live inference was needed.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 311 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 316 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -850,6 +877,11 @@ force-push, and preserve local commits if the remote is temporarily unavailable.
 
 ## Next implementation target
 
+The current priority is **networked objects with explicit ownership, placement,
+copy policy and universe authority boundaries**. See the concrete next milestone
+below and [rollout status/contract](distributed-objects.md). Earlier accepted
+integration directions remain recorded here as completed context.
+
 The user selected **OpenAI Responses API through their ChatGPT subscription**,
 specifically requiring OAuth. Sign-in, discovery, a live one-prompt CIL demo,
 and zero-operation restore are verified. GPT-6 Luna was selected explicitly for
@@ -892,7 +924,7 @@ scheduling must atomically checkpoint all contexts, wait relationships, shared
 heap, and code together, with readers for old snapshots. Do not confuse progress
 of independent universes with concurrency inside one universe.
 
-The latest user clarification is runtime-generated metadata reference DLLs for
+An earlier user clarification is runtime-generated metadata reference DLLs for
 Roslyn when live classes are not defined by conventional implementation DLLs.
 The [reference-assembly contract](compilation.md#reference-assemblies-for-live-runtime-types)
 is recorded, and the first exporter/reference compiler/append-only installer now
@@ -906,7 +938,7 @@ a referenced compiled type. Compiler inputs now accept up to 16 frozen reference
 views. Today schema is still derived from retained implementation metadata;
 independent durable schema authoring and broader reference shapes are future work.
 
-**The next acceptance target, selected by the user, is an LLM discovering APIs,
+**The completed acceptance target, selected by the user, is an LLM discovering APIs,
 reading existing code, writing C#, pulling it in, and executing it.** The
 [workbench](workbench.md) supplies the host tools, and the [coding agent](agent.md)
 now connects model-selected search -> read code -> compile -> install -> invoke
@@ -959,29 +991,40 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next add a bounded managed object map.** Use a separate append-only module
-such as Renraku.ObjectCollections with a nongeneric Renraku.Collections.ObjectMap
-and ordinary linked CIL nodes. Follow StringMap's exact ordinal UTF-16 key
-contract and modest 64-entry/128-key-unit limits, with Get/Set/Remove/Count and
-explicit result data for missing/invalid/full. Values are nullable managed object
-references, never implicitly boxed scalars. Distinguish stored null from absence;
-replacement/no-op equality uses reference identity, including different strings
-with equal text, and preserve existing node/key IDs. Removed results retain their
-returned value through ordinary typed roots; a readonly result reference does
-not freeze the mutable target's state. Respect lifetime barriers without promoting
-transient references. Methods have resumable intermediate fields rather than
-whole-method atomicity; one-context exclusion and receipts protect recovery.
-Compare actual C# with a host ordinal dictionary/reference-identity oracle, then
-instruction-cut GC/recovery with cycles/shared values, capacity reuse, static-root
-replacement, removed-value receipt roots and SDK-free replay. Compile frozen-set
-callers that retrieve/cast/use the same saved Counter, preserving all IDs/source/
-receipts; demonstrate a narrow managed website reusing existing saved state with
-HTTP-v1 deduplication and SDK-free recovery. Add no native dictionary/generics/
-arrays/iterator/indexer/new authority. Keep all old modules, CoreLib, reference
-casts/conversions, compiler/transcript/publication/preview/inspection contracts,
-demos and legacy fixtures unchanged. No live model run is needed for this pure
-library milestone.
+**Next: networked objects, ownership/placement and universe boundaries**, as
+selected by the user on October 29. The [networked-object direction](distributed-objects.md)
+records actual phase status and an explicit implementation order. Initial CIL,
+heap and persistent execution (phases 0–3) work; phase 4 has inspection and
+append-only evolution but lacks body replacement/rollback; phase 5 has durable
+external capabilities. Restart is proven, but phases 6–7 still need fenced host
+handoff and remote references. HTTP website serving is not object transparency.
+Prioritize this work over additional standalone opcode/library expansion.
 
+Separate stable object identity, authoritative owner universe/epoch, current
+node placement, hardware/node constraints, mobility permission, copy permission
+and attenuated export grants. Pinning and copyability are independent policies.
+Remote use retains identity; moving requires fenced handoff; copying creates
+fresh IDs with aliases/cycles preserved under bounded atomic closure validation.
+No copying of statics/frames/resources/receipts/capabilities by implication.
+A sandbox receives explicit object/class/effect grants with no ambient parent
+registry or introspection chain. IDs/facades/casts are not authority. Enforce
+restrictions at load/resolve/dispatch/static/inspection/result boundaries even
+for handcrafted CIL; the current trusted agent is not yet a security sandbox.
+
+First demonstrate one exported Counter across two native processes/universes:
+fixed authenticated loopback endpoints, explicit grant and owner epoch, normal
+CIL method invocation parking a portable frame, exact durable caller intent and
+owner acceptance/result receipts, GC/restart/lost-response recovery and exactly
+one mutation of the original object. Deny changed requests, missing/wrong/revoked
+grants, stale epochs and ambient object/type/static/source access. Keep one
+context per owner universe and separate checkpoints; initially reject remote
+field access/callbacks/nested remote effects explicitly. Timeout is not proof of
+non-acceptance or permission to copy/elect another owner. Start with bounded
+placement/grant descriptors and denial fixtures if necessary, but label that
+preparatory until real network invocation passes. Then extend endowment security,
+returned references, graph copies, fenced mobility and cross-machine execution
+in independently verified steps. Preserve legacy readers and all current runtime,
+compiler, receipt, model/publication, library and demo contracts.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

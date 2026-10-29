@@ -83,6 +83,13 @@ A [live multi-module model run](docs/acceptance/live-multimodule-2026-10-29.md)
 used those libraries to update the original map once and publish/preview its own
 read-only page, retaining old HTTP responses across fresh processes.
 
+The [managed object map](docs/object-map.md) holds nullable object references
+with identity-based updates; its frozen caller and website reuse the same saved
+Counter through native recovery. The next development phase is
+[networked objects, placement and universe boundaries](docs/distributed-objects.md).
+Object-level remote references and hostile-code universe sandboxes remain
+unimplemented; localhost website serving does not provide them.
+
 ## Run the demonstration
 
 Install Rust 1.89 or later and the .NET 10 SDK. From the repository root:
