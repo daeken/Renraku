@@ -10,6 +10,10 @@ license.workspace = true
 uuid = { version = "1.29", features = ["v4"] }
 rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
 sha2 = "0.11.1"
+hmac = "0.13.0"
+getrandom = "0.4.3"
+zeroize = "1.9.1"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

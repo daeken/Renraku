@@ -32,6 +32,9 @@ fn execute() -> Result<()> {
         "       renraku-vm inspect-checkpoint <universe.db>\n",
         "       renraku-vm agent-inspect <universe.db>\n",
         "       renraku-vm agent-input <universe.db> <input-ID> <goal> [instruction-budget]\n",
+        "       renraku-vm peer-serve <owner.db> <node-ID> <epoch> <loopback-address:port> <caller-ID> <key-file> [instruction-budget] [connection-limit]\n",
+        "       renraku-vm peer-call <caller.db> <owner-ID> <node-ID> <epoch> <loopback-address:port> <key-file> <call.json>\n",
+        "       renraku-vm peer-resume <caller.db> <operation-ID> [key-file]\n",
         "       renraku-vm web-serve <universe.db> <handler-method|@published> <loopback-address:port> [instruction-budget] [connection-limit]\n",
         "       renraku-vm web-publish <universe.db> <publication-ID> <handler-method>\n",
         "       renraku-vm web-inspect <universe.db>\n",
@@ -85,6 +88,93 @@ fn execute() -> Result<()> {
             } else {
                 print_json(&renraku_vm::web::inspect_publications(&mut store)?)?;
             }
+            return Ok(());
+        }
+        Some("peer-serve") if (7..=9).contains(&args.len()) => {
+            use renraku_vm::{
+                identity::{NodeId, UniverseId},
+                peer::{OwnerServer, PeerKey},
+                placement::OwnerContext,
+            };
+            let identity = |text: &str| {
+                uuid::Uuid::parse_str(text)
+                    .map(|id| *id.as_bytes())
+                    .map_err(|_| Error("invalid peer identity".into()))
+            };
+            let context = OwnerContext {
+                node: NodeId::from_bytes(identity(&args[2])?),
+                epoch: number(args.get(3), 0)?,
+                resources: std::collections::BTreeSet::new(),
+            };
+            let server = OwnerServer::bind(
+                &args[1],
+                context,
+                args[4]
+                    .parse()
+                    .map_err(|_| Error("invalid peer address".into()))?,
+                vec![(
+                    UniverseId::from_bytes(identity(&args[5])?),
+                    PeerKey::load_private(&args[6])?,
+                )],
+                number(args.get(7), 10000)?,
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({"format":1,"listening":server.address()?.to_string()})
+            );
+            for _ in 0..number(args.get(8), u64::MAX)? {
+                if server.serve_one().is_err() {
+                    eprintln!("peer connection rejected or interrupted");
+                }
+            }
+            return Ok(());
+        }
+        Some("peer-call") if args.len() == 8 => {
+            use renraku_vm::{
+                identity::{NodeId, UniverseId},
+                peer::{self, Endpoint, PeerKey},
+            };
+            let identity = |text: &str| {
+                uuid::Uuid::parse_str(text)
+                    .map(|id| *id.as_bytes())
+                    .map_err(|_| Error("invalid peer identity".into()))
+            };
+            if !std::path::Path::new(&args[1]).is_file() {
+                return Err(Error("caller checkpoint does not exist".into()));
+            }
+            let endpoint = Endpoint {
+                owner: UniverseId::from_bytes(identity(&args[2])?),
+                node: NodeId::from_bytes(identity(&args[3])?),
+                epoch: number(args.get(4), 0)?,
+                address: args[5]
+                    .parse()
+                    .map_err(|_| Error("invalid peer address".into()))?,
+            };
+            let call = peer::decode_call(&bounded_read(&args[7], peer::MAX_FRAME as u64)?)?;
+            let mut store = CheckpointStore::open(&args[1])?;
+            let report = peer::call_once(
+                &mut store,
+                &endpoint,
+                &call,
+                &PeerKey::load_private(&args[6])?,
+            )?;
+            print_json(&peer::report_json(&report)?)?;
+            return Ok(());
+        }
+        Some("peer-resume") if (3..=4).contains(&args.len()) => {
+            use renraku_vm::peer::{self, CallReport, PeerKey};
+            if !std::path::Path::new(&args[1]).is_file() {
+                return Err(Error("caller checkpoint does not exist".into()));
+            }
+            let mut store = CheckpointStore::open(&args[1])?;
+            let report =
+                if let Some(CallReport::Owner(reply)) = peer::inspect(&mut store, &args[2])? {
+                    CallReport::Owner(reply)
+                } else {
+                    let key = args.get(3).map(PeerKey::load_private).transpose()?;
+                    peer::resume(&mut store, &args[2], key.as_ref())?
+                };
+            print_json(&peer::report_json(&report)?)?;
             return Ok(());
         }
         Some("web-serve") if (4..=6).contains(&args.len()) => {

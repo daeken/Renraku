@@ -19,6 +19,61 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("peer-server") if args.len() == 9 => {
+            use renraku_vm::{
+                identity::NodeId,
+                peer::{OwnerServer, PeerKey, ServerStage},
+                placement::{self, OwnerContext},
+            };
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let vm = saved.snapshot.restore()?;
+            let registry =
+                placement::read(&vm)?.ok_or_else(|| Error("missing owner registry".into()))?;
+            let node = NodeId::from_bytes(
+                *uuid::Uuid::parse_str(&args[2])
+                    .map_err(|_| Error("bad node".into()))?
+                    .as_bytes(),
+            );
+            let caller = UniverseId::from_bytes(
+                *uuid::Uuid::parse_str(&args[3])
+                    .map_err(|_| Error("bad caller".into()))?
+                    .as_bytes(),
+            );
+            let context = OwnerContext {
+                node,
+                epoch: registry.owner().epoch,
+                resources: std::collections::BTreeSet::new(),
+            };
+            let server = OwnerServer::bind(
+                &args[1],
+                context,
+                args[5].parse().map_err(|_| Error("bad address".into()))?,
+                vec![(caller, PeerKey::load_private(&args[4])?)],
+                args[6].parse().map_err(|_| Error("bad budget".into()))?,
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({"listening":server.address()?.to_string()})
+            );
+            std::io::stdout().flush()?;
+            for _ in 0..args[7]
+                .parse::<usize>()
+                .map_err(|_| Error("bad limit".into()))?
+            {
+                let result = server.serve_one_with_observer(|stage| {
+                    if stage == ServerStage::BeforeWrite && args[8] != "-" {
+                        std::fs::write(&args[8], b"ready")?;
+                        std::io::stdin().read_exact(&mut [0])?;
+                    }
+                    Ok(())
+                });
+                if result.is_err() {
+                    eprintln!("peer probe rejected connection");
+                }
+            }
+            Ok(())
+        }
         Some("owner") if args.len() == 7 => {
             use renraku_vm::{
                 identity::GrantId,

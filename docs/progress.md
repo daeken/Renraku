@@ -767,13 +767,43 @@ and do not inherit persistence.
   demos remain unchanged. See [owner calls](owner-calls.md); no inference was used.
 
 
+- Authenticated loopback transport now connects the owner backend to a durable
+  host caller journal in separate universes. HMAC-SHA-256 authenticates direction,
+  original caller, fresh attempt nonce, exact length/payload and reply request
+  digest/owner/node/epoch. Host-provisioned 32-byte per-caller keys remain outside
+  checkpoints, have redacted Debug/zeroizing storage/private Unix file checks,
+  and cannot be shared across configured principals. This is plaintext loopback
+  authentication, not TLS, hardware attestation or a public remote service.
+  Strict version-1 frames bound payloads to 64 KiB before allocation; I64 decimal
+  strings and u16 arrays preserve raw integer bits/NUL/lone surrogates. Deadlines
+  and guest instruction budgets bound native serving; no agent action was added.
+  Caller call/sent/ack/reply roots commit with format-7 state: intent before any
+  socket write, sent marker before first request bytes, authenticated original
+  execution acknowledgements and terminal reply before exposing it. Sent retries
+  use owner receipt-only resume, never new acceptance on a missing ledger. Lost
+  replies, busy/backend errors and uncertain saves stay unresolved; there is no
+  automatic fresh mutation ID or speculative owner/copy fallback. Prepared unsent
+  work is distinct from attempted work. Terminal caller replay needs no key,
+  network/source/SDK. New peer-serve/peer-call/peer-resume commands are trusted
+  operator APIs. Ten integrations/three units cover authentication/MAC/frame/
+  schema/value/key bounds, real typed wire calls, caller save failure, corrupt/
+  repaired-digest journals, acknowledgement/missing-receipt recovery and native
+  owner kill after mutation commit before socket write. Separate native owner/
+  caller universes reconcile 19->26 after revocation without repeating mutation;
+  a later request reaches 23 while first replay remains 26. No Counter or key is
+  copied into caller state. This remains host transport, not ordinary caller CIL
+  references/waits, cross-machine routing or hostile child sandbox enforcement.
+  Format 7/CoreLib/old bodies/all fixtures/both demos are unchanged. See
+  [peer transport](peer-transport.md); no live inference was needed.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 336 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 349 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -1078,10 +1108,12 @@ field access/callbacks/nested remote effects explicitly. Timeout is not proof of
 non-acceptance or permission to copy/elect another owner. The bounded
 placement/grant descriptors and denial fixtures are implemented as preparatory
 [host preflight](placement.md). [Durable owner instance acceptance](owner-calls.md)
-is now implemented and verified, including revocation/receipt recovery. Next
-connect it to authenticated loopback transport and the caller's ordinary CIL
-reference/wait path. Owner-only native recovery is partial evidence, not complete
-network transparency or sandbox security. Then extend endowment security,
+is now implemented and verified, including revocation/receipt recovery.
+[Authenticated loopback transport](peer-transport.md) and durable host caller
+recovery are implemented. Next connect this path to ordinary caller CIL imported
+references and portable waits, with coherent remote type/identity bindings.
+Host-only network calls remain partial evidence, not complete transparency or
+sandbox security. Then extend endowment security,
 returned references, graph copies, fenced mobility and cross-machine execution
 in independently verified steps. Preserve legacy readers and all current runtime,
 compiler, receipt, model/publication, library and demo contracts.

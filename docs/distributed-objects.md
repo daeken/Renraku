@@ -130,10 +130,11 @@ failed commits and SDK-free native recovery. This implements the descriptors and
 validation permitted below, not remote invocation or a child security boundary.
 [Durable owner instance acceptance](owner-calls.md) now executes original objects
 with atomic intent/authority, pinned frames/receipts, revocation reconciliation
-and native SDK-free recovery. No network protocol/authentication or caller remote
-reference/wait implementation exists yet. Next connect this backend to the real
-two-process transport and suspended caller proof; owner-only recovery is partial
-evidence. Keep preflight separate from admission and receipt replay.
+and native SDK-free recovery. [Authenticated loopback transport](peer-transport.md) now connects separate
+owner/caller universes through real native TCP, with durable host caller intent,
+execution acknowledgement and result recovery. Ordinary caller CIL references/
+waits are still absent. Next connect them to this path; host-only network calls
+remain partial evidence. Keep preflight separate from admission and receipt replay.
 
 ## First independently demonstrable network slice
 

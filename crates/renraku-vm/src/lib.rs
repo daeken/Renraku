@@ -20,6 +20,7 @@ pub mod inspection;
 pub mod invocation;
 pub mod model;
 pub mod owner;
+pub mod peer;
 pub mod placement;
 pub mod program;
 pub mod runtime;

@@ -91,6 +91,8 @@ Counter through native recovery. The next development phase is
 explicit policies and denies ungranted access under its bounded host API.
 The [owner backend](docs/owner-calls.md) now executes pinned instance calls with
 atomic grant acceptance and durable reply reconciliation after revocation.
+[Authenticated loopback peers](docs/peer-transport.md) now connect native owner
+and caller universes with durable caller intent and lost-reply recovery.
 Object-level remote references and hostile-code universe sandboxes remain
 unimplemented; localhost website serving does not provide them.
 

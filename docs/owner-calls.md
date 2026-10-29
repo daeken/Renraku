@@ -3,9 +3,10 @@
 `renraku_vm::owner::accept` connects the [placement grants](placement.md) to
 actual CIL instance execution on the authoritative object. It accepts an exact
 operation once, resumes its saved frames, or returns its terminal result after a
-lost reply. This is an owner backend with native recovery tests. Transport,
-authentication, caller-side remote references/waits and secure child universes
-are still unimplemented; this is not full network transparency.
+lost reply. [Authenticated loopback transport](peer-transport.md) now connects
+this backend to a durable host caller journal. Caller-side ordinary CIL remote
+references/waits and secure child universes remain unimplemented; this is not
+full network transparency.
 
 ## Explicit instance entry
 

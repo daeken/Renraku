@@ -326,6 +326,45 @@ pub fn accept(
     call: &OwnerCall,
     budget: u64,
 ) -> Result<OwnerReply> {
+    drive(
+        store,
+        context,
+        authenticated_caller,
+        call,
+        budget,
+        true,
+        None,
+    )
+}
+/// Receipt-only reconciliation: a missing accepted operation never starts work.
+pub fn resume(
+    store: &mut CheckpointStore,
+    context: &OwnerContext,
+    authenticated_caller: UniverseId,
+    call: &OwnerCall,
+    budget: u64,
+    expected: Option<ExecutionId>,
+) -> Result<OwnerReply> {
+    drive(
+        store,
+        context,
+        authenticated_caller,
+        call,
+        budget,
+        false,
+        expected,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn drive(
+    store: &mut CheckpointStore,
+    context: &OwnerContext,
+    authenticated_caller: UniverseId,
+    call: &OwnerCall,
+    budget: u64,
+    allow_new: bool,
+    expected: Option<ExecutionId>,
+) -> Result<OwnerReply> {
     let id = key(authenticated_caller, &call.operation)?;
     let saved = store.load()?;
     let mut vm = saved.snapshot.restore()?;
@@ -336,8 +375,17 @@ pub fn accept(
             request(record)? == (authenticated_caller, call.clone()),
             "owner operation ID is already bound to another call",
         )?;
-        vm.invocation(&id).unwrap().arguments[1..].to_vec()
+        let receipt = vm.invocation(&id).unwrap();
+        require(
+            expected.is_none_or(|id| id == receipt.execution),
+            "owner execution differs from caller receipt",
+        )?;
+        receipt.arguments[1..].to_vec()
     } else {
+        require(
+            allow_new && expected.is_none(),
+            "owner accepted receipt is missing; outcome remains uncertain",
+        )?;
         require(records.len() < MAX_CALLS, "owner acceptance limit reached")?;
         require(
             vm.invocation(&id).is_none(),
