@@ -62,6 +62,10 @@ static storage views. A [live model run](docs/acceptance/live-inspection-2026-10
 observed 19 and 26 on the same Counter around one existing mutation, without a
 compiler or getter.
 
+The first [managed text library](docs/integer-text.md) formats and parses bounded
+signed decimal integers in ordinary checkpointable CIL. It installs alongside an
+existing core and powers a numbered-visit page with a decimal count precondition.
+
 ## Run the demonstration
 
 Install Rust 1.89 or later and the .NET 10 SDK. From the repository root:

@@ -76,6 +76,188 @@ fn web_cli(args: &[&str]) -> serde_json::Value {
 }
 
 #[test]
+fn append_only_decimal_library_and_page_reuse_saved_visits_with_durable_numeric_preconditions() {
+    let test = Test::new();
+    let mut store = CheckpointStore::open(&test.database).unwrap();
+    let host = test.host();
+    let original = host.process(&request("before-library"), 10000).unwrap();
+    assert_eq!(state(&test.database).0, 1);
+    publish_handler(&mut store, "original", HANDLER).unwrap();
+    let compiler_path = test.directory.join("integer-compiler.db");
+    let mut compiler = CompilationStore::open(&compiler_path).unwrap();
+    let saved = store.load().unwrap();
+    assert!(
+        saved
+            .snapshot
+            .program
+            .find_type("Renraku.Text.IntegerText")
+            .is_err()
+    );
+    // An ordinary CIL module installs against the universe's original core.
+    let library = CompilationRequest::capture(
+        &saved.snapshot.program,
+        host.universe(),
+        toolchain(),
+        "Renraku.Library".into(),
+        vec![(
+            "IntegerText.cs".into(),
+            include_bytes!("../../../guest/IntegerText.cs").to_vec(),
+        )],
+        vec![],
+    )
+    .unwrap();
+    compiler.prepare("decimal-library", &library).unwrap();
+    let library = compiler
+        .drive(host.universe(), "decimal-library", toolchain())
+        .unwrap();
+    install_once(
+        &mut store,
+        "decimal-library-install",
+        library.artifact.as_ref().unwrap(),
+    )
+    .unwrap();
+    let saved = store.load().unwrap();
+    let program = &saved.snapshot.program;
+    let views = ["Renraku.Guest.Website", "Renraku.Text.IntegerText"].map(|name| {
+        program
+            .reference_view(&[program.find_type(name).unwrap()])
+            .unwrap()
+    });
+    let page = CompilationRequest::capture(
+        program,
+        host.universe(),
+        toolchain(),
+        "Generated.IntegerWebsite".into(),
+        vec![(
+            "IntegerWebsite.cs".into(),
+            include_bytes!("../../../guest/examples/IntegerWebsite.cs").to_vec(),
+        )],
+        views.to_vec(),
+    )
+    .unwrap();
+    compiler.prepare("decimal-page", &page).unwrap();
+    let page = compiler
+        .drive(host.universe(), "decimal-page", toolchain())
+        .unwrap();
+    assert!(page.artifact.is_some(), "{:?}", page.report);
+    install_once(
+        &mut store,
+        "decimal-page-install",
+        page.artifact.as_ref().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        inspect_publications(&mut store).unwrap()["current"]["id"],
+        "original"
+    );
+    publish_handler(&mut store, "decimal-page", "IntegerWebsite::Handle").unwrap();
+    drop(compiler);
+    fs::remove_file(compiler_path).unwrap();
+    let host = WebHost::open_published(&test.database).unwrap();
+    let mut numeric = request("numeric-precondition");
+    numeric.body = "+0001".into();
+    let pending = host.process(&numeric, 7).unwrap();
+    assert_eq!(pending.status, 202);
+    assert_eq!(
+        host.process(&request("excluded"), 10000)
+            .unwrap_err()
+            .status,
+        503
+    );
+    let mut response = pending.clone();
+    for _ in 0..1000 {
+        collect(&test.database);
+        response = WebHost::open_published(&test.database)
+            .unwrap()
+            .process(&numeric, 7)
+            .unwrap();
+        assert_eq!(response.execution, pending.execution);
+        if response.status == 200 {
+            break;
+        }
+        assert_eq!(response.status, 202);
+    }
+    assert_eq!(response.status, 200);
+    assert!(
+        response.body.contains("Visits: 2")
+            && response.body.contains("before-library")
+            && response.body.contains("numeric-precondition")
+    );
+    assert_eq!(state(&test.database).0, 2);
+    assert!(
+        host.process(&request("after-numeric"), 10000)
+            .unwrap()
+            .body
+            .contains("Visits: 3")
+    );
+    for (index, invalid) in ["1", "3 ", "-1", "2147483648", "\u{0663}", &"0".repeat(65)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut invalid_request = request(&format!("invalid-{index}"));
+        invalid_request.body = invalid.into();
+        let rejected = host.process(&invalid_request, 10000).unwrap();
+        assert_eq!(rejected.status, 200); // HTTP-v1 handler validation is HTML.
+        assert!(!rejected.body.contains("Visit recorded."));
+        assert_eq!(state(&test.database).0, 3);
+    }
+    let replay = host.process(&numeric, 10000).unwrap();
+    assert_eq!(replay.body, response.body);
+    assert_eq!(replay.execution, response.execution);
+    assert_eq!(replay.instructions, 0);
+    let mut changed = numeric.clone();
+    changed.body = "3".into();
+    assert_eq!(host.process(&changed, 10000).unwrap_err().status, 409);
+    let baseline = host.process(&request("before-library"), 10000).unwrap();
+    assert_eq!(baseline.body, original.body);
+    assert_eq!(baseline.execution, original.execution);
+    assert_eq!(baseline.instructions, 0);
+    // A fresh native edge needs neither the compiler ledger nor the SDK.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+        .args([
+            "web-serve",
+            test.database.to_str().unwrap(),
+            "@published",
+            "127.0.0.1:0",
+            "10000",
+            "3",
+        ])
+        .env("PATH", "/no-integer-page-tools")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::BufRead;
+    let mut ready = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    ready.read_line(&mut line).unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let address = metadata["listening"].as_str().unwrap().parse().unwrap();
+    let read = String::from_utf8(exchange_at(
+        address,
+        &wire("GET", "/page", Some("native-read"), b""),
+    ))
+    .unwrap();
+    assert!(body(&read).contains("Visits: 3"));
+    let first = exchange_at(
+        address,
+        &wire("POST", "/visit", Some("native-numbered"), b"3"),
+    );
+    assert!(body(std::str::from_utf8(&first).unwrap()).contains("Visits: 4"));
+    assert_eq!(
+        exchange_at(
+            address,
+            &wire("POST", "/visit", Some("native-numbered"), b"3")
+        ),
+        first
+    );
+    assert!(child.wait().unwrap().success());
+    assert_eq!(state(&test.database).0, 4);
+    let saved = store.load().unwrap();
+    assert_eq!(saved.snapshot.restore().unwrap().effects().count(), 0);
+}
+
+#[test]
 fn compiled_publication_changes_new_requests_while_paused_code_and_shared_state_recover() {
     let test = Test::new();
     let mut store = CheckpointStore::open(&test.database).unwrap();

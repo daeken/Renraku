@@ -152,6 +152,11 @@ inspect a waiting context without dispatching anything.
 
 ## Managed strings
 
+The separately installable [managed integer text library](integer-text.md) builds
+bounded signed decimal formatting/parsing from these CIL primitives and string
+operations. Its loops, calls, and result objects use the normal portable frames;
+it adds no InternalCall or instruction. Existing core images remain unchanged.
+
 Strings are immutable heap objects with ordinary object identities and exact
 UTF-16 payloads. Length and indexing count UTF-16 units, following
 [C# string semantics](https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/strings/).

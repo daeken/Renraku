@@ -385,6 +385,13 @@ implemented. A budget-paused invocation remains pending until explicitly resumed
 Int32/UInt32/Int64/UInt64 division and remainder are supported. Zero divisors and
 signed minimum / or % -1 produce terminal VM faults; see the [CIL profile](cil-profile.md).
 
+After an operator installs the [managed integer text library](integer-text.md),
+search/describe `Renraku.Text.IntegerText` before compiling callers against its
+frozen type view. `FormatInt32`/`FormatInt64` return canonical decimal strings;
+`ParseInt32`/`ParseInt64` return objects with Success/Value/Error/Position. Parsing
+accepts an optional ASCII sign and digits within 64 UTF-16 units. Old universes
+keep their saved core and do not automatically gain this separate module.
+
 ## Validation
 
 ```sh

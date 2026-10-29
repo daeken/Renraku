@@ -32,8 +32,11 @@ byte[] Compile(string name, string source, IEnumerable<MetadataReference> refere
 
 try
 {
+    string integerText = File.ReadAllText(Path.Combine(root, "guest/IntegerText.cs"));
     byte[] core = Compile("Renraku.CoreLib", File.ReadAllText(Path.Combine(root, "guest/CoreLib.cs")),
         Array.Empty<MetadataReference>());
+    byte[] library = Compile("Renraku.Library", integerText, new[] { MetadataReference.CreateFromImage(core) });
+    File.WriteAllBytes(Path.Combine(output, "Renraku.Library.dll"), library);
     string source = File.ReadAllText(Path.Combine(root, "guest/Simulation.cs")) + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/IntegerArithmetic.cs"));
     byte[] guest = Compile("Renraku.Simulation", source,
@@ -44,7 +47,7 @@ try
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", source + Environment.NewLine +
+    byte[] reference = Compile("Renraku.Reference", integerText + Environment.NewLine + source + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
@@ -98,6 +101,7 @@ try
     File.WriteAllText(Path.Combine(output, "arithmetic-reference.json"), JsonSerializer.Serialize(arithmeticResults));
     File.WriteAllText(Path.Combine(output, "arithmetic-workload-reference.txt"),
         arithmetic.GetMethod("PersistentArithmetic")!.Invoke(null, null)!.ToString());
+    IntegerTextReference.Write(assembly, output);
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))
         File.WriteAllBytes(Path.Combine(output, Path.GetFileNameWithoutExtension(path) + ".dll"),
             Compile(Path.GetFileNameWithoutExtension(path), File.ReadAllText(path),
