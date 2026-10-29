@@ -2,7 +2,7 @@
 //! signatures, frame ordering, and stack shapes before executing these records.
 
 use crate::{
-    identity::{CodeVersionId, ExecutionId, MethodId, ObjectId},
+    identity::{CodeVersionId, EffectId, ExecutionId, MethodId, ObjectId},
     value::Value,
 };
 
@@ -33,6 +33,13 @@ pub enum Continuation {
         next: u32,
         result: CallResult,
     },
+    /// A capability call has moved its prompt into the durable outbox.
+    AwaitEffect {
+        call_site: u32,
+        next: u32,
+        effect: EffectId,
+        request: ObjectId,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +60,7 @@ impl Frame {
                 result: CallResult::ConstructedObject(id),
                 ..
             } => Some(id),
+            Continuation::AwaitEffect { request, .. } => Some(request),
             _ => None,
         };
         self.arguments
@@ -68,6 +76,9 @@ impl Frame {
 pub enum ExecutionStatus {
     Runnable,
     Paused,
+    Waiting {
+        effect: EffectId,
+    },
     Completed {
         result: Option<Value>,
     },

@@ -41,13 +41,14 @@ try
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", source, framework);
+    byte[] reference = Compile("Renraku.Reference", source + Environment.NewLine +
+        File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
     var type = assembly.GetType("Renraku.Guest.Simulation", throwOnError: true)!;
     string[] cases = { "Run", "Sharing", "Arithmetic", "WideArithmetic", "Wrap", "Branches",
         "UnsignedComparisons", "SignedComparisons", "ArgumentStore", "Recursion", "SaveObject", "NullComparisons", "DurableRun", "Inheritance",
-        "Strings", "StringEquality", "StringNullConcat", "StringInterning" };
+        "Strings", "StringEquality", "StringNullConcat", "StringInterning", "ModelHarness" };
     var results = cases.Select(name => $"{name}={type.GetMethod(name, BindingFlags.Public | BindingFlags.Static)!.Invoke(null, null)}");
     File.WriteAllLines(Path.Combine(output, "reference-results.txt"), results);
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))

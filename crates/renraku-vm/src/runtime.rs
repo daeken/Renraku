@@ -4,8 +4,8 @@ use crate::{
     error::{Error, Result, require},
     execution::{CallResult, Continuation, ExecutionContext, ExecutionStatus, Frame},
     heap::{Heap, MAX_STRING_UNITS},
-    identity::{ExecutionId, FieldId, MethodId, ObjectId, TypeId, UniverseId},
-    program::{Method, Program, SlotType, StringIntrinsic},
+    identity::{EffectId, ExecutionId, FieldId, MethodId, ObjectId, TypeId, UniverseId},
+    program::{Intrinsic, Method, Program, SlotType, StringIntrinsic},
     value::Value,
 };
 use std::{
@@ -16,6 +16,7 @@ use std::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunOutcome {
     Paused,
+    Waiting(EffectId),
     Completed(Option<Value>),
 }
 
@@ -33,6 +34,8 @@ pub struct Vm<'a> {
     pub(crate) checkpoint_generation: Cell<u64>,
     pub(crate) interned_strings: BTreeMap<Vec<u16>, ObjectId>,
     pub(crate) effects: BTreeMap<crate::identity::EffectId, EffectRecord>,
+    // Host authorization is deliberately not persisted by guest checkpoints.
+    pub(crate) model_calls_enabled: bool,
 }
 enum Mutation {
     String {
@@ -58,6 +61,10 @@ enum Mutation {
 }
 enum Transition {
     Continue(Frame),
+    Wait {
+        frame: Frame,
+        effect: EffectRecord,
+    },
     Call {
         caller: Frame,
         callee: Frame,
@@ -80,6 +87,7 @@ impl<'a> Vm<'a> {
             program,
             interned_strings: BTreeMap::new(),
             effects: BTreeMap::new(),
+            model_calls_enabled: false,
             universe: UniverseId::fresh(),
             entry: None,
             checkpoint_generation: Cell::new(0),
@@ -114,6 +122,9 @@ impl<'a> Vm<'a> {
     }
     pub fn context(&self) -> &ExecutionContext {
         &self.context
+    }
+    pub fn set_model_calls_enabled(&mut self, enabled: bool) {
+        self.model_calls_enabled = enabled;
     }
     pub fn static_fields(&self) -> &BTreeMap<FieldId, Value> {
         &self.statics
@@ -165,6 +176,7 @@ impl<'a> Vm<'a> {
         match &self.context.status {
             ExecutionStatus::Completed { result } => return Ok(RunOutcome::Completed(*result)),
             ExecutionStatus::Faulted { message } => return Err(Error(message.clone())),
+            ExecutionStatus::Waiting { effect } => return Ok(RunOutcome::Waiting(*effect)),
             _ => {}
         }
         self.context.status = ExecutionStatus::Runnable;
@@ -178,6 +190,9 @@ impl<'a> Vm<'a> {
             self.instructions_executed = self.instructions_executed.saturating_add(1);
             if let ExecutionStatus::Completed { result } = self.context.status {
                 return Ok(RunOutcome::Completed(result));
+            }
+            if let ExecutionStatus::Waiting { effect } = self.context.status {
+                return Ok(RunOutcome::Waiting(effect));
             }
         }
         self.context.status = ExecutionStatus::Paused;
@@ -286,6 +301,11 @@ impl<'a> Vm<'a> {
         }
         match transition {
             Transition::Continue(frame) => {
+                *self.context.frames.last_mut().unwrap() = frame;
+            }
+            Transition::Wait { frame, effect } => {
+                self.context.status = ExecutionStatus::Waiting { effect: effect.id };
+                self.effects.insert(effect.id, effect);
                 *self.context.frames.last_mut().unwrap() = frame;
             }
             Transition::Call { caller, callee } => {
@@ -515,6 +535,27 @@ impl<'a> Vm<'a> {
                         }
                     }
                     if let Some(intrinsic) = callee.intrinsic {
+                        let Intrinsic::String(intrinsic) = intrinsic else {
+                            require(
+                                self.model_calls_enabled,
+                                "model capability calls are disabled by the host",
+                            )?;
+                            let Value::Reference(request) = arguments[0] else {
+                                return Err(Error("model prompt must be a non-null string".into()));
+                            };
+                            let effect = self.prepare_model_request(request)?;
+                            frame.continuation = Continuation::AwaitEffect {
+                                call_site: offset,
+                                next: instruction.next,
+                                effect: effect.id,
+                                request,
+                            };
+                            require(
+                                frame.evaluation_stack.len() < method.max_stack,
+                                "maxstack exceeded by model result",
+                            )?;
+                            return Ok((Transition::Wait { frame, effect }, None));
+                        };
                         let (value, effect) = self.prepare_intrinsic(intrinsic, &arguments)?;
                         frame.evaluation_stack.push(value);
                         require(

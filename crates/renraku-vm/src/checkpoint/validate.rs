@@ -1,9 +1,10 @@
 use crate::{
     cil::{Comparison, Op},
+    effects::EffectState,
     error::{Error, Result, require},
     execution::{CallResult, Continuation, ExecutionStatus},
     identity::{FieldId, TypeId},
-    program::{Method, Program, SlotType},
+    program::{Intrinsic, Method, Program, SlotType},
     runtime::Vm,
     value::Value,
 };
@@ -208,6 +209,10 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
         let expected = match frame.continuation {
             Continuation::Execute { next } => {
                 require(
+                    !matches!(vm.context.status, ExecutionStatus::Waiting { .. }),
+                    "waiting context has an executable active frame",
+                )?;
+                require(
                     index + 1 == vm.context.frames.len(),
                     "non-active caller is not awaiting return",
                 )?;
@@ -215,6 +220,59 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
                     .get(&next)
                     .cloned()
                     .ok_or_else(|| Error("saved offset is not reachable in this method".into()))?
+            }
+            Continuation::AwaitEffect {
+                call_site,
+                next,
+                effect,
+                request,
+            } => {
+                require(
+                    index + 1 == vm.context.frames.len(),
+                    "effect waiter must be the active frame",
+                )?;
+                require(
+                    vm.context.status == (ExecutionStatus::Waiting { effect }),
+                    "waiting status and effect continuation disagree",
+                )?;
+                let record = vm.effect(effect)?;
+                require(
+                    record.request == request && record.capability == "local.echo",
+                    "waiting effect request or capability mismatch",
+                )?;
+                require(
+                    !matches!(record.state, EffectState::Completed { .. }),
+                    "waiting effect already has a completed response",
+                )?;
+                let instruction = method
+                    .instructions
+                    .get(&call_site)
+                    .ok_or_else(|| Error("saved effect call site is invalid".into()))?;
+                require(
+                    instruction.next == next,
+                    "saved effect return offset does not follow the call",
+                )?;
+                let Op::Call { token, .. } = instruction.op else {
+                    return Err(Error(
+                        "saved effect continuation does not point at a call".into(),
+                    ));
+                };
+                let callee = program.method(program.method_tokens[&(method.assembly, token)])?;
+                require(
+                    callee.intrinsic == Some(Intrinsic::ModelComplete),
+                    "saved effect call is not the model capability",
+                )?;
+                let mut shape = positions
+                    .get(&call_site)
+                    .cloned()
+                    .ok_or_else(|| Error("saved effect call site is unreachable".into()))?;
+                require(!shape.is_empty(), "saved effect call stack underflow")?;
+                shape.pop(); // Its sole string argument is now retained by the effect record.
+                require(
+                    shape.len() < method.max_stack,
+                    "saved effect result exceeds maxstack",
+                )?;
+                shape
             }
             Continuation::AwaitReturn {
                 call_site,

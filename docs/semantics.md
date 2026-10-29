@@ -13,9 +13,9 @@ The Rust crate implements the initial CIL interpreter, identity and value model,
 heap lifetime rules, tracing collection, explicit frames, and atomic durable
 checkpoints. The [CIL profile](cil-profile.md) defines the executable subset and
 [checkpoint contract](checkpoints.md) defines recovery. A host outbox implements
-durable external request intent and reconciliation. Live dispatch replacement,
-type initialization, scheduling of multiple contexts, and guest calls waiting
-for external effects remain requirements for subsequent work.
+durable external request intent, reconciliation, and portable waiting CIL calls.
+Live dispatch replacement, type initialization, scheduling of multiple contexts,
+and real provider capabilities remain requirements for subsequent work.
 
 ## Identity and object records
 
@@ -124,6 +124,13 @@ A normal call takes its result, if any, from the callee. For `newobj`, the
 constructor returns void and the caller instead produces the allocated object
 recorded in its continuation. This retained reference participates in tracing.
 
+An `AwaitEffect` continuation identifies a capability call site, its return
+offset, the stable effect ID, and the prompt object ID. Its argument has moved
+into the outbox and its result is absent. Only the active frame can await an
+effect, and the context's waiting status must name that same unfinished effect.
+Delivery atomically pushes the saved response, advances the continuation, and
+makes the context runnable. A waiting context does not advance by running again.
+
 Entering a call must atomically move arguments, set the caller's continuation,
 and install the callee frame. Returning must atomically remove the callee, produce
 the appropriate caller result, and advance the caller's continuation. No safe
@@ -194,7 +201,7 @@ response per model request is enough initially; token streaming is deferred.
 The provider adapter is a host capability. Its socket, credentials, and native
 stack are not ordinary persistent objects.
 
-The first effect protocol should use a durable outbox:
+The effect protocol uses a durable outbox:
 
 1. Guest execution records request intent, a stable effect ID, and its waiting
    continuation. The runtime commits these together before dispatch.
@@ -205,12 +212,14 @@ The first effect protocol should use a durable outbox:
    in one transaction.
 5. Resumption consumes the stored result; it does not repeat a completed effect.
 
-The current [host outbox](effects.md) implements stable effect IDs, intent and
-dispatch commits, uncertain outcomes, durable managed response strings, and
-provider reconciliation. Its deterministic local echo provider keeps receipts
-outside the universe transaction. The CLI can queue, dispatch, inspect, and
-reconcile requests. CIL waiting continuations and atomic guest wakeup are still
-required before this is a complete persistent harness.
+The current [effect outbox](effects.md) implements this protocol for
+`Renraku.Model.Complete` using the deterministic local echo provider. Receipts
+commit outside the universe transaction. A linked C# conversation makes two
+requests through portable waiting frames; response storage and guest wakeup
+commit together. The CLI can queue, dispatch, inspect, and reconcile requests.
+New guest model calls require explicit host opt-in on every fresh VM and restore.
+Real providers, automatic delivery coordination, streaming, tools, and explicit
+retry policies remain later work.
 
 An in-flight record recovered without a committed response has an unknown
 outcome: the provider may have accepted and charged for the request. The runtime
@@ -239,7 +248,8 @@ and references held across nested frames and pending constructor results.
 The initial executable acceptance test now compiles real C# with Roslyn against
 the custom CoreLib and interprets its emitted method bodies. The simulation
 allocates an object, mutates a field, executes nested calls and a loop, writes
-static storage, and returns 48. Eighteen guest cases are compared with CoreCLR.
+static storage, and returns 48. Nineteen guest cases are compared with CoreCLR,
+including the linked conversation harness with a local echo reference shim.
 Instruction-level pause/resume, frame and instruction budgets, static roots, and
 unsupported capabilities have additional tests. This establishes the initial
 runtime and its supported compilation profile.

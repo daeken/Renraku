@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 use std::{cell::Cell, collections::BTreeMap, path::Path, time::Duration};
 
 const MAGIC: &[u8; 8] = b"RENRAKU\0";
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
 const APPLICATION_ID: i64 = 0x52454e52;
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_ITEMS: usize = 1_000_000;
@@ -67,6 +67,7 @@ impl Snapshot {
             statics: state.statics,
             interned_strings: state.interned_strings,
             effects,
+            model_calls_enabled: false,
             context: state.context,
             universe: state.universe,
             entry: state.entry,
@@ -233,7 +234,7 @@ impl CheckpointStore {
             payload,
         } = row.ok_or_else(|| Error("no committed checkpoint".into()))?;
         require(
-            generation > 0 && matches!(format, 1..=3),
+            generation > 0 && matches!(format, 1..=4),
             "unsupported checkpoint format or generation",
         )?;
         require(
@@ -416,6 +417,10 @@ fn encode(vm: &Vm<'_>) -> Result<Vec<u8>> {
     match &vm.context.status {
         ExecutionStatus::Runnable => w.byte(0),
         ExecutionStatus::Paused => w.byte(1),
+        ExecutionStatus::Waiting { effect } => {
+            w.byte(4);
+            w.id(effect.as_bytes());
+        }
         ExecutionStatus::Completed { result } => {
             w.byte(2);
             w.byte(u8::from(result.is_some()));
@@ -457,6 +462,18 @@ fn encode(vm: &Vm<'_>) -> Result<Vec<u8>> {
                         w.id(id.as_bytes());
                     }
                 }
+            }
+            Continuation::AwaitEffect {
+                call_site,
+                next,
+                effect,
+                request,
+            } => {
+                w.byte(2);
+                w.word(call_site);
+                w.word(next);
+                w.id(effect.as_bytes());
+                w.id(request.as_bytes());
             }
         }
         w.values(&frame.arguments)?;
@@ -546,7 +563,7 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
     require(r.take(8)? == MAGIC, "unsupported checkpoint payload format")?;
     let format = r.u32()?;
     require(
-        matches!(format, 1..=3),
+        matches!(format, 1..=4),
         "unsupported checkpoint payload format",
     )?;
     let universe = UniverseId::from_bytes(id(&mut r)?);
@@ -684,6 +701,9 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
     let status = match r.u8()? {
         0 => ExecutionStatus::Runnable,
         1 => ExecutionStatus::Paused,
+        4 if format >= 4 => ExecutionStatus::Waiting {
+            effect: EffectId::from_bytes(id(&mut r)?),
+        },
         2 => ExecutionStatus::Completed {
             result: if flag(&mut r)? {
                 Some(value(&mut r)?)
@@ -725,6 +745,12 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
                     result,
                 }
             }
+            2 if format >= 4 => Continuation::AwaitEffect {
+                call_site: r.u32()?,
+                next: r.u32()?,
+                effect: EffectId::from_bytes(id(&mut r)?),
+                request: ObjectId::from_bytes(id(&mut r)?),
+            },
             _ => return Err(Error("unknown frame continuation".into())),
         };
         let arguments = values(&mut r)?;

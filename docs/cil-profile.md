@@ -53,8 +53,8 @@ initializers are rejected until their resumable state is implemented.
 
 Floating point, small integer storage other than Boolean and Char, native integers,
 arbitrary structs, boxing, arrays, pointers, byrefs, generics, interfaces,
-virtual definitions, exception handling, and guest calls to external capabilities
-are unsupported. The host effect outbox is documented separately in
+virtual definitions, exception handling, and arbitrary external capabilities
+are unsupported. The explicit local model-call capability is documented in
 [the effect contract](effects.md).
 
 ## Supported instructions
@@ -106,6 +106,14 @@ transitions. Budget exhaustion pauses the context; another `Vm::run` call resume
 it. A fault retains the failing stack. Native Rust frames never represent
 suspended guest calls.
 
+The one effectful intrinsic is `Renraku.Model.Complete(string) -> string` in
+Renraku.CoreLib. It requires host opt-in, removes its non-null prompt into the
+outbox, and installs an explicit `AwaitEffect` continuation. Execution returns
+`RunOutcome::Waiting` until delivery commits both a response on the evaluation
+stack and a runnable continuation. This transition creates no callee frame.
+Restoration disables new model calls until the host opts in again; it can still
+inspect a waiting context without dispatching anything.
+
 ## Managed strings
 
 Strings are immutable heap objects with ordinary object identities and exact
@@ -116,8 +124,9 @@ conversion to Rust strings.
 
 The custom CoreLib explicitly declares Length, the Char indexer, two-argument
 Concat, and equality/inequality operators as InternalCall methods. The loader
-accepts only their exact names and signatures in Renraku.CoreLib. Other
-InternalCall methods are rejected. These bounded, pure runtime operations
+accepts only their exact names and signatures in Renraku.CoreLib, alongside the
+explicit model capability above. Other InternalCall methods are rejected.
+These bounded, pure string operations
 complete in a single guest call instruction; they leave no native frame to
 checkpoint. Creating strings through ordinary constructors is still unsupported.
 

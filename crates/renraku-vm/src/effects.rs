@@ -3,9 +3,11 @@
 use crate::{
     checkpoint::CheckpointStore,
     error::{Error, Result, require},
+    execution::{Continuation, ExecutionStatus},
     heap::MAX_STRING_UNITS,
     identity::{EffectId, ObjectId},
     runtime::Vm,
+    value::Value,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{path::Path, time::Duration};
@@ -70,6 +72,12 @@ impl Vm<'_> {
             .ok_or_else(|| Error(format!("unknown effect {id}")))
     }
     pub fn queue_model_request(&mut self, request: ObjectId) -> Result<EffectId> {
+        let effect = self.prepare_model_request(request)?;
+        let id = effect.id;
+        self.effects.insert(id, effect);
+        Ok(id)
+    }
+    pub(crate) fn prepare_model_request(&self, request: ObjectId) -> Result<EffectRecord> {
         require(
             self.heap.object(request)?.string_units().is_some(),
             "model request must be a managed string",
@@ -82,16 +90,12 @@ impl Vm<'_> {
         while self.effects.contains_key(&id) {
             id = EffectId::fresh();
         }
-        self.effects.insert(
+        Ok(EffectRecord {
             id,
-            EffectRecord {
-                id,
-                capability: "local.echo".into(),
-                request,
-                state: EffectState::Prepared,
-            },
-        );
-        Ok(id)
+            capability: "local.echo".into(),
+            request,
+            state: EffectState::Prepared,
+        })
     }
     fn model_request(&self, id: EffectId) -> Result<ModelRequest> {
         let record = self.effect(id)?;
@@ -148,8 +152,39 @@ impl Vm<'_> {
         units: Vec<u16>,
     ) -> Result<ObjectId> {
         let response = self.new_string(units)?;
+        let previous_context = self.context.clone();
+        if self.context.status == (ExecutionStatus::Waiting { effect: id }) {
+            let mut frame = self
+                .context
+                .frames
+                .last()
+                .ok_or_else(|| Error("waiting context has no frame".into()))?
+                .clone();
+            let Continuation::AwaitEffect {
+                effect,
+                request,
+                next,
+                ..
+            } = frame.continuation
+            else {
+                return Err(Error("waiting context has no effect continuation".into()));
+            };
+            require(
+                effect == id && request == self.effect(id)?.request,
+                "waiting effect does not match its request",
+            )?;
+            require(
+                frame.evaluation_stack.len() < self.current_method(&frame)?.max_stack,
+                "model result exceeds maxstack",
+            )?;
+            frame.evaluation_stack.push(Value::Reference(response));
+            frame.continuation = Continuation::Execute { next };
+            *self.context.frames.last_mut().unwrap() = frame;
+            self.context.status = ExecutionStatus::Runnable;
+        }
         self.effects.get_mut(&id).unwrap().state = EffectState::Completed { response };
         if let Err(error) = store.save(self) {
+            self.context = previous_context;
             self.effects.get_mut(&id).unwrap().state = EffectState::OutcomeUnknown {
                 reason: format!("response checkpoint failed: {error}"),
             };

@@ -1,9 +1,41 @@
 # Durable model-request outbox
 
-The current implementation provides a host API and CLI for durable requests to
-the `local.echo` capability. It establishes the external-effect recovery
-protocol before adding guest waiting continuations or connecting a real model.
-The provider returns `echo: ` followed by the exact UTF-16 request.
+The current implementation connects CIL callers, a host API, and CLI delivery
+to the durable `local.echo` capability. The provider returns `echo: ` followed
+by the exact UTF-16 request. A real model connection is later work.
+
+## Guest calls and waiting frames
+
+CoreLib declares `Renraku.Model.Complete(string) -> string` as an explicitly
+whitelisted InternalCall. Its exact owner, name, and signature are checked by
+the loader. It accepts a non-null managed string. The host must opt in through
+`Vm::set_model_calls_enabled(true)` or the trailing `--allow-model-calls` flag
+on `run`, `run-persistent`, or `resume`. This policy is disabled on every fresh
+VM and restore; a saved guest universe cannot grant host authorization.
+
+The call performs one guest transition: remove the prompt from the evaluation
+stack, create a prepared outbox record, install `AwaitEffect` in the active
+frame, and mark the execution `Waiting` for that effect ID. The continuation
+stores the call site, return offset, effect ID, and prompt object ID. Older
+callers remain ordinary `AwaitReturn` frames. No native stack represents a
+suspended guest call.
+
+`Vm::run` returns `RunOutcome::Waiting(effect)`. Further runs leave the context
+and instruction count unchanged while it waits. `run_checkpointed` saves this
+state before returning. Plain `run` is an in-memory operation; the host must
+checkpoint before expecting its work to survive.
+
+Dispatch or reconciliation commits the completed response, pushes its reference
+onto the waiting frame's evaluation stack, advances the continuation to its
+return offset, and marks the execution runnable **in the same checkpoint**.
+Guest execution resumes with the stored result. A failed response checkpoint
+restores the original waiting context in memory and keeps the effect uncertain.
+Completing an unrelated host request does not wake the guest.
+
+Recovery checks that the waiting status and active continuation name the same
+unfinished effect, prompt, and capability, that the call targets Model.Complete,
+and that offsets and the post-argument stack shape are valid. Only the active
+frame may await an effect. Intrinsic methods themselves never have saved frames.
 
 ## Request state and commits
 
@@ -71,7 +103,7 @@ checks reject stale writes; they are not a distributed ownership or provider
 locking protocol. Snapshot forks and restores must not become independent
 effect dispatchers.
 
-## Current boundary and next milestone
+## Demonstration and current limits
 
 The CLI commands are `queue-model`, `dispatch-model`, `reconcile-model`, and
 `inspect-checkpoint`. Queue accepts a UTF-8 command-line prompt; the Rust API
@@ -79,20 +111,18 @@ and persistent representation preserve arbitrary UTF-16 units, including
 embedded NULs and lone surrogates. Requests and responses share the current
 one-million-unit string limit.
 
-Host code can pass a response reference to an ordinary CIL method. The tests
-do this through `Simulation.ConsumeModelReply`, then checkpoint and collect
-the outbox while static guest storage retains the response.
-
-The next milestone must let an ordinary CIL call create request intent and a
-portable waiting continuation in one guest transition. Delivery must commit
-the response together with making that continuation runnable. Conversation
-history can use linked managed objects; arrays and generic collections are
-unnecessary for this initial workload.
+`Simulation.ModelHarness` stores conversation history in ordinary linked
+`ModelMessage` objects, makes two requests through three nested CIL frames,
+and returns 417 in 158 guest instructions. The first response becomes the next
+prompt with the same managed object ID. Static guest storage retains all four
+messages after completed outbox records are forgotten and collected. The
+CoreCLR reference uses an echo shim; it is excluded from the persistent guest
+assemblies.
 
 There is no real model connection, credential storage, streaming, tool
-execution, cancellation, automatic retry, or guest-visible model-call intrinsic
-yet. Experiment branches must default to effects disabled. A real adapter needs
-an explicit capability identity, request schema, and reconciliation policy.
+execution, cancellation, automatic retry, or automatic delivery loop yet.
+Experiment branches must default to effects disabled. A real adapter needs an
+explicit capability identity, request schema, and reconciliation policy.
 
 ## Recovery tests
 
@@ -108,6 +138,14 @@ The integration suite checks:
   response without another submission.
 - Failed response commits cannot return uncommitted cached results; reload and
   reconciliation complete the request.
+- The linked CIL conversation restores at every instruction and effect boundary
+  and matches CoreCLR. Repeated process kills retain live waiting frames and
+  provider receipts without duplicate submission.
+- Killing before intent commit restores the prior guest state without an effect;
+  killing after response/wakeup commit restores a runnable frame with its result.
+- Disabled calls and null prompts fault with their original operands intact.
+  Malformed waiting continuations and completed effects still marked waiting
+  are rejected even with recomputed checksums.
 - Capability mismatch, idempotency-key reuse with changed data, duplicate effect
   IDs, malformed state tags, and missing payload objects fail explicitly.
-- Original format 1 and 2 checkpoints restore and upgrade to format 3.
+- Original format 1, 2, and 3 checkpoints restore and upgrade to format 4.

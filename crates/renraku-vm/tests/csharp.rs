@@ -11,6 +11,10 @@ use renraku_vm::{
 fn real_csharp_matches_coreclr_for_objects_branches_arithmetic_and_calls() {
     let program = program();
     for (name, expected) in &fixtures().reference {
+        // The effects suite drives and compares the model harness through its outbox.
+        if name == "ModelHarness" {
+            continue;
+        }
         let mut vm = Vm::new(&program);
         vm.start(entry(&program, name), Vec::new()).unwrap();
         let result = vm.run(100_000).unwrap();
@@ -41,6 +45,7 @@ fn each_instruction_can_pause_and_resume_with_nested_frames_and_constructor_stat
                 return;
             }
             RunOutcome::Paused => {}
+            RunOutcome::Waiting(_) => panic!("pure simulation unexpectedly waited for an effect"),
         }
         assert_eq!(vm.context().status, ExecutionStatus::Paused);
         saw_nested_calls |= vm.context().frames.len() >= 3;

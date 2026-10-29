@@ -43,7 +43,7 @@ row contains a generation, universe ID, payload format version, SHA-256 checksum
 and binary payload. The checksum detects damaged payloads; it is not an
 authentication mechanism.
 
-The writer emits payload format version 3 and still reads versions 1 and 2. All start
+The writer emits payload format version 4 and still reads versions 1, 2, and 3. All start
 with the eight bytes `RENRAKU\0` followed by a
 32-bit little endian version number and a 16-byte universe ID. It then records:
 
@@ -79,9 +79,16 @@ name, and a state tag. Tag 0 is prepared; tag 1 is in flight; tag 2 is completed
 and adds a response string ID; tag 3 is outcome unknown and adds a length-prefixed
 UTF-8 diagnostic. Versions 1 and 2 have no outbox and restore with it empty.
 
-The next successful commit writes version 3. Unmodified fixtures captured from
-the earlier writers verify restoration of active version 1 frames and exact
-version 2 strings, then upgrade without changing their identities.
+Version 4 adds execution status tag 4 (waiting), followed by its 16-byte effect
+ID, and frame continuation tag 2 (await effect), followed by call-site and return
+offsets, effect ID, and request string ID. Existing status and continuation tags
+are unchanged. The new tags are rejected under earlier payload versions.
+
+The next successful commit writes version 4. Unmodified fixtures captured from
+the earlier writers verify active version 1 frames, exact version 2 strings,
+and a version 3 completed effect alongside active frames, then upgrade without
+changing their identities. Host authorization for future model calls is never
+serialized; it defaults to disabled after restoration.
 
 Encoding orders identity maps deterministically. Decoding rejects duplicate
 bindings, fields, roots, and object identities, unknown tags or versions,
@@ -120,8 +127,13 @@ stack height and types, valid reachable instruction positions, and maxstack.
 Every non-active caller must await a callee matching its call instruction and
 code version. Return offsets must follow the saved call sites. Pending
 constructor results must have the allocated type. The active frame must point at
-an executable instruction. Completion status requires an empty stack of frames
-and a result matching the entry signature.
+an executable instruction or a valid capability call awaiting an effect.
+An effect waiter must match the waiting execution's effect ID and an unfinished
+outbox record, including the prompt reference and local.echo capability. Its
+call must target the exact Model.Complete intrinsic, its next offset must follow
+that call, and its stack must match the call position after removing the prompt.
+Completion status requires an empty stack of frames and a result matching the
+entry signature.
 
 This validator covers the supported profile and its checkpoint states. It is not
 a complete static CLI verifier or an isolation boundary for hostile code.
@@ -132,13 +144,16 @@ a complete static CLI verifier or an isolation boundary for hostile code.
 including completion. Intermediate automatic checkpoints mark the computation
 runnable. Exhausting the requested budget saves a paused computation. Restoring
 a snapshot preserves that status; the explicit `resume` command runs it again.
-Fault diagnostics and their original frames can also be checkpointed.
+Fault diagnostics and their original frames can also be checkpointed. A model
+call saves a waiting context and returns its effect ID; running it again before
+delivery makes no progress.
 
 Instructions and heap changes after the last commit may run again on recovery.
 That is safe for the current managed instruction set because their saved heap
 and stack state roll back together. The host [effect outbox](effects.md) commits
-its dispatch marker before calling a provider and records responses in the same
-universe snapshot. Guest calls waiting for external results are not yet supported.
+its dispatch marker before calling a provider. It commits the response, updated
+guest continuation and result stack, and runnable status in the same snapshot.
+Restoring does not dispatch effects or grant authorization for new model calls.
 
 `Vm::collect_garbage` traces the same object roots and removes unreachable
 objects from the live heap. Checkpoints also omit them. Current snapshots retain
@@ -178,3 +193,11 @@ submit, and a failed response commit cannot expose an uncommitted cached result.
 Process kills before and after local provider acceptance recover as uncertain;
 receipt lookup completes accepted requests without submitting again. Malformed
 outbox records are rejected even if their checksum has been recomputed.
+
+The linked conversation harness restores at every guest instruction and effect
+boundary. Process kills before intent commit, before provider acceptance, after
+acceptance, and after response/wakeup commit preserve the corresponding guest
+state. Repeated recovery completes two requests once each and retains all four
+linked messages, matching the CoreCLR reference. Additional corruption tests
+reject mismatched waiting IDs, prompts, call sites, offsets, stack shapes, and
+completed effects with waiting continuations.

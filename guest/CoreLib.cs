@@ -75,3 +75,11 @@ namespace System.Reflection
         public DefaultMemberAttribute(string name) { }
     }
 }
+namespace Renraku
+{
+    public static class Model
+    {
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern string Complete(string prompt);
+    }
+}

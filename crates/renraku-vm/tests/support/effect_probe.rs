@@ -3,6 +3,7 @@ use renraku_vm::{
     checkpoint::CheckpointStore,
     effects::{EffectState, LocalModelProvider, ModelProvider, ModelRequest},
     error::{Error, Result},
+    runtime::RunOutcome,
 };
 use std::io::{Read, Write};
 struct GatedProvider {
@@ -41,7 +42,12 @@ fn main() {
 }
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 3 || !matches!(args[2].as_str(), "before" | "after") {
+    if args.len() != 3
+        || !matches!(
+            args[2].as_str(),
+            "intent" | "before" | "after" | "committed"
+        )
+    {
         return Err(Error(
             "effect probe requires universe, provider ledger, and gate".into(),
         ));
@@ -49,6 +55,14 @@ fn run() -> Result<()> {
     let mut store = CheckpointStore::open(&args[0])?;
     let saved = store.load()?;
     let mut vm = saved.snapshot.restore()?;
+    if args[2] == "intent" {
+        vm.set_model_calls_enabled(true);
+        if !matches!(vm.run(10_000)?, RunOutcome::Waiting(_)) {
+            return Err(Error("guest did not reach an effect call".into()));
+        }
+        gate("before intent commit")?;
+        return Ok(());
+    }
     let id = vm
         .effects()
         .find(|effect| effect.state == EffectState::Prepared)
@@ -59,5 +73,8 @@ fn run() -> Result<()> {
         gate: args[2].clone(),
     };
     vm.dispatch_model(&mut store, id, &mut provider)?;
+    if args[2] == "committed" {
+        gate("after response and wakeup commit")?;
+    }
     Ok(())
 }

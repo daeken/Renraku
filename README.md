@@ -7,9 +7,9 @@ computations that survives the lifetime of its host process.
 
 The foundational crash-and-resume milestone is working: a C# computation with
 shared mutable objects and nested calls continues after its Rust host is forcibly
-terminated. A durable model-request outbox now tests uncertain external outcomes
-with a deterministic local provider. Connecting it to suspended CIL calls is the
-next step toward a basic LLM harness.
+terminated. A basic model harness also suspends nested C# calls around durable
+requests, reconciles uncertain outcomes with a deterministic local provider,
+and resumes a linked conversation after process crashes.
 
 ## Current implementation
 
@@ -30,6 +30,7 @@ returns **48** after **155 guest instructions**.
 - A strict, versioned primitive encoding for integer values and references.
 - A durable outbox with prepared, in-flight, uncertain, and completed requests.
   Local provider receipts support reconciliation after a process crash.
+- Portable CIL effect continuations with atomic response storage and guest wakeup.
 
 Atomic SQLite checkpoints save reachable objects, roots, statics, original
 assemblies, logical identity bindings, execution status, and active frames.
@@ -38,7 +39,7 @@ files or the .NET SDK. Checkpoint intervals and execution budgets are measured
 in guest instructions. The CLI can inspect both live and saved state.
 
 Live code replacement, type initializers, multiple simultaneous contexts, and
-guest calls to external capabilities remain to be implemented. The [CIL profile](docs/cil-profile.md)
+real model providers remain to be implemented. The [CIL profile](docs/cil-profile.md)
 and [checkpoint contract](docs/checkpoints.md) specify the current limits.
 
 ## Run the demonstration
@@ -87,16 +88,39 @@ calls. It contains no persistence, serialization, or restart code.
 Use `Renraku.Guest.Simulation::Strings` as the entry method to try a persistent
 conversation object containing embedded NULs, an emoji, and an unpaired
 surrogate. The result is **167861**. Checkpoints preserve its exact UTF-16 units.
-Existing format 1 and 2 universes remain readable and upgrade on their next commit.
+Existing format 1, 2, and 3 universes remain readable and upgrade on their next commit.
 
 Unexpected process termination restores the most recent committed checkpoint.
 Uncommitted instructions and their heap mutations are rolled back together.
 The recovery tests use actual process kills at controlled commit boundaries;
 see [checkpoint validation](docs/checkpoints.md#validation).
 
-## Try durable model delivery
+## Run a persistent C# model harness
 
-Use an existing universe, such as the one above:
+`Renraku.Model.Complete(string)` waits for a host-delivered response. The sample
+retains four linked messages across two calls, including a response reused as
+the next prompt. After compiling the guest, choose unused database paths:
+
+```sh
+cargo run -p renraku-vm -- run-persistent target/harness.db target/guest/Renraku.CoreLib.dll target/guest/Renraku.Simulation.dll Renraku.Guest.Simulation::ModelHarness --allow-model-calls
+cargo run -p renraku-vm -- dispatch-model target/harness.db target/harness-provider.db
+cargo run -p renraku-vm -- resume target/harness.db --allow-model-calls
+cargo run -p renraku-vm -- dispatch-model target/harness.db target/harness-provider.db
+cargo run -p renraku-vm -- resume target/harness.db --allow-model-calls
+```
+
+Each call saves a waiting CIL frame. Delivery commits the response and runnable
+frame together. The final result is **417** after **158 guest instructions**,
+matching CoreCLR with the deterministic echo substitute.
+
+Model calls require explicit host opt-in, which is disabled on every fresh VM
+and restore. `Vm::set_model_calls_enabled(true)` is the embedding equivalent of
+the trailing CLI flag. Running a waiting VM returns its effect ID immediately
+without submitting or advancing guest instructions.
+
+## Deliver and reconcile requests
+
+Host code can also queue requests independently in an existing universe:
 
 ```sh
 cargo run -p renraku-vm -- queue-model target/demo-universe.db "hello"
@@ -117,10 +141,10 @@ Reconciliation looks up the same effect ID. A missing receipt leaves the outcome
 unknown and does not trigger another submission. Keep the provider database to
 retain its receipts.
 
-This is a host API and CLI demonstration using a local echo substitute. Guest
-code can consume the stored managed response, but cannot yet suspend a CIL call
-waiting for one. Real model providers, streaming, tools, and explicit retry
-policies are later work. See the [effect contract](docs/effects.md).
+For a waiting harness, reconcile using its universe and provider paths, then
+resume with `--allow-model-calls`. This demonstration uses a local echo
+substitute. Real model providers, streaming, tools, and explicit retry policies
+are later work. See the [effect contract](docs/effects.md).
 
 ## Development and validation
 
@@ -131,7 +155,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The C# integration tests require the .NET 10 SDK. They build the custom CoreLib,
-compile the same guest source for both Renraku and CoreCLR, and compare eighteen
+compile the same guest source for both Renraku and CoreCLR, and compare nineteen
 results. Tests also single step through nested constructors and ordinary calls,
 check static storage across successive executions, enforce instruction and frame
 budgets, and reject unsupported or malformed assemblies. Focused CIL tests cover
@@ -143,7 +167,9 @@ stale writers, and repeated process kill/recovery cycles. The test suite also
 checks that readers see the previous checkpoint during an uncommitted write.
 Effect tests kill a process before and after provider acceptance, reconcile
 receipts without resubmission, reject stale dispatchers, and recover from a
-failed response checkpoint.
+failed response checkpoint. They also restore the harness at every instruction,
+kill hosts with live waiting CIL frames and after response/wakeup commit, and
+verify that linked conversation history survives outbox collection.
 
 The guest compiler uses Roslyn shipped with the SDK, with no NuGet package
 dependencies. Rust uses `uuid` for identities, `sha2` for checkpoint checksums,
@@ -156,11 +182,11 @@ compiler.
 unchanged. [The initial semantic contract](docs/semantics.md) records the working
 implementation choices, acceptance criteria, and the LLM harness recovery model.
 
-The next workload is an LLM harness. Strings and the host outbox now work;
-conversation collections can initially use ordinary linked managed objects.
-The next milestone is a portable waiting continuation for CIL calls, committing
-the response together with making the guest runnable. Broader introspection and
-live code evolution remain on the architecture roadmap.
+The local model harness now demonstrates strings, linked conversation history,
+durable requests, and waiting CIL callers. A bounded host driver can next
+coordinate execution and delivery while stopping on unresolved uncertainty.
+Real provider integration, broader introspection, and live code evolution remain
+on the architecture roadmap.
 
 [Progress and handoff](docs/progress.md) records the current state and the next
 implementation targets for recurring development.

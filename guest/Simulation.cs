@@ -191,6 +191,44 @@ namespace Renraku.Guest
             LastText = reply;
             return reply.Length;
         }
+        public static ModelConversation LastConversation;
+        public static int ModelHarness()
+        {
+            ModelConversation conversation = new ModelConversation();
+            LastConversation = conversation;
+            string reply = conversation.Ask("hello");
+            reply = conversation.Ask(reply);
+            return conversation.Count * 100 + reply.Length;
+        }
+        public static string NullModelPrompt() { return Renraku.Model.Complete(null); }
+    }
+    public sealed class ModelMessage
+    {
+        public string Text;
+        public ModelMessage Next;
+        public ModelMessage(string text) { Text = text; }
+    }
+    public sealed class ModelConversation
+    {
+        public ModelMessage First;
+        public ModelMessage Last;
+        public int Count;
+        private void Append(string text)
+        {
+            ModelMessage message = new ModelMessage(text);
+            if (Last == null) First = message;
+            else Last.Next = message;
+            Last = message;
+            Count = Count + 1;
+        }
+        public string Ask(string prompt)
+        {
+            Append(prompt);
+            string reply = Request(prompt);
+            Append(reply);
+            return reply;
+        }
+        private static string Request(string prompt) { return Renraku.Model.Complete(prompt); }
     }
     public sealed class Conversation
     {

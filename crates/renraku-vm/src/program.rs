@@ -35,6 +35,12 @@ pub(crate) enum StringIntrinsic {
     NotEqual,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Intrinsic {
+    String(StringIntrinsic),
+    ModelComplete,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Signature {
     pub instance: bool,
@@ -61,7 +67,7 @@ pub struct FieldDefinition {
 }
 #[derive(Debug)]
 pub struct Method {
-    pub(crate) intrinsic: Option<StringIntrinsic>,
+    pub(crate) intrinsic: Option<Intrinsic>,
     pub binding: MethodVersion,
     pub owner: TypeId,
     pub name: String,
@@ -493,12 +499,29 @@ impl Program {
                     )?;
                     let intrinsic = if method[1] == 0x1000 {
                         require(
-                            assembly == "Renraku.CoreLib"
-                                && program.types[&owner].name == "System.String"
-                                && method[0] == 0,
+                            assembly == "Renraku.CoreLib" && method[0] == 0,
                             "unrecognized InternalCall method",
                         )?;
-                        Some(string_intrinsic(&name, &signature, owner)?)
+                        Some(match program.types[&owner].name.as_str() {
+                            "System.String" => {
+                                Intrinsic::String(string_intrinsic(&name, &signature, owner)?)
+                            }
+                            "Renraku.Model" => {
+                                let string = SlotType::Reference(program.string_type()?);
+                                require(
+                                    name == "Complete"
+                                        && signature
+                                            == Signature {
+                                                instance: false,
+                                                parameters: vec![string],
+                                                result: Some(string),
+                                            },
+                                    "invalid model intrinsic signature",
+                                )?;
+                                Intrinsic::ModelComplete
+                            }
+                            _ => return Err(Error("unrecognized InternalCall method".into())),
+                        })
                     } else {
                         None
                     };

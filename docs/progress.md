@@ -1,7 +1,7 @@
 # Renraku progress and next work
 
 As of October 28, 2026, the core process crash-and-resume demonstration, managed
-strings, and host model-request outbox work. CIL is the execution foundation for all
+strings, and persistent local model harness work. CIL is the execution foundation for all
 persistent guest computation. External programs will require explicit capabilities
 and do not inherit persistence.
 
@@ -22,18 +22,26 @@ and do not inherit persistence.
   Reconciliation never falls back to submission; completed work is not resent.
 - Queue, dispatch, reconcile, and inspect CLI commands. A CIL method consumes a
   stored response as an ordinary managed string in the integration suite.
-- Payload format 3 with backward reading of formats 1 and 2. Preserve both
+- CIL `Renraku.Model.Complete` with portable AwaitEffect frames, waiting status,
+  and atomic response + result stack + runnable continuation checkpoints.
+  New model calls default to disabled on every fresh VM and restore; use
+  `set_model_calls_enabled(true)` or trailing CLI `--allow-model-calls`.
+- Linked C# conversation with two model calls and four messages. It returns 417
+  after 158 guest instructions, matching the CoreCLR echo reference shim.
+- Payload format 4 with backward reading of formats 1, 2, and 3. Preserve all
   checked-in legacy fixtures; they were captured from the earlier writers.
 
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
-CoreCLR comparisons for eighteen guest cases, per-instruction checkpoint tests,
+CoreCLR comparisons for nineteen guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 56 tests pass. Nine effect tests include SIGKILL before and after provider
-acceptance, missing receipt uncertainty, failed response commits, capability
-checks, malformed outbox recovery, and idempotency-key consistency.
+All 65 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+crash windows with live CIL frames, per-instruction harness recovery, missing
+receipt uncertainty, failed response rollback, malformed waiting continuations,
+capability checks, legacy outbox upgrade, and linked-history retention after GC.
+The full CLI harness was also exercised across fresh processes.
 
 On this host the shell may require `/Users/daeken/.cargo/bin/cargo` explicitly.
 The .NET 10 SDK is needed for compiler fixtures. Restore itself does not need it.
@@ -49,22 +57,18 @@ force-push, and preserve local commits if the remote is temporarily unavailable.
 
 ## Next implementation target
 
-Connect the host outbox to a portable waiting CIL continuation to build the first
-persistent LLM harness. See [the current effect contract](effects.md).
-Conversations can initially be linked managed objects, so general arrays,
-generics, and standard collections need not block the effect recovery proof.
+Add a bounded local host driver that coordinates checkpointed execution,
+dispatch of prepared requests, and receipt reconciliation for waiting calls.
+It must stop on an uncertain request with no receipt, never infer permission
+to retry, and enforce explicit instruction/effect budgets and host opt-in.
+Keep the manual CLI commands for inspecting and resolving individual steps.
+Test process recovery through the driver before connecting a real paid provider.
+See [the current effect contract](effects.md).
 
-Intent, dispatch, uncertain outcomes, managed responses, and local receipt
-lookup are implemented. Guest suspension and wakeup are not. Define a
-guest-visible capability call that records request intent and a waiting
-continuation together, then commit a response with making that continuation
-runnable. Extend recovery validation to check this relationship and the call's
-saved operands and result type. Keep every waiting frame portable.
-
-The next demonstration should run a linked conversation through multiple local
-requests and crash with a live waiting CIL frame. Cover termination before intent
-commit, after response commit but before guest execution, and repeated recovery.
-Continue using the deterministic local provider before selecting a real paid
-provider. Keep credentials outside managed objects. Preserve atomic heap/code/
-frame/effect checkpoints and existing format readers as the representation
-expands. General arrays and broader BCL support remain independent follow-on work.
+The current two-call harness and waiting continuation proof are complete.
+Conversation history already uses linked managed objects, so arrays, generics,
+and broader BCL support need not block host coordination. Keep credentials
+outside managed objects. Preserve atomic heap/code/frame/effect checkpoints,
+logical identities, and old readers as representations expand. Real provider
+selection, request schema, credential binding, and reconciliation guarantees
+remain explicit future decisions.

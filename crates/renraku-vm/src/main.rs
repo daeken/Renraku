@@ -14,7 +14,11 @@ fn main() {
     }
 }
 fn execute() -> Result<()> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
+    let mut args: Vec<_> = std::env::args().skip(1).collect();
+    let allow_model = args.last().is_some_and(|a| a == "--allow-model-calls");
+    if allow_model {
+        args.pop();
+    }
     const USAGE: &str = concat!(
         "usage: renraku-vm inspect <CoreLib.dll> <guest.dll>\n",
         "       renraku-vm run <CoreLib.dll> <guest.dll> <Type::Method> [instruction-budget]\n",
@@ -23,11 +27,20 @@ fn execute() -> Result<()> {
         "       renraku-vm inspect-checkpoint <universe.db>\n",
         "       renraku-vm queue-model <universe.db> <prompt>\n",
         "       renraku-vm dispatch-model <universe.db> <provider.db>\n",
-        "       renraku-vm reconcile-model <universe.db> <provider.db>",
+        "       renraku-vm reconcile-model <universe.db> <provider.db>\n",
+        "Append --allow-model-calls to run, run-persistent, or resume to enable local model calls.",
     );
     if args.as_slice() == ["--help"] || args.as_slice() == ["-h"] {
         println!("{USAGE}");
         return Ok(());
+    }
+    if allow_model
+        && !matches!(
+            args.first().map(String::as_str),
+            Some("run" | "run-persistent" | "resume")
+        )
+    {
+        return Err(Error(USAGE.into()));
     }
     match args.first().map(String::as_str) {
         Some("run-persistent") if (5..=7).contains(&args.len()) => {
@@ -41,6 +54,7 @@ fn execute() -> Result<()> {
             let guest = std::fs::read(&args[3])?;
             let program = Program::load(&[&core, &guest])?;
             let mut vm = Vm::new(&program);
+            vm.set_model_calls_enabled(allow_model);
             vm.start(program.entry(&args[4])?, Vec::new())?;
             let outcome = vm.run_checkpointed(
                 &mut store,
@@ -54,6 +68,7 @@ fn execute() -> Result<()> {
             let mut store = CheckpointStore::open(&args[1])?;
             let saved = store.load()?;
             let mut vm = saved.snapshot.restore()?;
+            vm.set_model_calls_enabled(allow_model);
             let outcome = vm.run_checkpointed(
                 &mut store,
                 number(args.get(2), 100_000)?,
@@ -199,8 +214,10 @@ fn execute() -> Result<()> {
             .transpose()?
             .unwrap_or(100_000);
         let mut vm = Vm::new(&program);
+        vm.set_model_calls_enabled(allow_model);
         vm.start(program.entry(entry)?, Vec::new())?;
         match vm.run(budget)? {
+            RunOutcome::Waiting(effect) => println!("waiting for model request: {effect}"),
             RunOutcome::Completed(result) => {
                 match result {
                     Some(Value::I32(v)) => println!("result: {v}"),
@@ -273,6 +290,7 @@ fn persistent_report(vm: &Vm<'_>, store: &CheckpointStore, outcome: RunOutcome) 
         store.generation()
     );
     match outcome {
+        RunOutcome::Waiting(effect) => println!("waiting for model request: {effect}"),
         RunOutcome::Paused => println!("paused: {} frames", vm.context().frames.len()),
         RunOutcome::Completed(result) => match result {
             Some(Value::I32(v)) => println!("result: {v}"),
