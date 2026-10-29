@@ -5,7 +5,7 @@ use renraku_vm::{
     driver::{DriverLimits, DriverStop},
     effects::{EffectState, LocalModelProvider},
     error::{Error, Result},
-    invocation::{InvocationRecord, InvocationState},
+    invocation::{InstanceCall, InvocationRecord, InvocationState},
     program::Program,
     runtime::{RunOutcome, Vm},
     value::Value,
@@ -50,6 +50,7 @@ fn execute() -> Result<()> {
         "       renraku-vm install-compilation <universe.db> <compiler.db> <compile-ID> <install-ID>\n",
         "       renraku-vm invoke <universe.db> <Type::Method> <instruction-budget> [i32:N|i64:N|object:ID|static:Type::Field|null ...]\n",
         "       renraku-vm invoke-once <universe.db> <request-ID> <Type::Method> <instruction-budget> [arguments ...]\n",
+        "       renraku-vm invoke-instance-once <universe.db> <request-ID> <Type::Method> <instruction-budget> <receiver-ID> [arguments ...]\n",
         "       renraku-vm invocation <universe.db> <request-ID>\n",
         "       renraku-vm queue-model <universe.db> <prompt>\n",
         "       renraku-vm dispatch-model <universe.db> <provider.db>\n",
@@ -218,8 +219,18 @@ fn execute() -> Result<()> {
             return Ok(());
         }
         Some(
-            "search" | "read-code" | "export-reference" | "install" | "invoke" | "invoke-once"
-            | "invocation" | "install-once" | "installation" | "agent-inspect" | "inspect-object"
+            "search"
+            | "read-code"
+            | "export-reference"
+            | "install"
+            | "invoke"
+            | "invoke-once"
+            | "invoke-instance-once"
+            | "invocation"
+            | "install-once"
+            | "installation"
+            | "agent-inspect"
+            | "inspect-object"
             | "inspect-static",
         ) => {
             let command = args[0].as_str();
@@ -232,6 +243,7 @@ fn execute() -> Result<()> {
                 "install" => (3..=19).contains(&args.len()),
                 "invoke" => (4..=132).contains(&args.len()),
                 "invoke-once" => (5..=133).contains(&args.len()),
+                "invoke-instance-once" => (6..=134).contains(&args.len()),
                 "invocation" => args.len() == 3,
                 "install-once" => args.len() == 4,
                 "installation" => args.len() == 3,
@@ -322,10 +334,11 @@ fn execute() -> Result<()> {
                         .ok_or_else(|| Error("invocation request ID is not recorded".into()))?;
                     print_json(&invocation_json(&args[2], record, &vm, store.generation()))?;
                 }
-                "invoke" | "invoke-once" => {
+                "invoke" | "invoke-once" | "invoke-instance-once" => {
                     let mut vm = saved.snapshot.restore()?;
-                    let method_index = if command == "invoke-once" { 3 } else { 2 };
-                    let values = args[method_index + 2..]
+                    let instance = command == "invoke-instance-once";
+                    let method_index = if command == "invoke" { 2 } else { 3 };
+                    let values = args[method_index + 2 + usize::from(instance)..]
                         .iter()
                         .map(|arg| {
                             if arg == "null" {
@@ -379,7 +392,17 @@ fn execute() -> Result<()> {
                         .collect::<Result<Vec<_>>>()?;
                     let method = program.entry(&args[method_index])?;
                     let budget = number(args.get(method_index + 1), 100_000)?;
-                    if command == "invoke-once" {
+                    if instance {
+                        let receiver = vm.resolve_object_id(&args[method_index + 2])?;
+                        let call = InstanceCall {
+                            method: program.method(method)?.binding,
+                            receiver,
+                            arguments: values,
+                        };
+                        let record =
+                            vm.invoke_instance_once(&mut store, &args[2], call, budget, 100)?;
+                        print_json(&invocation_json(&args[2], &record, &vm, store.generation()))?;
+                    } else if command == "invoke-once" {
                         let record =
                             vm.invoke_once(&mut store, &args[2], method, values, budget, 100)?;
                         print_json(&invocation_json(&args[2], &record, &vm, store.generation()))?;
@@ -719,9 +742,15 @@ fn invocation_json(
     } else {
         None
     };
-    json!({"format":1,"requestId":request,"execution":record.execution.to_string(),"checkpoint":generation,
+    let mut report = json!({"format":1,"requestId":request,"execution":record.execution.to_string(),"checkpoint":generation,
         "methodId":record.method.method.to_string(),"codeVersion":record.method.code.to_string(),
-        "state":state,"result":result,"diagnostic":message,"waitingEffect":waiting})
+        "state":state,"result":result,"diagnostic":message,"waitingEffect":waiting});
+    if record.receiver(vm).is_some() {
+        report["format"] = json!(2);
+        report["callKind"] = json!("instance");
+        report["receiver"] = value(Value::Reference(record.receiver(vm).unwrap()));
+    }
+    report
 }
 
 fn installation_json(

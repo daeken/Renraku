@@ -200,6 +200,55 @@ impl<'a> Vm<'a> {
         Ok(())
     }
     pub fn start(&mut self, entry: MethodId, arguments: Vec<Value>) -> Result<()> {
+        let method = self.program.method(entry)?;
+        require(!method.signature.instance, "entry method must be static")?;
+        self.start_pinned(method.binding, arguments)
+    }
+    /// Start an ordinary pinned instance entry with an explicit managed receiver.
+    /// Trusted host API; it grants no remote or sandbox authority.
+    pub fn start_instance(&mut self, call: crate::invocation::InstanceCall) -> Result<()> {
+        let method = self.entry_method(call.method)?;
+        require(
+            method.signature.instance,
+            "instance entry method must be an instance method",
+        )?;
+        let binding = call.method;
+        self.start_pinned(binding, call.frame_arguments())
+    }
+    pub(crate) fn entry_method(&self, binding: crate::execution::MethodVersion) -> Result<&Method> {
+        let method = self
+            .program
+            .methods
+            .get(&binding.code)
+            .ok_or_else(|| Error("missing pinned entry code version".into()))?;
+        require(
+            method.binding == binding
+                && method.intrinsic.is_none()
+                && (!method.signature.instance || !method.name.starts_with('.')),
+            "entry requires a matching ordinary non-constructor method",
+        )?;
+        Ok(method)
+    }
+    pub(crate) fn check_entry_arguments(&self, method: &Method, arguments: &[Value]) -> Result<()> {
+        let offset = usize::from(method.signature.instance);
+        require(
+            arguments.len() == method.signature.parameters.len() + offset,
+            "entry argument count does not match signature",
+        )?;
+        if method.signature.instance {
+            let receiver = self.receiver(arguments[0], method.owner)?;
+            require(
+                self.heap.object(receiver)?.domain() == crate::heap::AllocationDomain::Managed,
+                "durable instance entry requires a managed receiver",
+            )?;
+        }
+        self.check_parameters(method, &arguments[offset..])
+    }
+    pub(crate) fn start_pinned(
+        &mut self,
+        binding: crate::execution::MethodVersion,
+        arguments: Vec<Value>,
+    ) -> Result<()> {
         require(
             matches!(
                 self.context.status,
@@ -207,18 +256,14 @@ impl<'a> Vm<'a> {
             ),
             "an execution is already active",
         )?;
-        let method = self.program.method(entry)?;
-        require(
-            method.intrinsic.is_none(),
-            "intrinsics must be invoked from CIL",
-        )?;
-        require(!method.signature.instance, "entry method must be static")?;
-        self.check_parameters(method, &arguments)?;
-        self.entry = Some(method.binding);
+        let method = self.entry_method(binding)?;
+        self.check_entry_arguments(method, &arguments)?;
+        let frame = new_frame(method, arguments);
+        self.entry = Some(binding);
         self.context = ExecutionContext {
             id: ExecutionId::fresh(),
             status: ExecutionStatus::Runnable,
-            frames: vec![new_frame(method, arguments)],
+            frames: vec![frame],
         };
         Ok(())
     }

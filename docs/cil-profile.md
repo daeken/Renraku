@@ -405,6 +405,10 @@ remain unsupported; see the [suspension-first BCL direction](suspension.md).
 Completed or faulted contexts can be replaced by starting another execution
 while retaining the heap and static storage. The default managed frame limit
 is 1024 and is adjustable.
+Trusted host [instance entry](owner-calls.md) can explicitly pin a managed receiver
+and method/code. Receiver argument zero follows the saved instance signature;
+static entry APIs retain their original behavior. Durable owner grants/acceptance
+use this facility without adding a checkpoint value/frame kind.
 
 Every successful instruction ends at an inspectable safe point. Calls,
 constructor allocation, result production, and returns publish complete

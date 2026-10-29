@@ -240,3 +240,12 @@ compiler, installation, and invocation receipts. Its deterministic provider test
 model-selected actions and lost-result recovery; actual autonomous model
 acceptance still needs a foreground subscription run. Unknown inference outcomes
 continue to reconcile receipts without automatic resubmission.
+
+## Trusted instance entries
+
+The operator-only [instance invocation API/command](owner-calls.md) pins a managed
+receiver and exact method/code, retaining it as receipt/frame argument zero.
+`invoke-instance-once` uses host report format 2; existing static APIs, format-1
+reports and model actions remain unchanged. Owner-side grant acceptance builds
+on that API; the general workbench itself remains trusted and is not a child
+universe sandbox.

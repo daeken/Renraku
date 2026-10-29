@@ -11,6 +11,21 @@ use std::collections::BTreeSet;
 
 pub const MAX_INVOCATIONS: usize = 10_000;
 
+/// Explicit receiver and exact code binding for a trusted host instance entry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstanceCall {
+    pub method: MethodVersion,
+    pub receiver: ObjectId,
+    pub arguments: Vec<Value>,
+}
+impl InstanceCall {
+    pub(crate) fn frame_arguments(self) -> Vec<Value> {
+        let mut values = vec![Value::Reference(self.receiver)];
+        values.extend(self.arguments);
+        values
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InvocationState {
     Running,
@@ -26,6 +41,13 @@ pub struct InvocationRecord {
     pub state: InvocationState,
 }
 impl InvocationRecord {
+    pub fn receiver(&self, vm: &Vm<'_>) -> Option<ObjectId> {
+        vm.program
+            .methods
+            .get(&self.method.code)
+            .filter(|m| m.signature.instance)
+            .and_then(|_| self.arguments.first().and_then(Value::referenced_object))
+    }
     pub fn references(&self) -> impl Iterator<Item = ObjectId> + '_ {
         let result = match self.state {
             InvocationState::Completed { result } => result.and_then(|v| v.referenced_object()),
@@ -62,24 +84,8 @@ impl Vm<'_> {
                 executions.insert(record.execution),
                 "duplicate invocation execution identity",
             )?;
-            let method = self
-                .program
-                .methods
-                .get(&record.method.code)
-                .ok_or_else(|| crate::error::Error("missing invocation code version".into()))?;
-            require(
-                method.binding == record.method
-                    && !method.signature.instance
-                    && method.intrinsic.is_none(),
-                "invalid invocation method binding",
-            )?;
-            require(
-                record.arguments.len() == method.signature.parameters.len(),
-                "invalid invocation argument count",
-            )?;
-            for (value, slot) in record.arguments.iter().zip(&method.signature.parameters) {
-                self.check_value(*value, *slot)?;
-            }
+            let method = self.entry_method(record.method)?;
+            self.check_entry_arguments(method, &record.arguments)?;
             match &record.state {
                 InvocationState::Running => require(
                     record.execution == self.context.id
@@ -150,13 +156,62 @@ impl Vm<'_> {
         budget: u64,
         interval: u64,
     ) -> Result<InvocationRecord> {
+        let method = self.program.method(entry)?;
+        require(
+            !method.signature.instance,
+            "invoke_once requires a static method",
+        )?;
+        self.invoke_pinned_once(
+            store,
+            request_id,
+            method.binding,
+            arguments,
+            budget,
+            interval,
+        )
+    }
+    /// Durable instance entry: the receiver occupies argument zero in both the
+    /// frame and receipt, as determined by the retained method signature.
+    pub fn invoke_instance_once(
+        &mut self,
+        store: &mut CheckpointStore,
+        request_id: &str,
+        call: InstanceCall,
+        budget: u64,
+        interval: u64,
+    ) -> Result<InvocationRecord> {
+        let method = self.entry_method(call.method)?;
+        require(
+            method.signature.instance,
+            "instance invocation requires an instance method",
+        )?;
+        let binding = call.method;
+        self.invoke_pinned_once(
+            store,
+            request_id,
+            binding,
+            call.frame_arguments(),
+            budget,
+            interval,
+        )
+    }
+    fn invoke_pinned_once(
+        &mut self,
+        store: &mut CheckpointStore,
+        request_id: &str,
+        binding: MethodVersion,
+        arguments: Vec<Value>,
+        budget: u64,
+        interval: u64,
+    ) -> Result<InvocationRecord> {
         validate_request_id(request_id)?;
         require(
             !self.installations.contains_key(request_id),
             "request ID is already bound to an installation",
         )?;
         require(interval > 0, "checkpoint interval must be positive")?;
-        let method = self.program.method(entry)?;
+        let method = self.entry_method(binding)?;
+        self.check_entry_arguments(method, &arguments)?;
         if let Some(record) = self.invocations.get(request_id) {
             require(
                 record.method == method.binding && record.arguments == arguments,
@@ -174,7 +229,7 @@ impl Vm<'_> {
                 "invocation receipt limit reached",
             )?;
             let binding = method.binding;
-            self.start(entry, arguments.clone())?;
+            self.start_pinned(binding, arguments.clone())?;
             self.invocations.insert(
                 request_id.into(),
                 InvocationRecord {

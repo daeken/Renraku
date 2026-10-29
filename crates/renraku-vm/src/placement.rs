@@ -99,7 +99,13 @@ pub struct OwnerContext {
 }
 /// Bounded value profile for future call transport. References cannot be smuggled
 /// as owner-local ObjectIds, and scalar values are never implicitly boxed.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Argument {
     I32(i32),
     I64(i64),
@@ -168,7 +174,7 @@ struct WireGrant {
     code: String,
     revoked: bool,
 }
-fn id(text: &str) -> Result<[u8; 16]> {
+pub(crate) fn id(text: &str) -> Result<[u8; 16]> {
     require(
         text.len() == 32
             && text
@@ -572,7 +578,7 @@ pub fn authorize(
     let vm = saved.snapshot.restore()?;
     authorize_snapshot(&vm, context, authenticated_caller, id, access)
 }
-fn authorize_snapshot(
+pub(crate) fn authorize_snapshot(
     vm: &Vm<'_>,
     context: &OwnerContext,
     authenticated_caller: UniverseId,
@@ -627,14 +633,27 @@ fn authorize_snapshot(
         "owner placement/resource constraint is unsatisfied",
     )?;
     let declaration = grant_method(vm, grant, target)?;
+    check_arguments(vm, declaration, arguments)?;
+    Ok(AuthorizedCall {
+        observed_generation: vm.checkpoint_generation.get(),
+        registry_hash: registry.hash()?,
+        owner: registry.owner,
+        grant: id,
+        recipient: authenticated_caller,
+        object: *object,
+        method: *method,
+        arguments: arguments.clone(),
+    })
+}
+
+pub(crate) fn check_arguments(vm: &Vm<'_>, method: &Method, arguments: &[Argument]) -> Result<()> {
     require(
-        arguments.len() <= MAX_ARGUMENTS
-            && arguments.len() == declaration.signature.parameters.len(),
+        arguments.len() <= MAX_ARGUMENTS && arguments.len() == method.signature.parameters.len(),
         "method argument count mismatch",
     )?;
     let mut text_units = 0;
     let string = vm.program.string_type()?;
-    for (argument, slot) in arguments.iter().zip(&declaration.signature.parameters) {
+    for (argument, slot) in arguments.iter().zip(&method.signature.parameters) {
         let matches = match (argument, slot) {
             (Argument::I32(_), SlotType::I32) | (Argument::I64(_), SlotType::I64) => true,
             (Argument::I32(n), SlotType::Boolean) => matches!(n, 0 | 1),
@@ -659,14 +678,40 @@ fn authorize_snapshot(
         text_units <= MAX_CALL_TEXT_UNITS,
         "call text exceeds 8192 UTF-16 units",
     )?;
-    Ok(AuthorizedCall {
-        observed_generation: vm.checkpoint_generation.get(),
-        registry_hash: registry.hash()?,
-        owner: registry.owner,
-        grant: id,
-        recipient: authenticated_caller,
-        object: *object,
-        method: *method,
-        arguments: arguments.clone(),
-    })
+    Ok(())
+}
+pub(crate) fn check_owner_context(
+    vm: &Vm<'_>,
+    context: &OwnerContext,
+    owner: UniverseId,
+    epoch: u64,
+    object: ObjectId,
+) -> Result<()> {
+    let registry = required(vm)?;
+    require(
+        owner == registry.owner.universe
+            && epoch == registry.owner.epoch
+            && context.epoch == registry.owner.epoch
+            && context.node == registry.owner.node,
+        "owner universe/node/epoch mismatch",
+    )?;
+    let target = registry
+        .objects
+        .get(&object)
+        .ok_or_else(|| Error("owner target has no placement policy".into()))?;
+    require(
+        context.resources.len() <= MAX_RESOURCES,
+        "owner resource context exceeds its bound",
+    )?;
+    for name in &context.resources {
+        resource(name)?;
+    }
+    require(
+        target.placement.allowed_nodes.contains(&context.node)
+            && target
+                .placement
+                .required_resources
+                .is_subset(&context.resources),
+        "owner placement/resource constraint is unsatisfied",
+    )
 }

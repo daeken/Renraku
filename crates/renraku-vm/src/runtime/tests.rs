@@ -1037,3 +1037,38 @@ fn reference_casts_reject_scalars_preserve_identity_and_never_promote_transient_
         }
     }
 }
+
+#[test]
+fn instance_entry_receivers_reject_scalars_null_and_transient_domains_without_changing_context() {
+    let (mut p, id) = program(&[0x17, 0x2a], vec![], vec![], Some(SlotType::I32));
+    let binding = p.method(id).unwrap().binding;
+    p.methods.get_mut(&binding.code).unwrap().signature.instance = true;
+    let owner = p.method(id).unwrap().owner;
+    let mut vm = Vm::new(&p);
+    for bad in [Value::Null, Value::I32(1), Value::I64(1)] {
+        assert!(
+            vm.check_entry_arguments(p.method(id).unwrap(), &[bad])
+                .is_err()
+        );
+    }
+    let receiver = ObjectId::fresh();
+    vm.heap
+        .allocate(
+            receiver,
+            owner,
+            1,
+            crate::heap::AllocationDomain::Transient(crate::identity::ArenaId::fresh()),
+        )
+        .unwrap();
+    let context = vm.context().clone();
+    assert!(
+        vm.start_instance(crate::invocation::InstanceCall {
+            method: binding,
+            receiver,
+            arguments: vec![]
+        })
+        .is_err()
+    );
+    assert_eq!(vm.context(), &context);
+    assert_eq!(vm.instructions_executed(), 0);
+}

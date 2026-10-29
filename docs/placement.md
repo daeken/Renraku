@@ -4,7 +4,8 @@ The host-only `renraku_vm::placement` module implements the first preparatory
 slice of [networked objects](distributed-objects.md). It persists bounded
 fixed-owner placement policies and recipient-bound instance-method grants,
 then validates an access request against them without executing guest code.
-There is no network listener, remote reference, CIL wait, graph copy, ownership
+The [owner backend](owner-calls.md) now consumes these grants for durable CIL
+instance acceptance. There is no network listener, remote reference, CIL wait, graph copy, ownership
 transfer or hostile-code sandbox in this milestone.
 
 ## Identity and policies
@@ -53,12 +54,11 @@ argument profile is I32, I64, exact UTF-16 Text, or Null for a string slot.
 There are no ObjectId-valued arguments, implicit boxing, width coercion or
 Unicode normalization. Boolean values are 0/1; Char is 0..65535, including NUL
 and lone surrogates. Each text is at most 4096 units; the total is at most 8192.
-The declarations can be checked now; result projection still needs enforcement
-when a real invocation/transport layer is implemented.
+The [owner backend](owner-calls.md) now enforces bounded result projection for
+its actual instance calls; transport remains future work.
 
 `authorize` reloads the current checkpoint and takes the actual authenticated
-recipient separately from request
-owner/epoch/target/code/arguments. It checks the exact recipient, grant, target,
+recipient separately from request owner/epoch/target/code/arguments. It checks the exact recipient, grant, target,
 method/code, owner node/epoch, resource constraints and argument profile. A UUID
 claimed in a future network message is not authentication. There is no transport
 authentication implementation in this API; trusted host callers must establish
@@ -68,19 +68,19 @@ A method grant denies InspectObject, InspectType, ReadCode, ReadStatic,
 ReadField, WriteField, Discover, CopyGraph and MoveObject. In particular,
 copyable=true does not turn a method grant into a copy grant. Authorization
 returns its observed generation and registry hash with a preflight decision, not
-an executable capability token, and neither
-enters a guest frame nor reserves the one active context. A later admission must check/fence that generation atomically; a prior decision
-cannot authorize a new call after revocation or another checkpoint. Busy-owner admission,
-pinned instance invocation receipts, external-effect restrictions, result
-attenuation and accepted-operation reconciliation are subsequent work. A grant
+an executable capability token. It neither enters a frame nor reserves the active
+context. The [owner backend](owner-calls.md) now checks and fences authorization
+with actual acceptance, pinned instance receipts, effect restrictions and bounded
+results. A prior preflight decision cannot authorize a new call after revocation
+or another checkpoint. A grant
 describes intentional access to its method's behavior; it does not certify that
 body as pure or prevent that body from using the owner's trusted state.
 
 Grants cannot be rebound. Revocation is permanent in this version: an export
 retry returns the original revoked record, never reactivates it. Revocation
-checks currently apply to preflight only because no remote work is accepted
-here. Future accepted calls need their own finish/reconcile contract under the
-[network design](distributed-objects.md).
+deny new owner acceptance; already accepted owner calls can finish/reconcile
+under the [owner receipt contract](owner-calls.md). Network transport remains
+outside this preflight API.
 
 ## Checkpoints and retention
 

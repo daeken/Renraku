@@ -128,9 +128,12 @@ roots commit in existing format-7 checkpoints; recovery validates their original
 universe/type/code bindings. Revocation and exact preflight denial survive GC,
 failed commits and SDK-free native recovery. This implements the descriptors and
 validation permitted below, not remote invocation or a child security boundary.
-No network protocol or authentication implementation exists yet. Next connect
-these grants to durable owner acceptance and a real suspended CIL call across
-processes; keep preflight separate from execution admission and receipt replay.
+[Durable owner instance acceptance](owner-calls.md) now executes original objects
+with atomic intent/authority, pinned frames/receipts, revocation reconciliation
+and native SDK-free recovery. No network protocol/authentication or caller remote
+reference/wait implementation exists yet. Next connect this backend to the real
+two-process transport and suspended caller proof; owner-only recovery is partial
+evidence. Keep preflight separate from admission and receipt replay.
 
 ## First independently demonstrable network slice
 

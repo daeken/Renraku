@@ -55,6 +55,7 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
     vm.validate_invocations()?;
     vm.validate_installations()?;
     crate::placement::read(vm)?;
+    crate::owner::validate(vm)?;
     let retained = vm.retained_objects()?;
     let program = vm.program;
     for id in retained {
@@ -139,14 +140,7 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
         "saved frame limit is inconsistent",
     )?;
     if let Some(entry) = vm.entry {
-        let method = program
-            .methods
-            .get(&entry.code)
-            .ok_or_else(|| Error("missing entry code version".into()))?;
-        require(
-            method.binding == entry && !method.signature.instance,
-            "invalid saved entry binding",
-        )?;
+        let method = vm.entry_method(entry)?;
         if let Some(first) = vm.context.frames.first() {
             require(
                 first.method == entry,

@@ -727,14 +727,44 @@ and do not inherit persistence.
   live binding validation apply on save/recovery without a binary format change.
   Nine tests cover principal/epoch/placement/access denials, value/declaration
   bounds, full capacity, deterministic hashes, typed roots through static
-  replacement/GC/paused frames, malformed metadata/repaired-digest recovery, failed registration/export/
-  revocation commits and SDK-free native recovery with zero guest instructions.
+  replacement/GC/paused frames, malformed metadata/repaired-digest recovery,
+  failed registration/export/revocation commits and SDK-free native recovery with zero guest instructions.
   This is preparatory host preflight, not network transport/authentication,
   remote references/waits, ownership transfer, copying, global local-execution
   placement enforcement or a hostile-code sandbox. No new agent actions, guest
-  capabilities,
-  CoreLib bodies or value/frame/checkpoint fields were added. Format 7,
+  capabilities, CoreLib bodies or value/frame/checkpoint fields were added. Format 7,
   every old fixture and both demos remain unchanged. See [placement](placement.md).
+
+
+- Durable pinned instance entry and grant-checked owner acceptance now execute
+  ordinary CIL on the original receiver. InstanceCall holds exact method/code,
+  managed receiver and arguments; receiver argument zero is retained by both
+  frames and invocation receipts. Constructors/intrinsics/static mismatches,
+  wrong/missing code, incompatible/transient receivers and invalid slots reject.
+  Static APIs/agent actions keep their original contract. The operator-only
+  invoke-instance-once command uses report format 2 with receiver identity;
+  static report format 1 and checkpoint format 7 remain unchanged.
+  owner::accept checks the current placement/principal/epoch/grant/code/value
+  profile, excludes busy execution and commits immutable accepted input with
+  instance intent before any instruction. Exact retries resume/replay the same
+  execution, including after revocation; changed requests and new revoked calls
+  reject. Saved receiver/argument/result roots survive GC/static replacement.
+  Failed acceptance/terminal saves retain the prior committed continuation;
+  earlier mutations are not repeated and guest faults do not roll them back.
+  Acceptance roots/metadata validate on recovery, including repaired-digest
+  rejection. Limits are 128 operations, 64 KiB canonical metadata per operation,
+  256 reachable method versions/16384 instructions and existing bounded scalar/
+  String/null input. Transitive Model/external capability calls reject before
+  execution, while pure String intrinsics and ordinary owner mutations work.
+  Null/void differ; oversized immutable string results project a stable terminal
+  invalid result, and diagnostics are bounded with full receipts retained.
+  Nine integrations and two units cover instruction-cut/GC/frame/root recovery,
+  scope/epoch/code/busy/effect/bounds denial, permanent revocation, failed saves
+  and SDK-free native resume/replay. The original Counter reaches 19->26->23;
+  first owner replay stays 26 without another mutation. This is an executable
+  owner backend, not network transport/authentication, imported caller references/
+  waits or a hostile sandbox. CoreLib/old bodies, all original fixtures and both
+  demos remain unchanged. See [owner calls](owner-calls.md); no inference was used.
 
 
 ## Validation
@@ -743,7 +773,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 325 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 336 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -1047,10 +1077,11 @@ context per owner universe and separate checkpoints; initially reject remote
 field access/callbacks/nested remote effects explicitly. Timeout is not proof of
 non-acceptance or permission to copy/elect another owner. The bounded
 placement/grant descriptors and denial fixtures are implemented as preparatory
-[host preflight](placement.md). Now connect them to durable pinned instance
-invocation/owner acceptance and the actual two-process transport/wait proof;
-preflight alone must not be reported as network invocation or sandbox security.
-Then extend endowment security,
+[host preflight](placement.md). [Durable owner instance acceptance](owner-calls.md)
+is now implemented and verified, including revocation/receipt recovery. Next
+connect it to authenticated loopback transport and the caller's ordinary CIL
+reference/wait path. Owner-only native recovery is partial evidence, not complete
+network transparency or sandbox security. Then extend endowment security,
 returned references, graph copies, fenced mobility and cross-machine execution
 in independently verified steps. Preserve legacy readers and all current runtime,
 compiler, receipt, model/publication, library and demo contracts.

@@ -89,6 +89,8 @@ Counter through native recovery. The next development phase is
 [networked objects, placement and universe boundaries](docs/distributed-objects.md).
 [Fixed-owner placement and method-grant preflight](docs/placement.md) now persists
 explicit policies and denies ungranted access under its bounded host API.
+The [owner backend](docs/owner-calls.md) now executes pinned instance calls with
+atomic grant acceptance and durable reply reconciliation after revocation.
 Object-level remote references and hostile-code universe sandboxes remain
 unimplemented; localhost website serving does not provide them.
 

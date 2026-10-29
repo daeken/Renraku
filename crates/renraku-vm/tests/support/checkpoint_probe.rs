@@ -19,6 +19,78 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("owner") if args.len() == 7 => {
+            use renraku_vm::{
+                identity::GrantId,
+                owner::{self, OwnerCall, ReplyState},
+                placement::{self, Argument, OwnerContext},
+            };
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let vm = saved.snapshot.restore()?;
+            let registry =
+                placement::read(&vm)?.ok_or_else(|| Error("missing placement registry".into()))?;
+            let caller = UniverseId::from_bytes(
+                *uuid::Uuid::parse_str(&args[2])
+                    .map_err(|_| Error("invalid caller ID".into()))?
+                    .as_bytes(),
+            );
+            let grant_id = GrantId::from_bytes(
+                *uuid::Uuid::parse_str(&args[3])
+                    .map_err(|_| Error("invalid grant ID".into()))?
+                    .as_bytes(),
+            );
+            let grant = registry
+                .grants()
+                .find(|g| g.id == grant_id)
+                .ok_or_else(|| Error("unknown grant".into()))?;
+            let owner = registry.owner();
+            let context = OwnerContext {
+                node: owner.node,
+                epoch: owner.epoch,
+                resources: std::collections::BTreeSet::new(),
+            };
+            let call = OwnerCall {
+                operation: args[4].clone(),
+                owner: owner.universe,
+                epoch: owner.epoch,
+                grant: grant_id,
+                object: grant.object,
+                method: grant.method,
+                arguments: vec![Argument::I32(
+                    args[6].parse().map_err(|_| Error("invalid delta".into()))?,
+                )],
+            };
+            let reply = owner::accept(
+                &mut store,
+                &context,
+                caller,
+                &call,
+                args[5]
+                    .parse()
+                    .map_err(|_| Error("invalid budget".into()))?,
+            )?;
+            let state = match reply.state {
+                ReplyState::Pending => serde_json::json!({"state":"pending"}),
+                ReplyState::Completed(value) => {
+                    serde_json::json!({"state":"completed","result":value})
+                }
+                ReplyState::Faulted {
+                    diagnostic,
+                    truncated,
+                } => {
+                    serde_json::json!({"state":"faulted","diagnostic":diagnostic,"truncated":truncated})
+                }
+                ReplyState::InvalidResult { diagnostic } => {
+                    serde_json::json!({"state":"invalid_result","diagnostic":diagnostic})
+                }
+            };
+            println!(
+                "{}",
+                serde_json::json!({"execution":reply.execution.to_string(),"method":reply.method.method.to_string(),"code":reply.method.code.to_string(),"object":reply.object.to_string(),"reply":state})
+            );
+            Ok(())
+        }
         Some("placement") if args.len() == 4 => {
             use renraku_vm::{
                 identity::{GrantId, UniverseId},
