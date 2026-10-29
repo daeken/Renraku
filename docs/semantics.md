@@ -218,8 +218,11 @@ commit outside the universe transaction. A linked C# conversation makes two
 requests through portable waiting frames; response storage and guest wakeup
 commit together. The CLI can queue, dispatch, inspect, and reconcile requests.
 New guest model calls require explicit host opt-in on every fresh VM and restore.
-Real providers, automatic delivery coordination, streaming, tools, and explicit
-retry policies remain later work.
+The bounded host driver now coordinates execution and local delivery, counting
+guest instructions and provider submissions or lookups independently. It stops
+on a missing receipt and does not drain unrelated host requests. Its limits are
+per-invocation host policy; they are not durable spending quotas. Real providers,
+streaming, tools, and explicit retry policies remain later work.
 
 An in-flight record recovered without a committed response has an unknown
 outcome: the provider may have accepted and charged for the request. The runtime

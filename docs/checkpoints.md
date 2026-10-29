@@ -201,3 +201,10 @@ state. Repeated recovery completes two requests once each and retains all four
 linked messages, matching the CoreCLR reference. Additional corruption tests
 reject mismatched waiting IDs, prompts, call sites, offsets, stack shapes, and
 completed effects with waiting continuations.
+
+The bounded host driver uses the same checkpoint and delivery paths. Tests kill
+its process during the first and second submissions and after completion, then
+resume with exact instruction and provider-operation accounting. Missing receipts
+leave a waiting guest without resubmission. Budget stops and guest fault
+diagnostics are saved, and a stale waiting driver cannot invoke a provider.
+The driver adds no persistent state and continues to write payload format 4.

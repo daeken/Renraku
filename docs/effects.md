@@ -79,6 +79,48 @@ return their saved response without a provider call. Only completed records
 can be forgotten; callers must save that removal and retain any response still
 needed by the guest.
 
+## Bounded host driver
+
+`Vm::drive_model(store, provider, DriverLimits)` coordinates checkpointed guest
+execution and delivery of the active guest's waiting request. The current driver
+requires host opt-in and a local.echo provider. It does not drain unrelated
+host-created outbox records.
+
+The caller supplies an instruction budget, a provider-operation budget, and a
+positive checkpoint interval. Both submissions and reconciliation lookups consume
+one provider operation, including a lookup that finds no receipt. Instructions
+are charged by actual execution, so stopping early at a call does not consume
+the unused part of a chunk. Budgets reset on each explicit driver invocation;
+they are host policy, not durable quotas. Budgets that would overflow the
+cumulative instruction counter are rejected before execution.
+
+The report identifies completion, instruction exhaustion, provider-operation
+exhaustion at a waiting call, or an unresolved outcome, with exact usage counts.
+Every successful return saves the final state. Exhausting the instruction budget
+leaves an ordinary runnable computation paused. A provider budget of zero still
+allows pure guest execution until it waits or completes. An instruction budget
+of zero still allows delivery to an already waiting caller, after which it pauses
+without executing another instruction.
+
+A prepared waiting effect follows the existing dispatch protocol. An uncertain
+effect gets one receipt lookup; no receipt saves the waiting state and stops.
+A submission or lookup error returns immediately without an automatic retry
+or a second provider operation. A later explicit invocation may reconcile.
+Guest faults are saved with their original frames and diagnostics before their
+error is returned. Checkpoint failures remain errors, with no successful report.
+
+The CLI form is:
+
+```text
+drive-local <universe.db> <provider.db> <instruction-budget> <provider-operation-budget> [checkpoint-interval] --allow-model-calls
+```
+
+It loads an existing universe and returns a nonzero status on unresolved
+uncertainty or another error. Budget exhaustion returns normally with the saved
+stop reason. The interval defaults to 100 guest instructions. Limits bound
+operation counts, not wall-clock time or the duration of a synchronous provider
+call. The CLI does not connect to a remote model.
+
 ## Local provider ledger
 
 `LocalModelProvider` stores receipts in a separate SQLite database using WAL
@@ -120,7 +162,7 @@ CoreCLR reference uses an echo shim; it is excluded from the persistent guest
 assemblies.
 
 There is no real model connection, credential storage, streaming, tool
-execution, cancellation, automatic retry, or automatic delivery loop yet.
+execution, cancellation, or automatic retry yet.
 Experiment branches must default to effects disabled. A real adapter needs an
 explicit capability identity, request schema, and reconciliation policy.
 
@@ -149,3 +191,9 @@ The integration suite checks:
 - Capability mismatch, idempotency-key reuse with changed data, duplicate effect
   IDs, malformed state tags, and missing payload objects fail explicitly.
 - Original format 1, 2, and 3 checkpoints restore and upgrade to format 4.
+- The driver obeys independent instruction and operation budgets across fresh
+  invocations, including zero budgets, and leaves unrelated outbox records alone.
+- Actual process kills during the driver's first and second submissions recover
+  via receipt lookup; a kill after driver completion does not resend anything.
+- Missing receipts stop the driver and CLI without guest progress or submission.
+  Faults, authorization failures, and stale waiting drivers remain explicit.

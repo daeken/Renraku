@@ -99,24 +99,32 @@ see [checkpoint validation](docs/checkpoints.md#validation).
 
 `Renraku.Model.Complete(string)` waits for a host-delivered response. The sample
 retains four linked messages across two calls, including a response reused as
-the next prompt. After compiling the guest, choose unused database paths:
+the next prompt. After compiling the guest, choose unused database paths. Save
+the entry state with a zero instruction budget, then run the bounded driver:
 
 ```sh
-cargo run -p renraku-vm -- run-persistent target/harness.db target/guest/Renraku.CoreLib.dll target/guest/Renraku.Simulation.dll Renraku.Guest.Simulation::ModelHarness --allow-model-calls
-cargo run -p renraku-vm -- dispatch-model target/harness.db target/harness-provider.db
-cargo run -p renraku-vm -- resume target/harness.db --allow-model-calls
-cargo run -p renraku-vm -- dispatch-model target/harness.db target/harness-provider.db
-cargo run -p renraku-vm -- resume target/harness.db --allow-model-calls
+cargo run -p renraku-vm -- run-persistent target/harness.db target/guest/Renraku.CoreLib.dll target/guest/Renraku.Simulation.dll Renraku.Guest.Simulation::ModelHarness 0
+cargo run -p renraku-vm -- drive-local target/harness.db target/harness-provider.db 1000 2 --allow-model-calls
 ```
 
-Each call saves a waiting CIL frame. Delivery commits the response and runnable
-frame together. The final result is **417** after **158 guest instructions**,
-matching CoreCLR with the deterministic echo substitute.
+The driver executes and checkpoints CIL, dispatches prepared waiting calls,
+and reconciles recovered uncertain calls. Delivery commits the response and
+runnable frame together. The final result is **417** after **158 guest
+instructions** and **2 provider operations**, matching CoreCLR with the
+deterministic echo substitute.
+
+The two explicit budgets limit guest instructions and provider operations for
+that invocation. Both submissions and receipt lookups count as operations.
+Use a provider budget of 1 to stop at the second waiting call, then invoke
+`drive-local` again to finish. A missing receipt stops with an uncertain outcome
+and never triggers another submission. Budgets reset on each explicit invocation;
+they bound counts, rather than provider latency or lifetime spending.
 
 Model calls require explicit host opt-in, which is disabled on every fresh VM
 and restore. `Vm::set_model_calls_enabled(true)` is the embedding equivalent of
 the trailing CLI flag. Running a waiting VM returns its effect ID immediately
-without submitting or advancing guest instructions.
+without submitting or advancing guest instructions. Manual `dispatch-model`,
+`reconcile-model`, and `resume` commands remain available for individual steps.
 
 ## Deliver and reconcile requests
 
@@ -141,8 +149,9 @@ Reconciliation looks up the same effect ID. A missing receipt leaves the outcome
 unknown and does not trigger another submission. Keep the provider database to
 retain its receipts.
 
-For a waiting harness, reconcile using its universe and provider paths, then
-resume with `--allow-model-calls`. This demonstration uses a local echo
+For a waiting harness, `drive-local` can reconcile and resume within its budgets.
+Alternatively, reconcile using its universe and provider paths, then resume
+with `--allow-model-calls`. This demonstration uses a local echo
 substitute. Real model providers, streaming, tools, and explicit retry policies
 are later work. See the [effect contract](docs/effects.md).
 
@@ -170,6 +179,9 @@ receipts without resubmission, reject stale dispatchers, and recover from a
 failed response checkpoint. They also restore the harness at every instruction,
 kill hosts with live waiting CIL frames and after response/wakeup commit, and
 verify that linked conversation history survives outbox collection.
+Driver tests enforce instruction and provider-operation budgets, recover actual
+process kills during automatic delivery, stop on missing receipts, and retain
+fault diagnostics and stale-writer protection.
 
 The guest compiler uses Roslyn shipped with the SDK, with no NuGet package
 dependencies. Rust uses `uuid` for identities, `sha2` for checkpoint checksums,
@@ -183,10 +195,10 @@ unchanged. [The initial semantic contract](docs/semantics.md) records the workin
 implementation choices, acceptance criteria, and the LLM harness recovery model.
 
 The local model harness now demonstrates strings, linked conversation history,
-durable requests, and waiting CIL callers. A bounded host driver can next
-coordinate execution and delivery while stopping on unresolved uncertainty.
-Real provider integration, broader introspection, and live code evolution remain
-on the architecture roadmap.
+durable requests, waiting CIL callers, and bounded automatic execution and
+delivery. Structured model requests and explicit durable provider bindings are
+the next preparation for a real adapter. Real provider integration, broader
+introspection, and live code evolution remain on the architecture roadmap.
 
 [Progress and handoff](docs/progress.md) records the current state and the next
 implementation targets for recurring development.

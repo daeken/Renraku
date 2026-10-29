@@ -1,5 +1,6 @@
 use renraku_vm::{
     checkpoint::CheckpointStore,
+    driver::{DriverLimits, DriverStop},
     effects::{EffectState, LocalModelProvider},
     error::{Error, Result},
     program::Program,
@@ -28,6 +29,7 @@ fn execute() -> Result<()> {
         "       renraku-vm queue-model <universe.db> <prompt>\n",
         "       renraku-vm dispatch-model <universe.db> <provider.db>\n",
         "       renraku-vm reconcile-model <universe.db> <provider.db>\n",
+        "       renraku-vm drive-local <universe.db> <provider.db> <instruction-budget> <provider-operation-budget> [checkpoint-interval] --allow-model-calls\n",
         "Append --allow-model-calls to run, run-persistent, or resume to enable local model calls.",
     );
     if args.as_slice() == ["--help"] || args.as_slice() == ["-h"] {
@@ -37,12 +39,58 @@ fn execute() -> Result<()> {
     if allow_model
         && !matches!(
             args.first().map(String::as_str),
-            Some("run" | "run-persistent" | "resume")
+            Some("run" | "run-persistent" | "resume" | "drive-local")
         )
     {
         return Err(Error(USAGE.into()));
     }
     match args.first().map(String::as_str) {
+        Some("drive-local") if (5..=6).contains(&args.len()) => {
+            if !allow_model {
+                return Err(Error("drive-local requires --allow-model-calls".into()));
+            }
+            let budget = |index: usize, name: &str| {
+                args[index]
+                    .parse::<u64>()
+                    .map_err(|_| Error(format!("invalid {name} budget")))
+            };
+            let limits = DriverLimits {
+                instructions: budget(3, "instruction")?,
+                provider_operations: budget(4, "provider operation")?,
+                checkpoint_interval: number(args.get(5), 100)?,
+            };
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let mut vm = saved.snapshot.restore()?;
+            vm.set_model_calls_enabled(true);
+            let mut provider = LocalModelProvider::open(&args[2])?;
+            let report = vm.drive_model(&mut store, &mut provider, limits)?;
+            let outcome = match report.stop {
+                DriverStop::Completed(result) => RunOutcome::Completed(result),
+                DriverStop::InstructionBudget => RunOutcome::Paused,
+                DriverStop::ProviderBudget { effect } | DriverStop::OutcomeUnknown { effect } => {
+                    RunOutcome::Waiting(effect)
+                }
+            };
+            persistent_report(&vm, &store, outcome);
+            println!(
+                "instructions this run: {}\nprovider operations: {}",
+                report.instructions, report.provider_operations
+            );
+            match report.stop {
+                DriverStop::Completed(_) => {}
+                DriverStop::InstructionBudget => println!("stopped: instruction budget exhausted"),
+                DriverStop::ProviderBudget { .. } => {
+                    println!("stopped: provider operation budget exhausted")
+                }
+                DriverStop::OutcomeUnknown { effect } => {
+                    return Err(Error(format!(
+                        "effect {effect} still has an uncertain outcome; no receipt available; guest remains waiting"
+                    )));
+                }
+            }
+            return Ok(());
+        }
         Some("run-persistent") if (5..=7).contains(&args.len()) => {
             let mut store = CheckpointStore::open(&args[1])?;
             if store.generation() != 0 {

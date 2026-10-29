@@ -1,6 +1,7 @@
 //! Gates actual subprocess crashes before and after provider acceptance.
 use renraku_vm::{
     checkpoint::CheckpointStore,
+    driver::DriverLimits,
     effects::{EffectState, LocalModelProvider, ModelProvider, ModelRequest},
     error::{Error, Result},
     runtime::RunOutcome,
@@ -9,6 +10,7 @@ use std::io::{Read, Write};
 struct GatedProvider {
     inner: LocalModelProvider,
     gate: String,
+    submissions: usize,
 }
 fn gate(label: &str) -> Result<()> {
     println!("READY {label}");
@@ -21,11 +23,12 @@ impl ModelProvider for GatedProvider {
         self.inner.capability()
     }
     fn submit(&mut self, request: &ModelRequest) -> Result<Vec<u16>> {
+        self.submissions += 1;
         if self.gate == "before" {
             gate("before acceptance")?;
         }
         let response = self.inner.submit(request)?;
-        if self.gate == "after" {
+        if self.gate == "after" || self.gate == "second-after" && self.submissions == 2 {
             gate("after acceptance")?;
         }
         Ok(response)
@@ -45,7 +48,14 @@ fn run() -> Result<()> {
     if args.len() != 3
         || !matches!(
             args[2].as_str(),
-            "intent" | "before" | "after" | "committed"
+            "intent"
+                | "before"
+                | "after"
+                | "committed"
+                | "driver-before"
+                | "driver-after"
+                | "driver-second-after"
+                | "driver-completed"
         )
     {
         return Err(Error(
@@ -55,6 +65,27 @@ fn run() -> Result<()> {
     let mut store = CheckpointStore::open(&args[0])?;
     let saved = store.load()?;
     let mut vm = saved.snapshot.restore()?;
+    if let Some(mode) = args[2].strip_prefix("driver-") {
+        vm.set_model_calls_enabled(true);
+        let mut provider = GatedProvider {
+            inner: LocalModelProvider::open(&args[1])?,
+            gate: mode.to_owned(),
+            submissions: 0,
+        };
+        vm.drive_model(
+            &mut store,
+            &mut provider,
+            DriverLimits {
+                instructions: 1000,
+                provider_operations: 8,
+                checkpoint_interval: 7,
+            },
+        )?;
+        if mode == "completed" {
+            gate("after driver completion commit")?;
+        }
+        return Ok(());
+    }
     if args[2] == "intent" {
         vm.set_model_calls_enabled(true);
         if !matches!(vm.run(10_000)?, RunOutcome::Waiting(_)) {
@@ -71,6 +102,7 @@ fn run() -> Result<()> {
     let mut provider = GatedProvider {
         inner: LocalModelProvider::open(&args[1])?,
         gate: args[2].clone(),
+        submissions: 0,
     };
     vm.dispatch_model(&mut store, id, &mut provider)?;
     if args[2] == "committed" {

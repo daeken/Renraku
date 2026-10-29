@@ -28,6 +28,10 @@ and do not inherit persistence.
   `set_model_calls_enabled(true)` or trailing CLI `--allow-model-calls`.
 - Linked C# conversation with two model calls and four messages. It returns 417
   after 158 guest instructions, matching the CoreCLR echo reference shim.
+- Bounded `Vm::drive_model` and `drive-local` CLI coordinate checkpointed execution,
+  prepared dispatch, and uncertain receipt lookup. Explicit per-invocation
+  instruction and provider-operation budgets include zero budgets. Missing
+  receipts stop without retry; unrelated host outbox work is left alone.
 - Payload format 4 with backward reading of formats 1, 2, and 3. Preserve all
   checked-in legacy fixtures; they were captured from the earlier writers.
 
@@ -37,11 +41,14 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for nineteen guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 65 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 77 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
-The full CLI harness was also exercised across fresh processes.
+Twelve driver tests cover budget accounting, automatic delivery, first/second
+submission and completion SIGKILL recovery, missing receipts, stale writers,
+fault persistence, and CLI authorization and recovery. The full CLI harness
+also runs end to end with `drive-local`.
 
 On this host the shell may require `/Users/daeken/.cargo/bin/cargo` explicitly.
 The .NET 10 SDK is needed for compiler fixtures. Restore itself does not need it.
@@ -57,18 +64,16 @@ force-push, and preserve local commits if the remote is temporarily unavailable.
 
 ## Next implementation target
 
-Add a bounded local host driver that coordinates checkpointed execution,
-dispatch of prepared requests, and receipt reconciliation for waiting calls.
-It must stop on an uncertain request with no receipt, never infer permission
-to retry, and enforce explicit instruction/effect budgets and host opt-in.
-Keep the manual CLI commands for inspecting and resolving individual steps.
-Test process recovery through the driver before connecting a real paid provider.
-See [the current effect contract](effects.md).
+The bounded local driver and two-call crash-recovery proof are complete.
+Prepare a structured model request and explicit durable provider binding before
+adding a real adapter: identify the capability/model and preserve linked role/
+content messages, so replay cannot silently use a different model or configuration.
+Keep the deterministic local adapter and its crash tests as the first consumer;
+arrays and generic collections need not block this work.
 
-The current two-call harness and waiting continuation proof are complete.
-Conversation history already uses linked managed objects, so arrays, generics,
-and broader BCL support need not block host coordination. Keep credentials
-outside managed objects. Preserve atomic heap/code/frame/effect checkpoints,
-logical identities, and old readers as representations expand. Real provider
-selection, request schema, credential binding, and reconciliation guarantees
-remain explicit future decisions.
+No real provider has been selected or connected. Obtain the user's choice when
+ready to implement that adapter, and establish its actual receipt/idempotency
+guarantees before permitting uncertain retry. Keep credentials outside managed
+objects and keep host opt-in and limits independent of saved guest state.
+Preserve atomic heap/code/frame/effect checkpoints, logical identities, and old
+readers as representations expand. See [the current effect contract](effects.md).
