@@ -334,6 +334,52 @@ fn integer_negation_wraps_minima_and_preserves_invalid_reference_operands() {
 }
 
 #[test]
+fn small_width_conversions_truncate_then_extend_and_reject_reference_operands() {
+    for (opcode, input, expected) in [
+        (0x67, Value::I32(0xff), -1),
+        (0xd2, Value::I32(-1), 255),
+        (0x68, Value::I64(0x12345678_ffff8000), -32768),
+        (0xd1, Value::I64(-1), 65535),
+        (0x67, Value::I64(0x12345678_ffffff80), -128),
+        (0xd2, Value::I64(-256), 0),
+        (0x68, Value::I32(0x10000), 0),
+        (0xd1, Value::I32(0x1d800), 0xd800),
+    ] {
+        assert_eq!(
+            eval(&[2, opcode, 0x2a], vec![input], vec![], SlotType::I32).unwrap(),
+            completed(expected)
+        );
+    }
+    for opcode in [0x67, 0x68, 0xd1, 0xd2] {
+        for object in [false, true] {
+            let (program, method) =
+                program(&[0x14, opcode, 0x2a], vec![], vec![], Some(SlotType::I32));
+            let mut vm = Vm::new(&program);
+            vm.start(method, vec![]).unwrap();
+            vm.run(1).unwrap();
+            if object {
+                let id = ObjectId::fresh();
+                vm.heap
+                    .allocate(
+                        id,
+                        program.method(method).unwrap().owner,
+                        1,
+                        crate::heap::AllocationDomain::Managed,
+                    )
+                    .unwrap();
+                vm.context.frames[0].evaluation_stack[0] = Value::Reference(id);
+            }
+            let before = vm.context().clone();
+            let error = vm.run(1).unwrap_err();
+            assert!(error.0.contains("requires an integer"));
+            assert!(error.0.contains("IL_0001"));
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 1);
+        }
+    }
+}
+
+#[test]
 fn every_integer_constant_encoding_preserves_its_exact_bits() {
     for (opcode, expected) in (0x15..=0x1e).zip(-1..=8) {
         assert_eq!(

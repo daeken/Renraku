@@ -478,6 +478,13 @@ fn stack_shapes(program: &Program, method: &Method) -> Result<BTreeMap<u32, Vec<
                 require(!reference(value), "invalid shift value type")?;
                 stack.push(value);
             }
+            Op::ConvertI8 | Op::ConvertU8 | Op::ConvertI16 | Op::ConvertU16 => {
+                require(
+                    !reference(pop(&mut stack)?),
+                    "invalid small-width conversion operand",
+                )?;
+                stack.push(Kind::I32);
+            }
             Op::ConvertI32 => {
                 require(
                     !reference(pop(&mut stack)?),

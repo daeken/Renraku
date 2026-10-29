@@ -410,6 +410,10 @@ remain unsupported.
 Unary integer `-value` is supported: unchecked CIL negation preserves width, and
 signed minimum remains unchanged. C# uint unary minus first widens to Int64.
 This differs from the terminal signed-minimum division/remainder fault policy.
+Unchecked small-width casts are also supported: conv.i1/conv.i2 truncate to 8/16
+bits then sign-extend into I32; conv.u1/conv.u2 zero-extend. Use supported integer
+signatures and Char return/store slots. Byte/SByte/Int16/UInt16 storage signatures,
+fields and locals remain unsupported; casts do not add those storage kinds.
 
 After an operator installs the [managed integer text library](integer-text.md),
 search/describe `Renraku.Text.IntegerText` before compiling callers against its

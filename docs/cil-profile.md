@@ -83,6 +83,8 @@ IL byte offsets remain byte offsets after decoding.
 | `conv.i8` | Sign extend Int32 or preserve Int64 |
 | `conv.u8` | Zero extend Int32 or preserve Int64 bits |
 | `conv.i4`, `conv.u4` | Preserve Int32 or truncate Int64 to its low 32 bits, producing Int32 storage |
+| `conv.i1`, `conv.i2` | Keep low 8/16 bits and sign-extend to I32 |
+| `conv.u1`, `conv.u2` | Keep low 8/16 bits and zero-extend to I32 |
 | `br`, `br.s` | Branch to an instruction boundary |
 | `brfalse`, `brfalse.s`, `brtrue`, `brtrue.s` | Branch on an integer or reference |
 | `beq`, `bne.un`, and their short forms | Compare matching integers or references and branch |
@@ -192,13 +194,30 @@ unchecked, pure guest instructions; narrowing does not fault on lost high bits.
 C# chooses the appropriate emitted sequence for its source cast: an unchecked
 negative `int` to `ulong` uses `conv.i8`, while `uint` to `ulong` uses `conv.u8`.
 Reference operands fault with their original stack/continuation intact. Native,
-floating, small-width and checked conversions remain unsupported. See ECMA-335
+floating and checked conversions remain unsupported. See ECMA-335
 III.3.27 and Table 8 in the
 [primary conversion specification](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=378).
 `guest/IntegerConversions.cs` and 1,764 real CoreCLR comparisons cover narrowing,
 both extensions, high bits and conversion sequences. Checkpoint stack validation
 tracks the converted width; recovery tests cut every instruction with GC and
 retain the original method/code/execution identities.
+
+The smaller unchecked conversions also accept I32/I64 operands and produce I32
+stack values. Signed forms truncate to 8/16 bits then sign-extend; unsigned forms
+truncate then zero-extend. For example, low bits ff yield -1 with `conv.i1` and
+255 with `conv.u1`; low bits ffff yield -1 with `conv.i2` and 65535 with `conv.u2`.
+This enables integer signatures containing casts and existing Char return/local/
+field slots. It does not enable Byte/SByte/Int16/UInt16 signatures, fields or
+locals. Exact UTF-16 surrogate units remain valid Char values; no Unicode scalar
+normalization is introduced. Reference failures preserve the original frame.
+
+`guest/SmallIntegerConversions.cs` compiles unchanged against both cores and
+compares 1,680 actual C# casts, including Char returns, with CoreCLR. Forty cases
+restore every instruction with GC and original IDs. A durable Char-store method
+retains d800, later stores dfff, then replays its first d800 result without
+changing dfff or repeating either Counter mutation. Six fresh SDK-free native
+resumes cover all four instructions and high/low surrogate Char results. A loader
+fixture explicitly still rejects byte storage signatures. CoreLib is unchanged.
 
 `guest/IntegerArithmetic.cs` compiles unchanged against both CoreLibs. Its
 2,312-case CoreCLR matrix covers all four operators at both widths, signed

@@ -513,6 +513,24 @@ and do not inherit persistence.
   managed libraries, checkpoint format 7/original fixtures and both idle demos
   remain unchanged. See [CIL profile](cil-profile.md); no inference was needed.
 
+- Small-width unchecked conversions conv.i1/conv.u1/conv.i2/conv.u2 now accept
+  I32/I64 values, explicitly truncate low 8/16 bits and sign/zero-extend to I32.
+  Decoder, runtime and checkpoint abstract stacks agree on result width; invalid
+  references retain their failing operands/continuation. This adds conversions,
+  not Byte/SByte/Int16/UInt16 storage signatures/fields/locals. A rejected byte
+  signature fixture keeps that boundary explicit. Existing Char return/local/
+  field slots consume conv.u2 results with exact UTF-16 units, including lone
+  surrogates, and CoreLib bytes are unchanged. guest/SmallIntegerConversions.cs
+  compiles unchanged against both cores. A 1,680-case actual C#/CoreCLR matrix
+  covers all four opcodes from both widths and Char returns, min/max/high bits,
+  signed extension, truncation, seeds and surrogate units. Forty cases checkpoint
+  each instruction with GC and original bindings. A nested durable Char store
+  retains d800, later stores dfff, and replays the original d800 receipt without
+  changing dfff, Mutations=2 or Counter=21. Six fresh SDK-free native resumes
+  retain all four conversion results and exact high/low surrogate units. No new
+  tag, capability, host wait or checkpoint format; checked/native/floating and EH
+  remain unsupported. See [CIL profile](cil-profile.md); no inference was needed.
+
 
 ## Validation
 
@@ -520,7 +538,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 262 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 267 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -789,24 +807,23 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next implement small-width integer conversions: conv.i1/conv.u1/conv.i2/conv.u2.**
-Follow primary ECMA-335 III.3.27/Table 8 for truncation and signed/unsigned
-extension into I32 stack results from I32/I64 operands. Make bit widths and
-extension explicit rather than inheriting native casts accidentally. Keep this
-separate from enabling Byte/SByte/Int16/UInt16 storage: those signatures/fields/
-locals remain unsupported unless separately designed, while existing Char slots
-can consume valid conv.u2 results. Use real C# methods with supported I32/I64
-signatures and explicit small-width casts, plus Char return/store cases, against
-CoreCLR. Include boundaries/high bits, negative values and exact surrogate units;
-verify invalid reference operands preserve their failing frame, checkpoint
-abstract stack widths, per-instruction GC/recovery and SDK-free invocation replay
-without repeated mutations. CoreLib already declares the primitive type names;
-do not replace its image or add broad BCL/value-type claims. Checked/native/
-floating conversions, arbitrary small-width storage and EH remain unsupported.
-Preserve neg/division distinctions, all existing modules/foreign result IDs,
-reference sets, receipts/provenance/transcripts, capabilities, demos and legacy
-fixtures. Update guidance only after implementation; no live inference is needed
-for this pure runtime milestone.
+**Next add bounded pure managed ordinal string search.** A separate append-only
+module such as Renraku.OrdinalText can supply IndexOf/StartsWith/EndsWith over
+exact UTF-16 strings using ordinary CIL loops and the existing Length/indexer.
+Define modest text/needle limits, start-index rules, null/empty behavior, result
+indices and error precedence explicitly. Use ordinary data results for invalid/
+not-found cases rather than guest exceptions; no host search intrinsic, culture,
+normalization, regex, arrays or generic/byref API. Choose bounds and document
+worst-case work with the existing instruction budgets; budget pauses resume the
+same helper frames. Empty needles, overlapping matches, NUL, surrogate pairs and
+lone surrogates must retain ordinal unit semantics. Compare actual C# with CoreCLR
+Ordinal APIs under the declared syntax/bounds, then cut representative matching/
+failure loops and result construction at every instruction with GC/recovery.
+Demonstrate external frozen-reference compilation/use against existing saved
+strings/objects, retained source/receipts and SDK-free invoke-once replay without
+repeating a mutation. Keep CoreLib and all saved module bodies unchanged. Preserve
+all arithmetic/conversion/library/foreign-type/provenance/transcript/capability/
+demo/legacy contracts. No live model run is needed for this pure library milestone.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

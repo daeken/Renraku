@@ -451,6 +451,30 @@ impl<'a> Vm<'a> {
             Op::Pop => {
                 pop(&mut frame)?;
             }
+            Op::ConvertI8 | Op::ConvertU8 | Op::ConvertI16 | Op::ConvertU16 => {
+                let raw = match pop(&mut frame)? {
+                    Value::I32(value) => u64::from(value as u32),
+                    Value::I64(value) => value as u64,
+                    _ => return Err(Error("small-width conversion requires an integer".into())),
+                };
+                // Explicit low-bit truncation and extension into an I32 stack
+                // result. This does not introduce 8/16-bit storage slot kinds.
+                let (mask, sign, modulus, unsigned) = match instruction.op {
+                    Op::ConvertI8 => (0xff, 0x80, 0x100, false),
+                    Op::ConvertU8 => (0xff, 0x80, 0x100, true),
+                    Op::ConvertI16 => (0xffff, 0x8000, 0x10000, false),
+                    Op::ConvertU16 => (0xffff, 0x8000, 0x10000, true),
+                    _ => unreachable!(),
+                };
+                let low = (raw & mask) as i32;
+                frame
+                    .evaluation_stack
+                    .push(Value::I32(if !unsigned && low & sign != 0 {
+                        low - modulus
+                    } else {
+                        low
+                    }));
+            }
             Op::ConvertI32 => {
                 let value = match pop(&mut frame)? {
                     Value::I32(value) => Value::I32(value),
