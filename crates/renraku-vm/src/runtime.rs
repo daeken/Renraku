@@ -459,7 +459,7 @@ impl<'a> Vm<'a> {
                 };
                 frame.evaluation_stack.push(value);
             }
-            Op::Add | Op::Subtract | Op::Multiply => {
+            Op::Add | Op::Subtract | Op::Multiply | Op::Divide { .. } | Op::Remainder { .. } => {
                 let right = pop(&mut frame)?;
                 let left = pop(&mut frame)?;
                 let value = arithmetic(left, right, &instruction.op)?;
@@ -850,17 +850,51 @@ fn truth(value: Value) -> bool {
     }
 }
 fn arithmetic(left: Value, right: Value, op: &Op) -> Result<Value> {
+    let quotient_or_remainder = matches!(op, Op::Divide { .. } | Op::Remainder { .. });
+    if quotient_or_remainder && matches!(right, Value::I32(0) | Value::I64(0)) {
+        // Check types first: a malformed mixed-width operation is not division.
+        require(
+            matches!(
+                (left, right),
+                (Value::I32(_), Value::I32(_)) | (Value::I64(_), Value::I64(_))
+            ),
+            "arithmetic requires matching integer stack types",
+        )?;
+        return Err(Error("integer division or remainder by zero".into()));
+    }
+    // ECMA-335 III.3.55 permits a fault for min % -1. Renraku deliberately
+    // faults for both signed operators, independent of the host CPU or Rust
+    // overflow settings, matching the CoreCLR differential fixture.
+    if matches!(
+        op,
+        Op::Divide { unsigned: false } | Op::Remainder { unsigned: false }
+    ) && matches!(
+        (left, right),
+        (Value::I32(i32::MIN), Value::I32(-1)) | (Value::I64(i64::MIN), Value::I64(-1))
+    ) {
+        return Err(Error(
+            "signed integer division or remainder overflow".into(),
+        ));
+    }
     Ok(match (left, right) {
         (Value::I32(a), Value::I32(b)) => Value::I32(match op {
             Op::Add => a.wrapping_add(b),
             Op::Subtract => a.wrapping_sub(b),
             Op::Multiply => a.wrapping_mul(b),
+            Op::Divide { unsigned: false } => a / b,
+            Op::Divide { unsigned: true } => ((a as u32) / (b as u32)) as i32,
+            Op::Remainder { unsigned: false } => a % b,
+            Op::Remainder { unsigned: true } => ((a as u32) % (b as u32)) as i32,
             _ => unreachable!(),
         }),
         (Value::I64(a), Value::I64(b)) => Value::I64(match op {
             Op::Add => a.wrapping_add(b),
             Op::Subtract => a.wrapping_sub(b),
             Op::Multiply => a.wrapping_mul(b),
+            Op::Divide { unsigned: false } => a / b,
+            Op::Divide { unsigned: true } => ((a as u64) / (b as u64)) as i64,
+            Op::Remainder { unsigned: false } => a % b,
+            Op::Remainder { unsigned: true } => ((a as u64) % (b as u64)) as i64,
             _ => unreachable!(),
         }),
         _ => {

@@ -1,5 +1,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Globalization;
+using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -32,7 +34,8 @@ try
 {
     byte[] core = Compile("Renraku.CoreLib", File.ReadAllText(Path.Combine(root, "guest/CoreLib.cs")),
         Array.Empty<MetadataReference>());
-    string source = File.ReadAllText(Path.Combine(root, "guest/Simulation.cs"));
+    string source = File.ReadAllText(Path.Combine(root, "guest/Simulation.cs")) + Environment.NewLine +
+        File.ReadAllText(Path.Combine(root, "guest/IntegerArithmetic.cs"));
     byte[] guest = Compile("Renraku.Simulation", source,
         new[] { MetadataReference.CreateFromImage(core) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.CoreLib.dll"), core);
@@ -51,6 +54,50 @@ try
         "Strings", "StringEquality", "StringNullConcat", "StringInterning", "ModelHarness", "ChatHarnessScore" };
     var results = cases.Select(name => $"{name}={type.GetMethod(name, BindingFlags.Public | BindingFlags.Static)!.Invoke(null, null)}");
     File.WriteAllLines(Path.Combine(output, "reference-results.txt"), results);
+    // Preserve signed storage bits as decimal strings, including UInt64 values.
+    // Reflection invokes the actual emitted operators, preventing constant folding.
+    var arithmetic = assembly.GetType("Renraku.Guest.IntegerArithmetic", throwOnError: true)!;
+    var arithmeticResults = new List<object>();
+    foreach (int width in new[] { 32, 64 })
+    {
+        long min = width == 32 ? int.MinValue : long.MinValue;
+        long max = width == 32 ? int.MaxValue : long.MaxValue;
+        long[] operands = { 0, 1, -1, 2, -2, 3, -3, 6, -6, 10, -10, 14, -14,
+            min, min + 1, max - 1, max };
+        foreach (string operation in new[] { "Div", "DivU", "Rem", "RemU" })
+        {
+            string name = operation + width;
+            var method = arithmetic.GetMethod(name)!;
+            foreach (long left in operands)
+            foreach (long right in operands)
+            {
+                object Box(long bits) => method.GetParameters()[0].ParameterType switch
+                {
+                    Type t when t == typeof(int) => (object)(int)bits,
+                    Type t when t == typeof(uint) => unchecked((uint)bits),
+                    Type t when t == typeof(ulong) => unchecked((ulong)bits),
+                    _ => bits
+                };
+                string? value = null, fault = null;
+                try
+                {
+                    object actual = method.Invoke(null, new[] { Box(left), Box(right) })!;
+                    long bits = actual switch
+                    {
+                        uint v => unchecked((int)v), ulong v => unchecked((long)v),
+                        int v => v, long v => v, _ => throw new InvalidOperationException("unexpected result")
+                    };
+                    value = bits.ToString(CultureInfo.InvariantCulture);
+                }
+                catch (TargetInvocationException error) { fault = error.InnerException!.GetType().FullName; }
+                arithmeticResults.Add(new { method = name, width, left = left.ToString(CultureInfo.InvariantCulture),
+                    right = right.ToString(CultureInfo.InvariantCulture), value, fault });
+            }
+        }
+    }
+    File.WriteAllText(Path.Combine(output, "arithmetic-reference.json"), JsonSerializer.Serialize(arithmeticResults));
+    File.WriteAllText(Path.Combine(output, "arithmetic-workload-reference.txt"),
+        arithmetic.GetMethod("PersistentArithmetic")!.Invoke(null, null)!.ToString());
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))
         File.WriteAllBytes(Path.Combine(output, Path.GetFileNameWithoutExtension(path) + ".dll"),
             Compile(Path.GetFileNameWithoutExtension(path), File.ReadAllText(path),

@@ -162,7 +162,11 @@ fn recursion_uses_managed_frames_and_obeys_a_frame_limit() {
 fn unsupported_csharp_capabilities_are_rejected_during_loading() {
     let fixture = fixtures();
     for (name, expected) in [
-        ("Division", "unsupported CIL opcode 5b"),
+        ("Bitwise", "unsupported CIL opcode 61"),
+        ("FloatArithmetic", "unsupported signature element 0d"),
+        // Roslyn also embeds native-int annotation constructors with array
+        // slots; either unsupported signature can be encountered first.
+        ("NativeArithmetic", "unsupported signature element"),
         ("TypeInitializer", "type initializers"),
         ("ByRef", "unsupported signature element 10"),
         ("Generic", "unsupported metadata table 42"),

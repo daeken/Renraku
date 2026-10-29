@@ -462,10 +462,22 @@ fn pure_compiler_recovery_does_not_imply_guest_cil_acceptance() {
     let vm = Vm::new(&program);
     let universe = vm.universe_id();
     universe_store.save(&vm).unwrap();
-    let request=CompilationRequest::capture(&program,universe,toolchain(),"Generated.Division".into(),vec![("Division.cs".into(),b"public static class Generated { public static int Divide(int a,int b) { return a/b; } }".to_vec())],vec![]).unwrap();
+    let request = CompilationRequest::capture(
+        &program,
+        universe,
+        toolchain(),
+        "Generated.Bitwise".into(),
+        vec![(
+            "Bitwise.cs".into(),
+            b"public static class Generated { public static int Xor(int a,int b) { return a^b; } }"
+                .to_vec(),
+        )],
+        vec![],
+    )
+    .unwrap();
     let mut store = directory.ledger();
-    store.prepare("division", &request).unwrap();
-    let compiled = store.drive(universe, "division", toolchain()).unwrap();
+    store.prepare("bitwise", &request).unwrap();
+    let compiled = store.drive(universe, "bitwise", toolchain()).unwrap();
     assert!(compiled.artifact.is_some());
     assert!(
         install_once(

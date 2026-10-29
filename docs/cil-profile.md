@@ -75,6 +75,7 @@ IL byte offsets remain byte offsets after decoding.
 | `ldloc.0` through `ldloc.3`, `ldloc.s`, `ldloc`; `stloc.0` through `stloc.3`, `stloc.s`, `stloc` | Read or replace a typed local |
 | `dup`, `pop` | Duplicate or discard the top value |
 | `add`, `sub`, `mul` | Wrapping arithmetic on matching integer stack types |
+| `div`, `div.un`, `rem`, `rem.un` | Signed or unsigned division/remainder on matching Int32 or Int64 stack types |
 | `conv.i8` | Sign extend Int32 or preserve Int64 |
 | `br`, `br.s` | Branch to an instruction boundary |
 | `brfalse`, `brfalse.s`, `brtrue`, `brtrue.s` | Branch on an integer or reference |
@@ -97,6 +98,30 @@ Other opcodes fail during loading. Incompatible operand types fail during
 execution with a method name and CIL offset. These are VM diagnostics; catchable
 guest exceptions are future work. A failed instruction preserves its original
 frame operands and continuation.
+
+Integer division truncates toward zero. Signed remainder is zero or has the
+dividend's sign. The unsigned forms interpret all 32 or 64 operand bits as
+unsigned and return the same-width storage bits. Every zero divisor faults.
+Signed minimum divided by -1 faults; Renraku also deliberately faults for signed
+minimum remainder by -1. ECMA permits the latter fault, and CoreCLR on the test
+host produces it for both widths. This policy is independent of host CPU and
+Rust overflow settings. See ECMA-335 III.3.31–32 and III.3.55–56 in the
+[primary specification](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=382).
+
+Arithmetic faults follow the existing durable VM diagnostic contract, including
+method/offset and the original operand stack. They are terminal invocation
+receipts, rather than catchable guest exceptions. Retrying a saved fault does
+not execute the call again or repeat a preceding mutation. Pure arithmetic uses
+ordinary instruction safe points and does not suspend for host work. Floating
+point, native integers, checked arithmetic opcodes, bitwise operators, and
+exception handling remain unsupported.
+
+`guest/IntegerArithmetic.cs` compiles unchanged against both CoreLibs. Its
+2,312-case CoreCLR matrix covers all four operators at both widths, signed
+truncation/remainder signs, high unsigned bits, zero, and minimum/maximum values.
+Recovery tests retain pending operands, nested Euclidean and decimal-digit loops,
+a cyclic managed object, and terminal faults after a mutation across individual
+instruction checkpoints, GC, failed saves, and SDK-free native process resumes.
 
 ## Execution and validation
 

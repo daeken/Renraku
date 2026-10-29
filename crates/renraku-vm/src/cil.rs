@@ -30,6 +30,12 @@ pub enum Op {
     Add,
     Subtract,
     Multiply,
+    Divide {
+        unsigned: bool,
+    },
+    Remainder {
+        unsigned: bool,
+    },
     ConvertI64,
     Branch(u32),
     BranchIf {
@@ -188,6 +194,10 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
             0x58 => Op::Add,
             0x59 => Op::Subtract,
             0x5a => Op::Multiply,
+            0x5b => Op::Divide { unsigned: false },
+            0x5c => Op::Divide { unsigned: true },
+            0x5d => Op::Remainder { unsigned: false },
+            0x5e => Op::Remainder { unsigned: true },
             0x6a => Op::ConvertI64,
             0x72 => Op::LoadString(reader.u32()?),
             0x73 => Op::NewObject(reader.u32()?),

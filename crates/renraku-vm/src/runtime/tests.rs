@@ -74,6 +74,37 @@ fn completed(value: i32) -> RunOutcome {
 }
 
 #[test]
+fn division_and_remainder_reject_noninteger_or_mixed_stacks_without_consuming_operands() {
+    for opcode in 0x5b..=0x5e {
+        for (bytes, parameters, arguments) in [
+            (
+                vec![0x02, 0x03, opcode, 0x2a],
+                vec![SlotType::I32, SlotType::I64],
+                vec![Value::I32(10), Value::I64(2)],
+            ),
+            (
+                vec![0x02, 0x03, opcode, 0x2a],
+                vec![SlotType::I64, SlotType::I32],
+                vec![Value::I64(10), Value::I32(0)],
+            ),
+            (vec![0x14, 0x14, opcode, 0x2a], vec![], vec![]),
+        ] {
+            let (program, entry) = program(&bytes, parameters, vec![], Some(SlotType::I32));
+            let mut vm = Vm::new(&program);
+            vm.start(entry, arguments).unwrap();
+            vm.run(2).unwrap();
+            let before = vm.context().clone();
+            let error = vm.run(1).unwrap_err();
+            assert!(error.0.contains("matching integer stack types"));
+            assert!(error.0.contains("IL_0002"));
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.context().id, before.id);
+            assert_eq!(vm.instructions_executed(), 2);
+        }
+    }
+}
+
+#[test]
 fn every_integer_constant_encoding_preserves_its_exact_bits() {
     for (opcode, expected) in (0x15..=0x1e).zip(-1..=8) {
         assert_eq!(

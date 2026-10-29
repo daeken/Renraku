@@ -379,9 +379,11 @@ The model controls trusted managed computation in this universe. It is not a
 security sandbox for hostile generated code. No shell, file, or general network
 tools are exposed. Generated invocations run with model capabilities disabled;
 only the coordinator's owned model turn enables submission. Existing CIL limits
-still apply, including no arrays, generics, exception handling, division, arbitrary
+still apply, including no arrays, generics, exception handling, bitwise operators, arbitrary
 host BCL, or C# async/await. Cancellation and in-place conversation editing are not
 implemented. A budget-paused invocation remains pending until explicitly resumed.
+Int32/UInt32/Int64/UInt64 division and remainder are supported. Zero divisors and
+signed minimum / or % -1 produce terminal VM faults; see the [CIL profile](cil-profile.md).
 
 ## Validation
 

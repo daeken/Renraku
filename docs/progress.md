@@ -274,6 +274,23 @@ and do not inherit persistence.
   and 26, and finished recovery used zero operations. See
   [live report](acceptance/live-inspection-2026-10-29.md) and
   `target/live-inspection-20261029-01/`; all prior demo universes remain unchanged.
+- Fixed-width integer division/remainder: `div`, `div.un`, `rem`, and `rem.un`
+  execute on matching I32/I64 operands and participate in checkpoint stack-shape
+  validation. Signed division truncates toward zero; signed remainder follows
+  the dividend's sign. Zero divisors fault. Signed minimum / or % -1 deliberately
+  faults on every host; ECMA permits this remainder policy and CoreCLR .NET 10 on
+  this arm64 host agrees. No Rust arithmetic panic or host overflow setting owns
+  guest semantics. The failed instruction retains its operands/continuation;
+  faults remain durable invocation receipts, without catchable guest EH.
+  `guest/IntegerArithmetic.cs` compiles unchanged against both CoreLibs, with a
+  2,312-case differential matrix and nested Euclidean/decimal-digit workload.
+  Six integration tests plus one VM unit test cover actual emitted opcodes,
+  bounds, matching widths, every instruction cut, GC, stable identities, cyclic
+  state, fault-after-mutation receipt replay after root/context replacement,
+  failed terminal checkpoint recovery, and SDK-free native process resume.
+  Negative compiler/install tests now use unsupported XOR; floating/native
+  arithmetic still rejects. Format 7 and every legacy fixture are unchanged.
+  See [CIL profile](cil-profile.md). No live inference was needed for this step.
 
 ## Validation
 
@@ -281,7 +298,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 215 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 222 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -550,22 +567,28 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next expand pure CIL arithmetic with integer division and remainder.** Implement
-signed/unsigned Int32 and Int64 `div`, `div.un`, `rem`, and `rem.un`, following the
-ECMA-335 primary specification for truncation/sign, zero divisors, and minimum
-signed integer divided/remainder by -1. Do not inherit Rust panics or overflow
-behavior accidentally. Keep unsupported float/native-int/EH behavior explicit;
-guest arithmetic errors use the current durable VM fault contract. Preserve one
-instruction safe points, portable operand stacks, unchanged logical identities,
-and atomic heap/code/frame/receipt checkpoints. Use actual emitted C# and CoreCLR
-comparisons plus boundary and instruction-cut recovery tests, including terminal
-invoke-once fault replay without repeating a prior mutation. This supplies a useful
-foundation for ordinary managed formatting/parsing and broader library work;
-pure arithmetic does not suspend. Avoid unrelated new host infrastructure or
-general BCL claims. Update the CIL profile and model tool guidance only for behavior
-actually implemented, retain all legacy fixtures, and use live inference only if
-it answers a new acceptance question. Preserve compiler/publication/preview/read
-contracts, existing demos, default capability denial, and one-context limits.
+**Next build bounded managed integer formatting and parsing on the arithmetic
+foundation.** Start with signed Int32/Int64 decimal text, ordinary CIL loops and
+immutable strings, explicit culture-independent syntax, and a small static
+replacement-library API that fits the current value/reference profile. Do not
+make native host formatting or new InternalCalls own persistent computation.
+Use explicit parse-result objects instead of unsupported out/byref parameters,
+guest exceptions, generics, or mutable structs. Define null/empty/sign/whitespace,
+invalid UTF-16 digit, leading-zero, and overflow behavior precisely. Avoid negating
+the minimum signed value; preserve all magnitude bits with checked guest guards.
+Bound input/output lengths and computation and keep pure work ordinary CIL.
+Compare actual emitted C# with CoreCLR under the declared syntax, test min/max,
+invalid and overflow cases, and checkpoint/GC the loops at each instruction.
+Demonstrate a CIL website handler rendering its existing saved visit count and
+accepting a bounded decimal input without compiler/host formatting during serving.
+Keep HTTP-v1 request identities, deduplication, pinned code, and response semantics
+unchanged; do not add new routes or response envelopes merely for library work.
+Update the supported CIL/model guidance only for implemented APIs/opcodes. Preserve
+all legacy fixtures, receipts, demos, compiler/publication/preview/read contracts,
+default capability denial, and the one-context limit. A small pure static API is
+the initial replacement-library surface; instance value-type methods, general
+.NET BCL compatibility, culture, and advanced formatting remain future work.
+
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

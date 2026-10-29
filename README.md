@@ -17,6 +17,8 @@ The initial CIL interpreter runs real Roslyn-compiled C# against a custom minima
 CoreLib. It supports integer arithmetic, locals and arguments, conditional
 branches and loops, object allocation and constructors, reference fields,
 instance and static fields, nested calls, returns, and immutable UTF-16 strings.
+Signed/unsigned 32-bit and 64-bit division and remainder retain their operands
+at checkpoint safe points; zero-divisor and overflow faults are durable receipts.
 String literals, length, character indexing, concatenation, and ordinal equality
 survive checkpoints. The sample simulation
 returns **48** after **155 guest instructions**.
