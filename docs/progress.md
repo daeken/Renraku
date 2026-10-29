@@ -253,6 +253,27 @@ and do not inherit persistence.
   baseline response/execution after publication. Finished recovery used zero
   operations. See [live report](acceptance/live-preview-2026-10-29.md) and
   `target/live-preview-20261029-01/`; both prior demo universes remain unchanged.
+- Read-only `inspect_object`/`inspect_static` agent actions and native
+  `inspect-object`/`inspect-static` CLI commands. Bounded views show logical
+  object/type/field identities, declaring owners, runtime storage slots and exact
+  scalar bits/reference IDs, with source checkpoint generations. Object Freeze
+  passes the target into the existing typed managed roots before host execution.
+  Reads execute no guest code and perform no heap/checkpoint writes. Limits are
+  1..32 fields, 0..256 UTF-16 preview units, 128-byte label prefixes, and 12 KiB
+  JSON per view, with explicit truncation. Lone surrogates remain exact units and
+  produce null decoded preview text. Lost unappended reads may reobserve a newer
+  generation; historical result IDs are not unlimited retention promises. Source
+  signedness/enum formatting stays separate from the runtime's raw I32/I64 slots.
+  Format 7 and all legacy bindings remain unchanged. See [inspection](inspection.md).
+- Live state inspection acceptance: GPT-6.1 Sol observed stored Counter.Value 19,
+  found/read the existing Advance method, invoked it once with 7, and inspected
+  stored Value 26 on the same logical object at checkpoints 18/61. Seven turns,
+  seven terminal receipts, and three fresh foreground processes used no compiler,
+  installation, getter, or publication grant. Native SDK-free reads preserved
+  checkpoint generation/digest, invocation replay retained the original execution
+  and 26, and finished recovery used zero operations. See
+  [live report](acceptance/live-inspection-2026-10-29.md) and
+  `target/live-inspection-20261029-01/`; all prior demo universes remain unchanged.
 
 ## Validation
 
@@ -260,7 +281,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 206 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 215 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -325,7 +346,7 @@ inputs and compiler identity, failed preparation/publication, lost post-commit
 replies, foreign/corrupt ledgers, successful compilation with unsupported CIL,
 and actual SIGKILL at prepared, child-started, captured, written, and committed
 boundaries. Terminal replay is tested with an observer that fails if invoked.
-Twenty-two coding-agent tests cover full action selection from actual saved request
+Twenty-five coding-agent tests cover full action selection from actual saved request
 history, lost results after all tools, SDK-free terminal replay, frozen static
 arguments, pre-invocation GC roots, uncertain inference without resubmission,
 strict inputs and all budgets, generated-code capability denial, compiler worker
@@ -333,7 +354,7 @@ yielding to another universe, and partial journal recovery with seven-instructio
 budgets. A foreground CLI test rejects missing opt-in and oversized budgets before
 touching universe/auth state. Existing field-name test lookups now include owners,
 so valid same-named fields in different managed classes cannot make tests flaky.
-Seven further agent tests exercise the actual subscription adapter with local
+Eight further agent tests exercise the actual subscription adapter with local
 HTTP: the nine-turn correction/installation/source-inspection sequence, interrupted
 and unsupported native-call streams without resubmission, signed-out receipt
 recovery into a single action/mutation, and actual controller SIGKILL after the
@@ -390,6 +411,16 @@ twelve-turn subscription fixture observes draft output, compiles/publishes a
 correction, and verifies both the new body and retained visit. Lost preview/compiler
 results reconcile offline, every model history matches the managed transcript,
 and independent TCP confirms new output plus immutable old-preview replay.
+Three native inspection unit tests cover shared cycles, hidden inherited field
+owners, label/field/JSON bounds, large integers, exact UTF-16 and split surrogates,
+invalid/ambiguous/static/literal selectors, transients, and unchanged runtime state.
+Two real-CIL integration tests retain cyclic/static/string objects through GC and
+restore, check inherited owner identities, and run the read-only CLI without SDK
+tools. Three agent tests additionally prove typed target retention after static
+replacement and lost read recovery, explicit newer static re-observation, strict
+inputs, and one existing mutation with no helper compilation. An eight-turn local
+subscription fixture observes 19/26 on the same object, loses read/invoke replies,
+compares every full history with managed state, and finishes signed out offline.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -513,27 +544,28 @@ fixtures and real-model acceptance. Preserve the distinction between direct mana
 preview and transport verification, exact frozen selection, and the same HTTP-v1
 inbox/response semantics across both paths.
 
-**Next add bounded read-only inspection of persistent object and static state.**
-The workbench describes declarations and source; the model should also be able to
-observe actual field values without writing a helper or invoking mutable code.
-Start with one object by logical ID and one static field by logical ID/qualified
-selector. Return declared owner/type/field identities, scalar values or reference
-IDs, and the observed checkpoint generation. Do not recursively expand graphs.
-Freeze selectors to logical identities and retain an inspected object with the
-existing typed managed argument roots before host execution so GC cannot drop it
-while a result is pending. Treat reference IDs in historical projections as
-observations, not a promise that every target will remain live forever. Make
-field-count/string-preview/output bounds and truncation explicit, preserve exact
-UTF-16 storage (including lone surrogates), and reject unsupported/transient or
-missing/ambiguous selectors clearly. Keep actual inputs/results in managed history,
-with no heap mutation, model grant, host paths, or implicit network authority.
-Test cycles/shared references, inherited field owners, GC between Freeze and
-inspection, bounded Unicode, missing IDs, stable logical identity after restart,
-and read-only state preservation. Local fixtures should discover a static root,
-inspect its object, perform an existing managed mutation, and inspect the changed
-value without an extra invocation. Use live inference only for a new state-inspection
-acceptance question. Preserve all demos, receipts, legacy checkpoints, one-context
-limits, and compiler/publication/preview contracts.
+Bounded state inspection now completes the immediate object/static observation
+milestone, including local and real-model evidence. Preserve raw storage semantics,
+typed target roots, shallow views, immutable committed history, and explicit newer
+observations after an unappended read is lost. More host tools are not required
+before the next core-runtime/library step.
+
+**Next expand pure CIL arithmetic with integer division and remainder.** Implement
+signed/unsigned Int32 and Int64 `div`, `div.un`, `rem`, and `rem.un`, following the
+ECMA-335 primary specification for truncation/sign, zero divisors, and minimum
+signed integer divided/remainder by -1. Do not inherit Rust panics or overflow
+behavior accidentally. Keep unsupported float/native-int/EH behavior explicit;
+guest arithmetic errors use the current durable VM fault contract. Preserve one
+instruction safe points, portable operand stacks, unchanged logical identities,
+and atomic heap/code/frame/receipt checkpoints. Use actual emitted C# and CoreCLR
+comparisons plus boundary and instruction-cut recovery tests, including terminal
+invoke-once fault replay without repeating a prior mutation. This supplies a useful
+foundation for ordinary managed formatting/parsing and broader library work;
+pure arithmetic does not suspend. Avoid unrelated new host infrastructure or
+general BCL claims. Update the CIL profile and model tool guidance only for behavior
+actually implemented, retain all legacy fixtures, and use live inference only if
+it answers a new acceptance question. Preserve compiler/publication/preview/read
+contracts, existing demos, default capability denial, and one-context limits.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

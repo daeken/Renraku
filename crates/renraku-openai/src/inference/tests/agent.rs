@@ -1175,3 +1175,162 @@ async fn http_agent_previews_and_corrects_its_page_using_durable_results_and_ori
     assert_eq!(replay.execution, original.unwrap().execution.to_string());
     assert_eq!(receipt_counts(&directory.0), (12, 12));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_inspection_discovers_shared_state_observes_one_mutation_and_reopens_without_a_compiler()
+ {
+    let directory = Directory::new();
+    let id = profile(&directory.0.join("auth"), "coding", "coding-token");
+    let mut host = host(&directory.0, &directory.0.join("missing-compiler.dll"));
+    host.dotnet = directory.0.join("missing-dotnet");
+    initialize_goal(
+        &host,
+        id,
+        "Discover the saved Counter, inspect its stored value, locate and read the existing Advance helper, invoke it once with 7, and inspect the same object again without compiling a getter.",
+    );
+    let server = Server::with_responder(
+        |request| {
+            assert_eq!(request.bearer, "Bearer coding-token");
+            let count = assistant_count(&request.body);
+            let result = if count > 0 {
+                last_result(&request.body)
+            } else {
+                Value::Null
+            };
+            let root = || {
+                serde_json::from_str::<Value>(request.body["input"][5]["content"].as_str().unwrap())
+                    .unwrap()["output"]["field"]["value"]["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            };
+            let action = match count {
+                0 => object!({"op":"search","query":"Simulation Saved","limit":20}),
+                1 => {
+                    let field = result["output"]["symbols"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|s| s["kind"] == "field")
+                        .unwrap();
+                    object!({"op":"inspect_static","field":field["id"]})
+                }
+                2 => {
+                    assert_eq!(result["output"]["field"]["value"]["kind"], "object");
+                    object!({"op":"inspect_object","id":result["output"]["field"]["value"]["id"]})
+                }
+                3 => {
+                    assert_eq!(
+                        result["output"]["fields"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|f| f["name"] == "Value")
+                            .unwrap()["value"]["value"],
+                        19
+                    );
+                    object!({"op":"search","query":"Simulation Advance","limit":10})
+                }
+                4 => {
+                    let method = &result["output"]["symbols"][0];
+                    object!({"op":"read_code","method":method["id"]})
+                }
+                5 => {
+                    assert_eq!(result["output"]["name"], "Advance");
+                    object!({"op":"invoke","method":"Renraku.Guest.Simulation::Advance","arguments":[{"kind":"object","id":root()},{"kind":"i32","value":7}]})
+                }
+                6 => {
+                    assert_eq!(result["result"]["value"], 26);
+                    object!({"op":"inspect_object","id":root(),"maxFields":32,"stringUnits":0})
+                }
+                7 => {
+                    assert_eq!(result["output"]["objectId"], root());
+                    assert_eq!(
+                        result["output"]["fields"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|f| f["name"] == "Value")
+                            .unwrap()["value"]["value"],
+                        26
+                    );
+                    object!({"op":"finish","message":"Observed 19 and 26 on the same object after one mutation."})
+                }
+                _ => panic!("unexpected extra inspection model request"),
+            };
+            FixtureReply::completed(&action.to_string())
+        },
+        false,
+    );
+    let mut lost = BTreeSet::new();
+    let mut finished = false;
+    for _ in 0..15 {
+        let mut provider = async_adapter(&directory.0, id, &server.base).await;
+        let result = host
+            .drive_with_observer(&mut provider, budgets(1), |stage| {
+                if let AgentStage::ToolCompleted(turn @ (3 | 6)) = stage
+                    && lost.insert(turn)
+                {
+                    return Err(VmError("lost inspection workflow result".into()));
+                }
+                Ok(())
+            })
+            .await;
+        match result {
+            Err(error) => {
+                assert!(error.0.contains("lost inspection workflow result"));
+                let mut store = CheckpointStore::open(&host.universe).unwrap();
+                let saved = store.load().unwrap();
+                let mut vm = saved.snapshot.restore().unwrap();
+                vm.collect_garbage().unwrap();
+                store.save(&vm).unwrap();
+                let mut offline = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+                assert_eq!(
+                    host.drive(&mut offline, budgets(0))
+                        .await
+                        .unwrap()
+                        .provider_operations,
+                    0
+                );
+            }
+            Ok(report) if matches!(report.stop, AgentStop::Finished(_)) => {
+                finished = true;
+                break;
+            }
+            Ok(report) => assert_eq!(report.stop, AgentStop::ProviderBudget),
+        }
+    }
+    assert!(finished);
+    assert_eq!(lost, BTreeSet::from([3, 6]));
+    assert_eq!(server.posts(), 8);
+    assert_eq!(receipt_counts(&directory.0), (8, 8));
+    assert!(!host.compiler_ledger.exists());
+    let mut store = CheckpointStore::open(&host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.invocations().count(), 1);
+    assert_eq!(vm.installations().count(), 0);
+    let status = vm.agent_status().unwrap();
+    assert_http_history(&server, &status);
+    let before: Value =
+        serde_json::from_str(status["transcript"][7]["content"].as_str().unwrap()).unwrap();
+    let after: Value =
+        serde_json::from_str(status["transcript"][15]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(before["output"]["objectId"], after["output"]["objectId"]);
+    assert!(
+        before["output"]["checkpoint"].as_u64().unwrap()
+            < after["output"]["checkpoint"].as_u64().unwrap()
+    );
+    signed_out(&directory.0, id);
+    let mut offline = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+    let done = host.drive(&mut offline, budgets(0)).await.unwrap();
+    assert!(matches!(done.stop, AgentStop::Finished(_)));
+    assert_eq!(
+        (
+            done.instructions,
+            done.provider_operations,
+            done.tool_actions
+        ),
+        (0, 0, 0)
+    );
+}

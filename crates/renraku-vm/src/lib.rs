@@ -16,6 +16,7 @@ pub mod execution;
 pub mod heap;
 pub mod identity;
 mod image;
+pub mod inspection;
 pub mod invocation;
 pub mod model;
 pub mod program;

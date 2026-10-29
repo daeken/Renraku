@@ -96,6 +96,9 @@ enum Mode {
     Preview,
     PreviewEcho,
     PreviewStrict,
+    Inspect,
+    InspectFlow,
+    InspectStrict,
 }
 impl Script {
     fn open(path: &Path) -> Self {
@@ -116,6 +119,36 @@ impl Script {
             .count();
         let last = String::from_utf16(&request.messages.last().unwrap().content).unwrap();
         match self.mode {
+            Mode::Inspect | Mode::InspectFlow => {
+                let object=||request.messages.iter().filter_map(|message|String::from_utf16(&message.content).ok())
+                    .filter_map(|text|serde_json::from_str::<Json>(&text).ok()).find_map(|value|value["output"]["field"]["value"]["id"].as_str().map(str::to_owned)).unwrap();
+                return Ok(match assistants {
+                    0=>json!({"op":"inspect_static","field":"Renraku.Guest.Simulation::Saved"}),
+                    1=>{let value:Json=serde_json::from_str(&last).unwrap();json!({"op":"inspect_object","id":value["output"]["field"]["value"]["id"]})},
+                    2=>{
+                        let value:Json=serde_json::from_str(&last).unwrap();let fields=value["output"]["fields"].as_array().unwrap();assert_eq!(fields.iter().find(|f|f["name"]=="Value").unwrap()["value"]["value"],19);
+                        if matches!(self.mode,Mode::InspectFlow){json!({"op":"invoke","method":"Renraku.Guest.Simulation::Advance","arguments":[{"kind":"object","id":object()},{"kind":"i32","value":7}]})}
+                        else{json!({"op":"finish","message":"inspected retained Counter"})}
+                    },
+                    3=>json!({"op":"inspect_object","id":object()}),
+                    4=>{let value:Json=serde_json::from_str(&last).unwrap();assert_eq!(value["output"]["fields"].as_array().unwrap().iter().find(|f|f["name"]=="Value").unwrap()["value"]["value"],26);json!({"op":"finish","message":"inspected Counter before and after one mutation"})},
+                    _=>return Err(Error("unexpected inspection turn".into())),
+                }.to_string());
+            }
+            Mode::InspectStrict=>{
+                if assistants>0{let result:Json=serde_json::from_str(&last).unwrap();assert_eq!(result["ok"],false);}
+                return Ok(match assistants {
+                    0=>json!({"op":"inspect_static","field":"/private/file"}),
+                    1=>json!({"op":"inspect_static","field":"Renraku.Guest.Counter::Value"}),
+                    2=>json!({"op":"inspect_static","field":"Renraku.Guest.Simulation::Saved","stringUnits":257}),
+                    3=>json!({"op":"inspect_object","id":"not-an-id"}),
+                    4=>json!({"op":"inspect_object","id":"00000000000000000000000000000000"}),
+                    5=>json!({"op":"inspect_object","id":"00000000000000000000000000000000","maxFields":33}),
+                    6=>json!({"op":"inspect_static","field":"Renraku.Guest.Simulation::Saved","hostPath":"/tmp/value"}),
+                    7=>json!({"op":"finish","message":"unsupported inspection inputs rejected"}),
+                    _=>return Err(Error("unexpected strict inspection turn".into())),
+                }.to_string());
+            }
             Mode::Preview | Mode::PreviewEcho => return Ok(if assistants==0 {
                 json!({"op":"preview_web","method":"POST","target":"/visit","body":if matches!(self.mode,Mode::PreviewEcho){"\0🦀\"\\\n".repeat(700)}else{String::new()}})
             } else { json!({"op":"finish","message":"preview inspected"}) }.to_string()),
@@ -666,6 +699,180 @@ fn limits() -> AgentLimits {
         provider_operations: 10,
         tool_actions: 20,
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inspector_observes_before_and_after_one_existing_mutation_without_helper_compilation() {
+    let mut test = Test::new();
+    test.host.compiler_driver = test.directory.join("missing-compiler.dll");
+    test.host.dotnet = test.directory.join("missing-dotnet");
+    let mut provider = test.provider();
+    provider.mode = Mode::InspectFlow;
+    let report = test.host.drive(&mut provider, limits()).await.unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    assert_eq!(provider.receipts(), 5);
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let state = vm.agent_status().unwrap();
+    let before: Json =
+        serde_json::from_str(state["transcript"][5]["content"].as_str().unwrap()).unwrap();
+    let after: Json =
+        serde_json::from_str(state["transcript"][9]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(before["output"]["objectId"], after["output"]["objectId"]);
+    assert!(
+        before["output"]["checkpoint"].as_u64().unwrap()
+            < after["output"]["checkpoint"].as_u64().unwrap()
+    );
+    assert_eq!(vm.invocations().count(), 1);
+    assert_eq!(vm.installations().count(), 0);
+    assert!(!test.host.compiler_ledger.exists());
+}
+#[tokio::test(flavor = "current_thread")]
+async fn inspection_freeze_keeps_object_alive_after_static_replacement_gc_and_lost_read_result() {
+    let test = Test::new();
+    let mut provider = test.provider();
+    provider.mode = Mode::Inspect;
+    let mut expected = None;
+    let failure = test
+        .host
+        .drive_with_observer(&mut provider, limits(), |stage| {
+            if stage == AgentStage::ToolStarted(2) {
+                let mut store = CheckpointStore::open(&test.host.universe)?;
+                let saved = store.load()?;
+                let mut vm = saved.snapshot.restore()?;
+                let input: Json =
+                    serde_json::from_str(vm.agent_status()?["pendingInput"].as_str().unwrap())
+                        .unwrap();
+                let original = vm.resolve_object_id(input["id"].as_str().unwrap())?;
+                vm.start(
+                    saved
+                        .snapshot
+                        .program
+                        .entry("Renraku.Guest.Simulation::SaveObject")?,
+                    vec![],
+                )?;
+                vm.run_checkpointed(&mut store, 1000, 100)?;
+                vm.collect_garbage()?;
+                store.save(&vm)?;
+                assert!(vm.heap().object(original).is_ok());
+                expected = Some(original);
+            }
+            if stage == AgentStage::ToolCompleted(2) {
+                return Err(Error("lost unappended inspection".into()));
+            }
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+    assert!(failure.0.contains("lost unappended inspection"));
+    assert!(matches!(
+        test.host.drive(&mut provider, limits()).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    let view = vm
+        .inspect_static("Renraku.Guest.Simulation::Saved", 64)
+        .unwrap();
+    assert_ne!(view["field"]["value"]["id"], expected.unwrap().to_string());
+    assert!(vm.heap().object(expected.unwrap()).is_ok());
+    let state = vm.agent_status().unwrap();
+    let read: Json =
+        serde_json::from_str(state["transcript"][5]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(read["output"]["objectId"], expected.unwrap().to_string());
+    assert_eq!(provider.receipts(), 3);
+    assert_eq!(vm.invocations().count(), 0);
+    // A static read freezes the declaration, not its value. A lost unappended
+    // observation may read a later generation; no old value ID is secretly rooted.
+    let test = Test::new();
+    let mut provider = test.provider();
+    provider.mode = Mode::Inspect;
+    test.host
+        .drive_with_observer(&mut provider, limits(), |stage| {
+            if stage == AgentStage::ToolCompleted(1) {
+                Err(Error("lost static observation".into()))
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .unwrap_err();
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    let old = vm
+        .inspect_static("Renraku.Guest.Simulation::Saved", 64)
+        .unwrap();
+    let original = vm
+        .resolve_object_id(old["field"]["value"]["id"].as_str().unwrap())
+        .unwrap();
+    vm.start(
+        saved
+            .snapshot
+            .program
+            .entry("Renraku.Guest.Simulation::SaveObject")
+            .unwrap(),
+        vec![],
+    )
+    .unwrap();
+    vm.run_checkpointed(&mut store, 1000, 100).unwrap();
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    let new = vm
+        .inspect_static("Renraku.Guest.Simulation::Saved", 64)
+        .unwrap();
+    assert!(vm.heap().object(original).is_err());
+    assert!(matches!(
+        test.host.drive(&mut provider, limits()).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let status = vm.agent_status().unwrap();
+    let read: Json =
+        serde_json::from_str(status["transcript"][3]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(read["output"], new);
+    assert_ne!(
+        read["output"]["field"]["value"]["id"],
+        old["field"]["value"]["id"]
+    );
+}
+#[tokio::test(flavor = "current_thread")]
+async fn inspection_actions_reject_bad_selectors_limits_and_host_paths_without_mutation() {
+    let test = Test::new();
+    let mut provider = test.provider();
+    provider.mode = Mode::InspectStrict;
+    assert!(matches!(
+        test.host.drive(&mut provider, limits()).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.invocations().count(), 0);
+    assert_eq!(vm.installations().count(), 0);
+    let static_ = vm
+        .inspect_static("Renraku.Guest.Simulation::Saved", 64)
+        .unwrap();
+    let object = vm
+        .inspect_object(
+            static_["field"]["value"]["id"].as_str().unwrap(),
+            Default::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        object["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "Value")
+            .unwrap()["value"]["value"],
+        19
+    );
 }
 
 fn first_preview_result(host: &AgentHost) -> Json {

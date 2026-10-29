@@ -55,6 +55,10 @@ published two website versions while preserving saved visits and old responses.
 Its bounded local preview can inspect handler output and drive a correction;
 [live acceptance](docs/acceptance/live-preview-2026-10-29.md) verified this loop
 with paused-frame recovery and independent TCP delivery.
+The [state inspector](docs/inspection.md) now exposes bounded read-only object and
+static storage views. A [live model run](docs/acceptance/live-inspection-2026-10-29.md)
+observed 19 and 26 on the same Counter around one existing mutation, without a
+compiler or getter.
 
 ## Run the demonstration
 

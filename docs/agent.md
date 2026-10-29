@@ -170,6 +170,8 @@ history, `store: false`, and streamed final text follow the subscription route's
 | Search live symbols | `{"op":"search","query":"Counter","limit":20}` |
 | Read an exact implementation | `{"op":"read_code","method":"Renraku.Guest.Counter::Add"}` |
 | Describe a compiler contract | `{"op":"describe","type":"Renraku.Guest.Counter"}` |
+| Inspect a stored static | `{"op":"inspect_static","field":"Renraku.Guest.Simulation::Saved","stringUnits":64}` |
+| Inspect one object | `{"op":"inspect_object","id":"LOGICAL_OBJECT_ID","maxFields":16,"stringUnits":64}` |
 | Compile a caller | `{"op":"compile","assembly":"Generated.Example","source":"C# source","referenceTypes":["Renraku.Guest.Counter"]}` |
 | Install an earlier build | `{"op":"install","compilationTurn":3}` |
 | Invoke a static entry | `{"op":"invoke","method":"Generated.Entry::Run","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]}` |
@@ -198,6 +200,14 @@ facade. Installation adds a new assembly; replacing bodies on existing types is
 not implemented. Compilation success does not imply supported CIL: installation
 performs a separate loader check. See [compilation](compilation.md),
 [workbench](workbench.md), and [compiler service](compiler-service.md).
+
+The [state inspector](inspection.md) reads object/static storage without running
+guest code. Views carry stable identities, declaring owners, runtime slots, exact
+scalar values/reference IDs, and source checkpoint generations. Object Freeze
+retains its target through GC using typed managed roots. UTF-16 previews preserve
+lone surrogates as units; all fields/text/output have explicit bounds/truncation.
+Lost unappended reads may observe a newer generation; committed results remain in
+the managed transcript. No host paths, getters, compiler, or new authority are used.
 
 ## Author and publish a website
 
@@ -381,7 +391,7 @@ cargo test -p renraku-openai --test cli
 cargo test -p renraku-openai --lib inference::tests::agent
 ```
 
-Twenty-two agent tests cover the selected search/read/compile/install/invoke/finish
+Twenty-five agent tests cover the selected search/read/compile/install/invoke/finish
 sequence, lost results around every tool, SDK-free published replay, frozen
 static arguments and pre-invocation GC roots, uncertain inference with and without
 receipts, strict inputs and budgets, generated-code capability denial, compiler
@@ -393,7 +403,7 @@ component tests additionally exercise real process kills around compiler,
 installation, invocation, and inference commits. These automated fixtures use no
 live inference. The separately recorded live acceptance used ten real model turns.
 
-Seven additional local HTTP integration tests run the actual asynchronous
+Eight additional local HTTP integration tests run the actual asynchronous
 subscription adapter through the coding loop. The fixture chooses nine actions
 from the received full history: search, read CIL, describe a contract, compile an
 intentional type error, correct it using the saved CS1503 diagnostic, install,

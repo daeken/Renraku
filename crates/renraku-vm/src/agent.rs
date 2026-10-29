@@ -35,6 +35,8 @@ pub const SYSTEM_PROMPT: &str = r#"You control a persistent CIL runtime. Reply w
 {"op":"search","query":"counter","limit":20} searches live type/field/method names (limit 1..50).
 {"op":"read_code","method":"logical method/code ID or Type::Method"} reads exact saved CIL and retained assembly-scoped source.
 {"op":"describe","type":"type name or logical ID"} describes a compiler contract; unsupported shapes return an error.
+{"op":"inspect_static","field":"logical field ID or Declaring.Type::Field","stringUnits":64} observes one stored static field without executing guest code. Returns output.field with owner/declaredSlot/value; object values include a logical id. Scalar values show the runtime's signed i32/i64 storage bits, not source-language unsigned or enum formatting; describe the compiler contract for source declarations. Constants and ambiguous selectors reject. stringUnits defaults 64 and permits 0..256 exact UTF-16 units.
+{"op":"inspect_object","id":"logical object ID","maxFields":16,"stringUnits":64} observes one managed object's fields without recursively expanding reference graphs. Freeze retains this object through GC. maxFields defaults 16 and permits 1..32; stringUnits defaults 64 and permits 0..256. Views include stable identities, owners/types, scalar values or object IDs, observed checkpoint generation, and explicit truncation. Int64 values are decimal strings. String previews retain exact UTF-16 unit arrays; text is null if the displayed prefix contains an unpaired surrogate. Label previews may truncate. Reference IDs in old results are observations, not permanent retention promises. A lost unappended read may observe a later checkpoint on resume; committed tool results remain in managed history. No host paths or mutation/capability grants.
 {"op":"compile","assembly":"Generated.Example","source":"C# source","referenceTypes":["Renraku.Guest.Counter"]} compiles one Generated.cs against the core and selected live types. Roots must share one module. Source <=32768 UTF-8 bytes. Compilation alone does not install code.
 {"op":"install","compilationTurn":3} installs the artifact compiled in that earlier numbered turn. Assembly names must be new; this does not replace existing bodies.
 {"op":"invoke","method":"logical method ID or Type::Method","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]} invokes a static entry with <=8 arguments. Other arguments: {"kind":"i32","value":7}, {"kind":"i64","value":"9007199254740993"}, {"kind":"object","id":"logical object ID"}, {"kind":"null"}. Calls have bounded instructions and cannot submit model requests. Static selectors freeze to their current values before execution.
@@ -137,6 +139,18 @@ enum Action {
         #[serde(rename = "type")]
         type_name: String,
     },
+    InspectObject {
+        id: String,
+        #[serde(rename = "maxFields", default = "default_inspection_fields")]
+        max_fields: usize,
+        #[serde(rename = "stringUnits", default = "default_string_units")]
+        string_units: usize,
+    },
+    InspectStatic {
+        field: String,
+        #[serde(rename = "stringUnits", default = "default_string_units")]
+        string_units: usize,
+    },
     Compile {
         assembly: String,
         source: String,
@@ -176,6 +190,12 @@ enum Action {
 }
 fn default_limit() -> usize {
     20
+}
+fn default_inspection_fields() -> usize {
+    16
+}
+fn default_string_units() -> usize {
+    64
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -560,6 +580,12 @@ fn action_summary(action: Option<&Action>) -> (&'static str, String) {
         Some(Action::Search { query, .. }) => ("search", format!("search {query}")),
         Some(Action::ReadCode { method }) => ("read_code", format!("read code {method}")),
         Some(Action::Describe { type_name }) => ("describe", format!("describe {type_name}")),
+        Some(Action::InspectObject { id, .. }) => {
+            ("inspect_object", format!("inspect object {id}"))
+        }
+        Some(Action::InspectStatic { field, .. }) => {
+            ("inspect_static", format!("inspect static field {field}"))
+        }
         Some(Action::Compile {
             assembly, source, ..
         }) => (
@@ -591,6 +617,24 @@ fn action_summary(action: Option<&Action>) -> (&'static str, String) {
 fn result_summary(result: &Json) -> String {
     if let Some(error) = result["error"].as_str() {
         return error.into();
+    }
+    if result["output"]["kind"] == "object" {
+        return format!(
+            "{} fields observed at checkpoint {}{}",
+            result["output"]["fieldsReturned"],
+            result["output"]["checkpoint"],
+            if result["output"]["fieldsTruncated"] == true {
+                " (field view truncated)"
+            } else {
+                ""
+            }
+        );
+    }
+    if result["output"]["kind"] == "static" {
+        return format!(
+            "static storage observed at checkpoint {}",
+            result["output"]["checkpoint"]
+        );
     }
     if let Some(status) = result["preview"]["status"].as_u64() {
         return format!(
@@ -772,6 +816,36 @@ fn freeze(vm: &Vm<'_>, action: Action, count: u32) -> Result<Action> {
         Action::Describe { type_name } => Action::Describe {
             type_name: vm.program.find_type(&type_name)?.to_string(),
         },
+        Action::InspectObject {
+            id,
+            max_fields,
+            string_units,
+        } => {
+            crate::inspection::InspectionLimits {
+                max_fields,
+                string_units,
+            }
+            .validate()?;
+            Action::InspectObject {
+                id: vm.resolve_object_id(&id)?.to_string(),
+                max_fields,
+                string_units,
+            }
+        }
+        Action::InspectStatic {
+            field,
+            string_units,
+        } => {
+            crate::inspection::InspectionLimits {
+                string_units,
+                ..Default::default()
+            }
+            .validate()?;
+            Action::InspectStatic {
+                field: vm.program.resolve_static_field(&field)?.to_string(),
+                string_units,
+            }
+        }
         Action::Compile {
             assembly,
             source,
@@ -1175,7 +1249,9 @@ impl AgentHost {
                     .and_then(|action| freeze(&vm, action, state.count));
                 match prepared {
                     Ok(action) => {
-                        let mut retained = if let Action::Invoke { arguments, .. } = &action {
+                        let mut retained = if let Action::InspectObject { id, .. } = &action {
+                            vec![Value::Reference(vm.resolve_object_id(id)?)]
+                        } else if let Action::Invoke { arguments, .. } = &action {
                             arguments
                                 .iter()
                                 .filter(|arg| matches!(arg, Argument::Object { .. }))
@@ -1311,6 +1387,27 @@ fn execute(
         },
         Action::ReadCode { method } => match vm.read_code(&method) {
             Ok(value) => json!({"ok":true,"output":value}),
+            Err(error) => failed(error),
+        },
+        Action::InspectObject {
+            id,
+            max_fields,
+            string_units,
+        } => match vm.inspect_object(
+            &id,
+            crate::inspection::InspectionLimits {
+                max_fields,
+                string_units,
+            },
+        ) {
+            Ok(view) => json!({"ok":true,"output":view}),
+            Err(error) => failed(error),
+        },
+        Action::InspectStatic {
+            field,
+            string_units,
+        } => match vm.inspect_static(&field, string_units) {
+            Ok(view) => json!({"ok":true,"output":view}),
             Err(error) => failed(error),
         },
         Action::Describe { type_name } => match vm

@@ -37,6 +37,8 @@ fn execute() -> Result<()> {
         "       renraku-vm web-inspect <universe.db>\n",
         "       renraku-vm search <universe.db> <query> [limit]\n",
         "       renraku-vm read-code <universe.db> <method-or-code-ID>\n",
+        "       renraku-vm inspect-object <universe.db> <object-ID> [max-fields] [string-units]\n",
+        "       renraku-vm inspect-static <universe.db> <field-ID-or-Type::Field> [string-units]\n",
         "       renraku-vm export-reference <universe.db> <type-name-or-ID> [type ...]\n",
         "       renraku-vm install <universe.db> <implementation.dll> [reference-view.json ...]\n",
         "       renraku-vm install-once <universe.db> <request-ID> <bundle-directory>\n",
@@ -217,12 +219,15 @@ fn execute() -> Result<()> {
         }
         Some(
             "search" | "read-code" | "export-reference" | "install" | "invoke" | "invoke-once"
-            | "invocation" | "install-once" | "installation" | "agent-inspect",
+            | "invocation" | "install-once" | "installation" | "agent-inspect" | "inspect-object"
+            | "inspect-static",
         ) => {
             let command = args[0].as_str();
             let valid = match command {
                 "search" => (3..=4).contains(&args.len()),
                 "read-code" => args.len() == 3,
+                "inspect-object" => (3..=5).contains(&args.len()),
+                "inspect-static" => (3..=4).contains(&args.len()),
                 "export-reference" => (3..=34).contains(&args.len()),
                 "install" => (3..=19).contains(&args.len()),
                 "invoke" => (4..=132).contains(&args.len()),
@@ -252,6 +257,24 @@ fn execute() -> Result<()> {
                     )?,
                 )?,
                 "read-code" => print_json(&saved.snapshot.restore()?.read_code(&args[2])?)?,
+                "inspect-object" => print_json(
+                    &saved.snapshot.restore()?.inspect_object(
+                        &args[2],
+                        renraku_vm::inspection::InspectionLimits {
+                            max_fields: usize::try_from(number(args.get(3), 16)?)
+                                .map_err(|_| Error("invalid inspection field limit".into()))?,
+                            string_units: usize::try_from(number(args.get(4), 64)?)
+                                .map_err(|_| Error("invalid inspection string limit".into()))?,
+                        },
+                    )?,
+                )?,
+                "inspect-static" => print_json(
+                    &saved.snapshot.restore()?.inspect_static(
+                        &args[2],
+                        usize::try_from(number(args.get(3), 64)?)
+                            .map_err(|_| Error("invalid inspection string limit".into()))?,
+                    )?,
+                )?,
                 "install-once" => {
                     let artifact = BuildArtifact::from_bundle(&args[3])?;
                     let record = install_once(&mut store, &args[2], &artifact)?;

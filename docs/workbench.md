@@ -1,5 +1,9 @@
 # Runtime workbench and code generation
 
+The [state inspector](inspection.md) also provides bounded read-only object and
+static-field views with logical identities, declaring owners, exact storage bits,
+and UTF-16 previews. The agent can use them without compiling or invoking a getter.
+
 The next acceptance target is a model discovering the available API, reading
 current code, generating a caller, compiling it, and executing it against existing
 persistent objects. The host tools now provide that path. A deterministic model
