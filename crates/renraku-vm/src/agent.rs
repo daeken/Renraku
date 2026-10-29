@@ -33,7 +33,7 @@ const MAX_ACTION: usize = 64 * 1024;
 const MAX_OUTPUT: usize = 16 * 1024;
 pub const SYSTEM_PROMPT: &str = r#"You control a persistent CIL runtime. Reply with exactly one JSON object, no Markdown or prose. This is a text protocol, not native function calling. Tool results arrive as user JSON messages. Supported actions:
 {"op":"search","query":"counter","limit":20} searches live type/field/method names (limit 1..50).
-{"op":"read_code","method":"logical method/code ID or Type::Method"} reads exact saved CIL and retained assembly-scoped source.
+{"op":"read_code","method":"logical method/code ID or Type::Method"} reads exact saved CIL and retained assembly-scoped source. Optional sourceOnly:true returns retained assembly-scoped source provenance and pinned method/code identity without CIL instructions or the build manifest; use it when a full listing exceeds the output limit. Source is provenance, not executable authority.
 {"op":"describe","type":"type name or logical ID"} describes a compiler contract; unsupported shapes return an error.
 {"op":"inspect_static","field":"logical field ID or Declaring.Type::Field","stringUnits":64} observes one stored static field without executing guest code. Returns output.field with owner/declaredSlot/value; object values include a logical id. Scalar values show the runtime's signed i32/i64 storage bits, not source-language unsigned or enum formatting; describe the compiler contract for source declarations. Constants and ambiguous selectors reject. stringUnits defaults 64 and permits 0..256 exact UTF-16 units.
 {"op":"inspect_object","id":"logical object ID","maxFields":16,"stringUnits":64} observes one managed object's fields without recursively expanding reference graphs. Freeze retains this object through GC. maxFields defaults 16 and permits 1..32; stringUnits defaults 64 and permits 0..256. Views include stable identities, owners/types, scalar values or object IDs, observed checkpoint generation, and explicit truncation. Int64 values are decimal strings. String previews retain exact UTF-16 unit arrays; text is null if the displayed prefix contains an unpaired surrogate. Label previews may truncate. Reference IDs in old results are observations, not permanent retention promises. A lost unappended read may observe a later checkpoint on resume; committed tool results remain in managed history. No host paths or mutation/capability grants.
@@ -134,6 +134,8 @@ enum Action {
     },
     ReadCode {
         method: String,
+        #[serde(rename = "sourceOnly", default, skip_serializing_if = "is_false")]
+        source_only: bool,
     },
     Describe {
         #[serde(rename = "type")]
@@ -187,6 +189,9 @@ enum Action {
     Finish {
         message: String,
     },
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 fn default_limit() -> usize {
     20
@@ -578,7 +583,7 @@ fn event_line(text: &str) -> String {
 fn action_summary(action: Option<&Action>) -> (&'static str, String) {
     match action {
         Some(Action::Search { query, .. }) => ("search", format!("search {query}")),
-        Some(Action::ReadCode { method }) => ("read_code", format!("read code {method}")),
+        Some(Action::ReadCode { method, .. }) => ("read_code", format!("read code {method}")),
         Some(Action::Describe { type_name }) => ("describe", format!("describe {type_name}")),
         Some(Action::InspectObject { id, .. }) => {
             ("inspect_object", format!("inspect object {id}"))
@@ -807,10 +812,14 @@ fn freeze(vm: &Vm<'_>, action: Action, count: u32) -> Result<Action> {
             )?;
             Action::Search { query, limit }
         }
-        Action::ReadCode { method } => {
+        Action::ReadCode {
+            method,
+            source_only,
+        } => {
             let code = vm.read_code(&method)?;
             Action::ReadCode {
                 method: code["codeVersion"].as_str().unwrap().into(),
+                source_only,
             }
         }
         Action::Describe { type_name } => Action::Describe {
@@ -957,7 +966,7 @@ fn freeze(vm: &Vm<'_>, action: Action, count: u32) -> Result<Action> {
 fn output(value: Json) -> Result<String> {
     let text = serde_json::to_string(&value).map_err(|e| Error(e.to_string()))?;
     if text.len() > MAX_OUTPUT {
-        Ok(json!({"ok":false,"truncated":true,"error":"tool output exceeds 16384 bytes; select a narrower query or smaller method"}).to_string())
+        Ok(json!({"ok":false,"truncated":true,"error":"tool output exceeds 16384 bytes; select a narrower query, smaller method, or read_code sourceOnly:true"}).to_string())
     } else {
         Ok(text)
     }
@@ -1385,8 +1394,18 @@ fn execute(
             Ok(value) => json!({"ok":true,"output":value}),
             Err(error) => failed(error),
         },
-        Action::ReadCode { method } => match vm.read_code(&method) {
-            Ok(value) => json!({"ok":true,"output":value}),
+        Action::ReadCode {
+            method,
+            source_only,
+        } => match vm.read_code(&method) {
+            Ok(mut value) => {
+                if source_only {
+                    value.as_object_mut().unwrap().remove("instructions");
+                    value.as_object_mut().unwrap().remove("buildManifest");
+                    value["representation"] = json!("source_provenance");
+                }
+                json!({"ok":true,"output":value})
+            }
             Err(error) => failed(error),
         },
         Action::InspectObject {

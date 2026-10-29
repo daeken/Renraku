@@ -1,5 +1,6 @@
 //! Exercise the real subscription adapter against loopback HTTP, never a live account.
 use super::*;
+mod multimodule;
 use renraku_vm::{
     agent::{
         AgentEvent, AgentEventKind, AgentHost, AgentLimits, AgentStage, AgentStop, submit_input,

@@ -361,6 +361,25 @@ and do not inherit persistence.
   [reference sets](reference-sets.md). Cycles, ambiguous dependency names and other
   unsupported declaration shapes still reject explicitly. Legacy fixtures and
   both existing demos remain unchanged; no live inference was used.
+- The subscription adapter now has an 18-turn multi-module local HTTP fixture:
+  discover/inspect a saved grouped-site map, describe its dependency set, read
+  retained library/page source, correct CS1503 diagnostics, compile/install/invoke
+  a caller against the original map, inspect its changed value, then compile,
+  install, publish and preview a read-only page using the decimal library.
+  Exact wire histories match managed transcript prefixes. Lost source, rejected/
+  successful compiler, install, invoke and publication results recover after GC
+  without provider operations or the SDK; an operator's newer publication is not
+  rolled back when authority is revoked. All 18 requests have terminal receipts,
+  original map/type/field/node identities and old HTTP responses survive, and
+  independent TCP/replay and zero-operation finished recovery pass. This fixture
+  is scripted rather than autonomous-model evidence.
+  It exposed the full StringMap.Set listing exceeding the existing 16 KiB tool
+  output limit. Optional read_code sourceOnly:true now returns pinned method/code
+  IDs and exact retained assembly source/hash/artifact provenance, omitting CIL
+  instructions and buildManifest and marking source_provenance. Default/old frozen
+  input shapes remain unchanged, and the same output bound/capability policy
+  applies. See [agent source inspection](agent.md). A separate bounded live
+  multi-module acceptance is being recorded under target.
 
 ## Validation
 
@@ -368,7 +387,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 235 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 236 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.

@@ -212,6 +212,17 @@ lone surrogates as units; all fields/text/output have explicit bounds/truncation
 Lost unappended reads may observe a newer generation; committed results remain in
 the managed transcript. No host paths, getters, compiler, or new authority are used.
 
+For a large method, use `{"op":"read_code","method":"Type::Method","sourceOnly":true}`
+to read retained assembly-scoped source without the instruction listing or build
+manifest. The result keeps the exact method/code IDs, source hashes and artifact
+identity, marks representation `source_provenance`, and retains sourceAvailable
+and sourceScope. This projection runs no code and grants no file access. Default
+read_code output remains authoritative saved CIL plus provenance. Source is not
+an executable replacement, and the same 16 KiB output limit still applies.
+An unavailable/oversized source remains explicit; this is not source pagination.
+The option defaults false and is omitted from canonical old frozen inputs, so
+older pending read actions and format-7 agent fixtures retain their wire shape.
+
 ## Author and publish a website
 
 `web_status` reports the current default handler, publication count/limit, current
