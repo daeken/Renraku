@@ -14,8 +14,9 @@ heap lifetime rules, tracing collection, explicit frames, and atomic durable
 checkpoints. The [CIL profile](cil-profile.md) defines the executable subset and
 [checkpoint contract](checkpoints.md) defines recovery. A host outbox implements
 durable external request intent, reconciliation, and portable waiting CIL calls.
-Live dispatch replacement, type initialization, scheduling of multiple contexts,
-and real provider capabilities remain requirements for subsequent work.
+The host-only OpenAI adapter adds a real text capability through subscription
+OAuth and durable local completion receipts. Live dispatch replacement, type
+initialization, and scheduling of multiple contexts remain subsequent work.
 
 ## Identity and object records
 
@@ -218,12 +219,15 @@ commit outside the universe transaction. A linked C# conversation makes two
 requests through portable waiting frames; response storage and guest wakeup
 commit together. The CLI can queue, dispatch, inspect, and reconcile requests.
 New guest model calls require explicit host opt-in on every fresh VM and restore.
-The bounded host driver now coordinates execution and local delivery, counting
+The bounded host driver now coordinates execution and authorized delivery, counting
 guest instructions and provider submissions or lookups independently. It stops
 on a missing receipt and does not drain unrelated host requests. Its limits are
-per-invocation host policy; they are not durable spending quotas. Real providers,
-streaming, tools, and explicit retry policies remain later work. The selected
-first real adapter is OpenAI Responses.
+per-invocation host policy; they are not durable spending quotas. The
+[OpenAI Responses adapter](openai-responses.md) implements streamed text inference
+through ChatGPT OAuth. It pins the selected profile/model and saves a local
+completion receipt before returning a guest string. Interrupted subscription
+streams cannot be retrieved remotely and remain uncertain without a local
+receipt. Tools and explicit retry policies remain later work.
 
 Chat captures a capability/model binding and ordered role/content messages from
 ordinary linked guest objects. Captured identifiers and roles are values; content

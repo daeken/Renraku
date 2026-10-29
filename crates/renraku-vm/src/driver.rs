@@ -47,10 +47,9 @@ impl Vm<'_> {
             self.model_calls_enabled,
             "model driver is disabled by the host",
         )?;
-        require(
-            provider.capability() == "local.echo",
-            "model driver requires the local.echo capability",
-        )?;
+        // Supplying a host provider grants that capability for this invocation.
+        // Each waiting effect must still match its capability and model exactly.
+        crate::model::validate_identifier(provider.capability())?;
         require(
             limits.checkpoint_interval > 0,
             "checkpoint interval must be positive",

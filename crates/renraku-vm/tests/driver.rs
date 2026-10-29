@@ -182,7 +182,7 @@ fn invalid_limits_and_disabled_or_wrong_capabilities_fail_before_progress() {
     struct WrongProvider;
     impl ModelProvider for WrongProvider {
         fn capability(&self) -> &str {
-            "wrong.provider"
+            "invalid capability"
         }
         fn submit(&mut self, _: &ModelRequest) -> Result<Vec<u16>> {
             panic!("wrong provider invoked")
@@ -231,6 +231,39 @@ fn invalid_limits_and_disabled_or_wrong_capabilities_fail_before_progress() {
     );
     assert_eq!(vm.context(), &before);
     assert_eq!((provider.submissions, provider.lookups), (0, 0));
+}
+
+#[test]
+fn supplied_host_provider_still_must_match_the_waiting_capability() {
+    struct OtherProvider;
+    impl ModelProvider for OtherProvider {
+        fn capability(&self) -> &str {
+            "other.valid.provider"
+        }
+        fn submit(&mut self, _: &ModelRequest) -> Result<Vec<u16>> {
+            panic!("mismatched provider called")
+        }
+        fn reconcile(&mut self, _: &ModelRequest) -> Result<Option<Vec<u16>>> {
+            panic!("mismatched provider called")
+        }
+    }
+    let program = program();
+    let databases = Databases::new();
+    let mut store = CheckpointStore::open(&databases.universe).unwrap();
+    let mut vm = start(&program, "ModelHarness");
+    assert!(
+        vm.drive_model(&mut store, &mut OtherProvider, limits(1000, 1))
+            .unwrap_err()
+            .0
+            .contains("capability")
+    );
+    assert!(matches!(
+        vm.context().status,
+        ExecutionStatus::Waiting { .. }
+    ));
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.effects().next().unwrap().state, EffectState::Prepared);
 }
 
 #[test]

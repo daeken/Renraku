@@ -3,9 +3,9 @@
 The current implementation connects CIL callers, a host API, and CLI delivery
 to the durable `local.echo` capability and `echo-v1` model. The provider returns
 `echo: ` followed by the exact UTF-16 content of the final user message. The
-selected first real provider is OpenAI Responses with subscription-backed ChatGPT
-OAuth. The [host sign-in flow](openai-auth.md) is implemented; its inference adapter
-is still future work.
+first real provider is [OpenAI Responses](openai-responses.md) with
+subscription-backed [ChatGPT OAuth](openai-auth.md), streamed inference, and
+durable local completion receipts.
 
 ## Guest calls and waiting frames
 
@@ -85,8 +85,11 @@ roots, statics, and guest frames. The outbox retains its request and completed
 response as GC roots. The host must save queued work before expecting it to
 survive a crash.
 
-`Vm::dispatch_model` checks the provider capability and model support, changes prepared to
-in flight, and saves the complete universe **before invoking the provider**.
+`Vm::dispatch_model` checks the provider capability and model support, and calls
+`ModelProvider::validate_request` for non-inference preflight. A rejection leaves
+the effect Prepared. Preflight may validate encoding and authorization but must
+not submit inference. The VM then changes prepared to in flight and saves the
+complete universe **before invoking provider submission**.
 A save failure prevents submission. The provider receives the immutable request
 and the stable effect ID. A successful response becomes a new managed string;
 the completed record and response commit in one universe transaction before
@@ -112,8 +115,10 @@ needed by the guest.
 ## Bounded host driver
 
 `Vm::drive_model(store, provider, DriverLimits)` coordinates checkpointed guest
-execution and delivery of the active guest's waiting request. The current driver
-requires host opt-in and a local.echo provider. It does not drain unrelated
+execution and delivery of the active guest's waiting request. The driver
+requires host opt-in and an explicitly supplied host provider with a valid
+capability identifier. Each waiting effect must match its capability and model.
+It does not drain unrelated
 host-created outbox records.
 
 The caller supplies an instruction budget, a provider-operation budget, and a
@@ -208,9 +213,12 @@ two Chat calls, then changes the source binding after completion. It returns 11,
 matching CoreCLR. The first captured history retains its original system text
 and binding, and the next request includes the first response by the same ID.
 
-There is no real model connection, credential storage, streaming, tool
-execution, cancellation, or automatic retry yet.
-Experiment branches must default to effects disabled. A real adapter needs an
+The host-only OpenAI crate supplies a real text model connection, credential
+storage, and internal transport streaming. It returns a single completed guest
+string and keeps socket and credential state outside the universe. See its
+[profile binding, receipt protocol, and limits](openai-responses.md).
+Tool execution, cancellation, and automatic retry remain unsupported.
+Experiment branches must default to effects disabled. Each adapter needs an
 explicit capability identity, request schema, and reconciliation policy.
 
 ## Recovery tests

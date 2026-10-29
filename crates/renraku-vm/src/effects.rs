@@ -52,6 +52,11 @@ pub trait ModelProvider {
     fn supports_model(&self, model: &str) -> bool {
         model == DEFAULT_MODEL
     }
+    /// Local/authorization checks only; must not submit inference. A rejection
+    /// leaves the effect Prepared. Delivery starts after the dispatch checkpoint.
+    fn validate_request(&mut self, _request: &ModelRequest) -> Result<()> {
+        Ok(())
+    }
     fn submit(&mut self, request: &ModelRequest) -> Result<Vec<u16>>;
     fn reconcile(&mut self, request: &ModelRequest) -> Result<Option<Vec<u16>>>;
 }
@@ -289,6 +294,7 @@ impl Vm<'_> {
             }
         }
         let request = self.model_request(id)?;
+        provider.validate_request(&request)?;
         self.effects.get_mut(&id).unwrap().state = EffectState::InFlight;
         // On a save error do not submit, and keep the memory state conservative.
         store.save(self)?;

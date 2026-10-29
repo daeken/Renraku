@@ -18,8 +18,9 @@ and return to the terminal. The command reports the profile ID and whether
 ChatGPT plan permission was granted. Identity sign-in alone does not authorize
 inference. The callback waits up to five minutes.
 
-This milestone handles authentication. Responses inference and account-specific
-model discovery are next. No live model request is made by these commands.
+The [Responses harness](openai-responses.md) adds account-specific model discovery
+and an explicitly authorized persistent CIL prompt. Login and status make no
+inference request.
 The flow follows OpenAI's official
 [registration contract](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
 and [account/session guidance](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions).
@@ -91,7 +92,7 @@ The account/client mapping stays available for a later sign-in. If revocation
 cannot be confirmed, the CLI says so and points to ChatGPT Settings for
 disconnecting the app.
 
-## Verification and next step
+## Verification and inference
 
 Local HTTP fixtures exercise complete sign-in and refresh flows, invalid JWT
 signatures and claims, permission withholding, callback attacks, account
@@ -101,7 +102,8 @@ reaches the server; reopening the store requires sign-in and sends no retry.
 The ignored probe in the test listing is invoked by that parent test.
 
 The live production discovery document was fetched successfully. An interactive
-sign-in with the user's account has not yet been run. The next adapter must bind
-each effect to a specific verified profile, select an account-available model,
-and implement the subscription flow's streamed Responses protocol with durable
-local completion receipts. Interrupted inference remains uncertain.
+sign-in with the user's account has not yet been run. The Responses adapter now
+binds each effect to a specific profile and selected account-available model,
+with durable local completion receipts. `refresh_profile(id)` renews that exact
+profile independently of active UI selection. Interrupted inference remains
+uncertain; see [the adapter contract and try-it commands](openai-responses.md).

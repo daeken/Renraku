@@ -107,7 +107,7 @@ impl ModelRequest {
         Ok(())
     }
     /// Versioned canonical bytes bind receipts to the full immutable request.
-    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
+    pub fn encode(&self) -> Result<Vec<u8>> {
         self.validate()?;
         fn bytes(output: &mut Vec<u8>, data: &[u8]) {
             output.extend((data.len() as u32).to_le_bytes());

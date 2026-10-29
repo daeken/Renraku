@@ -14,6 +14,16 @@ namespace Renraku.Guest
         public static int Total;
         public static Counter Saved;
 
+        // Real transport uses the same ordinary CIL call and linked guest objects.
+        public static string OpenAIHarness(string capability, string model, string prompt)
+        {
+            LastBinding = new Renraku.ModelBinding(capability, model);
+            LastChat = new Renraku.ChatMessage(1, prompt);
+            LastText = Renraku.Model.Chat(LastBinding, LastChat);
+            LastChat.Next = new Renraku.ChatMessage(2, LastText);
+            return LastText;
+        }
+
         public static int Run()
         {
             Counter counter = new Counter(3);

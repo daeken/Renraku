@@ -1,6 +1,11 @@
-//! Host-only ChatGPT subscription authentication. No tokens enter guest state.
+//! Host-only ChatGPT subscription authentication and durable text inference.
+//! No tokens or native network state enter the guest universe.
 mod callback;
+mod inference;
+mod receipts;
 mod storage;
+mod stream;
+pub use inference::{AvailableModel, OpenAIProvider, models};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
@@ -437,8 +442,21 @@ impl AuthClient {
     /// Refreshes are serialized. A durable pending marker prevents reuse of a
     /// rotating refresh token after a crash or uncertain network outcome.
     pub fn refresh(&self) -> Result<ProfileSummary> {
+        let id = {
+            let guard = self.store.lock()?;
+            guard.vault.profiles[active(&guard)?].id
+        };
+        self.refresh_profile(id)
+    }
+    /// Refresh exactly this profile, independently of the active UI selection.
+    pub fn refresh_profile(&self, id: Uuid) -> Result<ProfileSummary> {
         let mut guard = self.store.lock()?;
-        let index = active(&guard)?;
+        let index = guard
+            .vault
+            .profiles
+            .iter()
+            .position(|p| p.id == id)
+            .ok_or_else(|| fail("authentication profile does not exist"))?;
         require(
             !guard.vault.profiles[index].refresh_pending,
             "previous refresh outcome is unknown; sign in again",

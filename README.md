@@ -164,8 +164,9 @@ retain its receipts.
 For a waiting harness, `drive-local` can reconcile and resume within its budgets.
 Alternatively, reconcile using its universe and provider paths, then resume
 with `--allow-model-calls`. This demonstration uses a local echo
-substitute. Real model providers, streaming, tools, and explicit retry policies
-are later work. See the [effect contract](docs/effects.md).
+substitute. A [subscription-backed Responses harness](docs/openai-responses.md)
+is also available. Tools and explicit retry policies are later work. See the
+[effect contract](docs/effects.md).
 
 ## Development and validation
 
@@ -217,8 +218,11 @@ identity, and saves a private host profile. Refresh, account selection, and
 logout are also implemented. See [subscription authentication](docs/openai-auth.md)
 for commands and storage details.
 
-This is the authentication milestone; the streamed Responses adapter is next.
-No model inference is performed yet. Credentials stay outside the guest universe.
+The [Responses harness](docs/openai-responses.md) discovers account models and
+runs a real prompt through persistent CIL with explicit opt-in. It saves local
+completion receipts before waking the guest and never resends an uncertain
+request. Credentials stay outside the guest universe. Login and status do not
+submit inference.
 The auth crate uses HTTPS and JWT libraries; its TLS backend also needs CMake
 and a C build toolchain.
 
@@ -232,8 +236,9 @@ The local model harness now demonstrates strings, linked conversation history,
 durable requests, waiting CIL callers, and bounded automatic execution and
 delivery. Structured model requests and saved provider bindings are implemented.
 The selected first real provider is the OpenAI Responses API using the user's
-ChatGPT subscription through OAuth. Host sign-in is implemented; the streamed
-inference adapter is next. Broader introspection and live code evolution remain
+ChatGPT subscription through OAuth. Sign-in, account-specific discovery, streamed
+inference, and local receipt recovery are implemented. Interactive conversation,
+tools, broader introspection, and live code evolution remain
 on the architecture roadmap.
 
 [Progress and handoff](docs/progress.md) records the current state and the next

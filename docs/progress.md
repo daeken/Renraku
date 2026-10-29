@@ -1,7 +1,8 @@
 # Renraku progress and next work
 
 As of October 28, 2026, the core process crash-and-resume demonstration, managed
-strings, and persistent local model harness work. CIL is the execution foundation for all
+strings, persistent local model harness, and subscription Responses adapter work.
+CIL is the execution foundation for all
 persistent guest computation. External programs will require explicit capabilities
 and do not inherit persistence.
 
@@ -48,6 +49,20 @@ and do not inherit persistence.
 - Private Unix credential files outside Git, atomic commits and process locks.
   Pending refresh markers prevent reuse of rotating tokens after uncertain
   outcomes or SIGKILL. Logout clears local credentials before remote revocation.
+- Profile-pinned subscription model discovery and streamed Responses text
+  inference. Explicit model choice, full histories, developer-role mapping,
+  transport UTF-16 preflight, scope checks, and expiry/refresh of the exact profile.
+- Private SQLite completion ledger, with one durable reservation before each
+  POST and a terminal receipt before VM response/wakeup commit. Reconciliation
+  is offline; partial streams and missing receipts stay uncertain without retry.
+- Generalized bounded host driver accepts an explicitly supplied provider and
+  still checks each saved capability/model. A non-inference validation hook
+  rejects unsupported requests before marking InFlight. Public canonical request
+  bytes let separate host crates bind receipts without changing checkpoint format.
+- `renraku-openai models`, `demo`, and `drive` CLI commands. OpenAIHarness builds
+  ordinary linked CIL objects, receives a completed string, and retains its
+  prompt/reply. Real inference requires explicit host opt-in; see the
+  [try-it guide](openai-responses.md).
 
 ## Validation
 
@@ -55,11 +70,11 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 101 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 113 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
-Twelve driver tests cover budget accounting, automatic delivery, first/second
+Thirteen driver tests cover budget accounting, automatic delivery, first/second
 submission and completion SIGKILL recovery, missing receipts, stale writers,
 fault persistence, and CLI authorization and recovery. The full CLI harness
 also runs end to end with `drive-local`.
@@ -67,11 +82,19 @@ Eight structured-model tests cover frozen histories/bindings, malformed chains,
 full-body receipts, model rejection, limits, per-instruction and SIGKILL recovery,
 and upgrade of a legacy waiting call with its accepted receipt. A golden canonical
 request encoding preserves exact UTF-16. ChatHarnessScore returns 11 like CoreCLR.
-Fifteen auth tests cover protocol validation, invalid identities, scopes,
+Sixteen auth tests cover protocol validation, invalid identities, scopes,
 registration reuse, profiles, redaction, storage, sign-out, and actual refresh
-SIGKILL recovery. Its ignored subprocess probe is launched by the parent test.
-Production discovery and CLI status were smoke-tested. No interactive login or
-model inference was performed. Read [the auth guide](openai-auth.md).
+SIGKILL recovery, and refreshing a profile independently of active selection.
+Nine inference tests cover SSE framing/fragmentation, terminal validation and
+bounds, full wire requests, fixed profiles, offline and mismatched receipts,
+preflight rejections, uncertain errors, receipt commit failure, concurrent
+reservations, foreign ledgers, live CIL delivery, and actual SIGKILL before and
+after completion receipt commit. A CLI integration test verifies opt-in,
+durable preflight rejection, zero budgets, and credential absence from snapshots.
+Both ignored subprocess probes are launched by their parent crash tests.
+Production discovery and CLI status were smoke-tested in the auth milestone.
+No interactive login or real inference has been initiated. Read
+[the auth guide](openai-auth.md) and [Responses guide](openai-responses.md).
 
 On this host the shell may require `/Users/daeken/.cargo/bin/cargo` explicitly.
 The .NET 10 SDK is needed for compiler fixtures. Restore itself does not need it.
@@ -88,10 +111,19 @@ force-push, and preserve local commits if the remote is temporarily unavailable.
 ## Next implementation target
 
 The user selected **OpenAI Responses API through their ChatGPT subscription**,
-specifically requiring OAuth. Structured requests and durable model bindings are
-complete. Host-side OAuth/networking is implemented and ready for interactive
-login. The next milestone is the subscription-backed Responses adapter. Keep subscription
-access as the intended path, rather than requiring an API billing account/key.
+specifically requiring OAuth. The adapter is implemented and ready for the user
+to sign in, discover models, and run the persistent one-prompt demo. No model
+has been selected. Keep subscription access as the intended path, with no API-key
+billing fallback. Do not start interactive login or real inference in an
+unattended heartbeat. Existing local fixtures allow independent progress.
+
+The next useful milestone is a persistent interactive conversation CLI: append
+ordinary linked guest messages, submit the complete captured history, and resume
+the same universe between turns. Keep conversation work in CIL and treat host
+input as an explicit boundary. Test restart/GC between turns and multiple calls
+with changing account UI selection. Avoid persisting native socket state or
+making the host's own Rust conversation vector the guest's source of truth.
+Tool calls need a separate effect/recovery policy before model tools are enabled.
 
 Current official docs verified October 28, 2026:
 
@@ -101,36 +133,33 @@ Current official docs verified October 28, 2026:
 - [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference):
   account-specific model discovery and public Responses endpoint with OAuth,
   `store: false` and `stream: true`. Only `response.completed` proves success.
+- [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations):
+  full input history, developer messages, no background/retrieval assumptions,
+  and omitted unsupported request fields.
 - [Official integration cookbook](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt):
   local/open-source apps can use eligible users' ChatGPT plans.
 
-Auth implementation is in `crates/renraku-openai`. Public metadata contains no
-tokens; native credential types are private. New login opens the browser;
-`cargo run -p renraku-openai -- login` is ready for the user to try. Model
-discovery and inference are not wired yet. No live account sign-in or inference
-has been started. Continue with local HTTP fixtures before live inference.
+Implementation is in `crates/renraku-openai`, including `inference.rs`,
+`receipts.rs`, and `stream.rs`. Production endpoints are fixed; HTTP test
+overrides are private to unit tests. Profile-bound capabilities are
+`openai.chatgpt.<profile-uuid>`. A ledger also binds issuer, subject, issued
+client, model, and canonical full request bytes. The new receipt ledger has
+application ID 0x52454f41 / schema 1; the old local.echo ledger remains schema 2.
+Keep both backends and all original format 1–4 fixtures intact.
 
-Extend credential access for a specific profile ID, including expiry and refresh
-handling for that exact profile, rather than silently following the active UI
-selection. Bind capabilities to the verified OAuth profile so account switching
-cannot retarget pending effects. Preserve the existing pending-refresh marker,
-private storage, and lock invariants. The first backend is Unix private files,
-not a keychain; Windows auth storage remains explicit future work.
+Public metadata contains no tokens. Preserve the pending-refresh marker,
+private Unix storage, profile registration/identity mapping, and lock invariants.
+Windows/keychain storage remains future work. Signed-out metadata plus a local
+receipt can reconcile offline; a removed profile cannot be guessed from a
+different active account. Only completed final text is returned; refusals,
+tool calls, and unsupported output fail explicitly. Lone surrogates remain valid
+managed strings but are rejected by this text transport before dispatch.
 
-The subscription flow's `store: false` requirement changes the earlier generic
-background-polling idea. Do not assume GET retrieval or remote idempotency can
-reconcile interrupted subscription streams. Preserve uncertainty unless a local
-durable completion receipt proves the terminal result; no automatic resubmission.
-Test partial SSE, missing terminal events, failures, and crashes against a local
-server before an interactive sign-in. Preserve exact managed UTF-16; reject a
-transport request explicitly if its encoding cannot represent it.
-Transport streaming can remain internal to the host adapter; guest code still
-receives one completed string, with no native network stack to checkpoint.
-
-No model has been chosen. Discover models through the selected account and
-capture the explicit choice. The OpenAI Docs skill applies. The current
-`drive_model` preflight is local.echo-only; extend host provider authorization
-deliberately when introducing the remote adapter. Host opt-in and limits remain
-independent of saved guest state.
+Do not assume GET retrieval or remote idempotency can reconcile interrupted
+subscription streams. Preserve uncertainty without a durable completion receipt.
+There is no automatic resubmission, cancellation, or manual resolution command.
+Model/refusal failure diagnostics are conservative and may still represent usage.
+Host opt-in and per-invocation budgets remain independent of saved guest state.
+The OpenAI Docs skill applies to further integration changes.
 Preserve atomic heap/code/frame/effect checkpoints, logical identities, and old
 readers as representations expand. See [the current effect contract](effects.md).

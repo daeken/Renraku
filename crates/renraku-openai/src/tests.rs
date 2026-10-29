@@ -583,6 +583,56 @@ fn uncertain_refresh_is_saved_and_never_automatically_repeated() {
 }
 
 #[test]
+fn explicit_profile_refresh_ignores_the_active_selection() {
+    let directory = Directory::new();
+    let server = Server::new();
+    let client = server.client(&directory);
+    let first = sign_in(&server, &client);
+    let second = Uuid::new_v4();
+    {
+        let mut guard = client.store.lock().unwrap();
+        let mut session = guard.vault.profiles[0].session.clone().unwrap();
+        session.access_token = Some("second-access-token".into());
+        guard.vault.profiles.push(Profile {
+            id: second,
+            client_id: Some("oaiapp_second".into()),
+            identity: Some(Identity {
+                issuer: ISSUER.into(),
+                subject: "second-user".into(),
+                email: None,
+            }),
+            session: Some(session),
+            refresh_pending: false,
+        });
+        guard.vault.active = Some(second);
+        guard.save().unwrap();
+    }
+    let refreshed = client.refresh_profile(first.id).unwrap();
+    assert_eq!(refreshed.id, first.id);
+    assert!(!refreshed.active);
+    let guard = client.store.lock().unwrap();
+    assert_eq!(guard.vault.active, Some(second));
+    assert_eq!(
+        guard.vault.profiles[1]
+            .session
+            .as_ref()
+            .unwrap()
+            .access_token
+            .as_deref(),
+        Some("second-access-token")
+    );
+    assert_eq!(
+        guard.vault.profiles[0]
+            .session
+            .as_ref()
+            .unwrap()
+            .refresh_token
+            .as_deref(),
+        Some("rotated-refresh")
+    );
+}
+
+#[test]
 fn account_mismatch_does_not_overwrite_existing_credentials_and_profiles_remain_separate() {
     let directory = Directory::new();
     let server = Server::new();
