@@ -314,23 +314,68 @@ impl OpenAIProvider {
             .send()
             .map_err(|_| fail("Responses request failed; outcome is unknown"))?;
         let response = checked(response)?;
-        require(
-            response
-                .headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| {
-                    v.split(';')
-                        .next()
-                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
-                }),
-            "Responses request did not return an SSE stream",
-        )?;
+        // Some live responses omit Content-Type. Framing and the terminal
+        // event, rather than the presence of a MIME header, prove completion.
+        // An explicitly different declared transport remains unsupported.
+        let is_sse = response.headers().get("content-type").is_none_or(|header| {
+            header.to_str().is_ok_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
+            })
+        });
+        if !is_sse {
+            return Err(unexpected_transport(response));
+        }
         let completion = stream::completed(response)?;
         self.receipts
             .complete(request.id, &completion.id, &completion.text)?;
         Ok(completion.text)
     }
+}
+fn unexpected_transport(response: Response) -> crate::Error {
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim)
+        .filter(|v| {
+            v.len() <= 100
+                && v.contains('/')
+                && v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/+.-".contains(&b))
+        })
+        .unwrap_or("unavailable")
+        .to_owned();
+    let mut bytes = Vec::new();
+    let read = response.take(crate::MAX_BODY + 1).read_to_end(&mut bytes);
+    let shape = if read.is_err() {
+        "unreadable body"
+    } else if bytes.len() as u64 > crate::MAX_BODY {
+        "oversized body"
+    } else if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+        if value["object"] == "response" && value["status"] == "completed" {
+            "completed response JSON"
+        } else if value["type"] == "response.completed" {
+            "completion event JSON"
+        } else if value.get("error").is_some() || value.get("detail").is_some() {
+            "error JSON"
+        } else {
+            "other JSON"
+        }
+    } else if bytes.starts_with(b"data:") || bytes.starts_with(b"event:") || bytes.starts_with(b":")
+    {
+        "SSE with an unexpected content type"
+    } else {
+        "unrecognized body"
+    };
+    // Report only fixed shape labels, never arbitrary response text or credentials.
+    fail(&format!(
+        "Responses expected SSE; HTTP {status}; content type {content_type}; {shape}; outcome is unknown"
+    ))
 }
 fn vm_error(error: crate::Error) -> renraku_vm::error::Error {
     renraku_vm::error::Error(error.to_string())

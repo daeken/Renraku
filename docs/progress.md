@@ -63,6 +63,11 @@ and do not inherit persistence.
   ordinary linked CIL objects, receives a completed string, and retains its
   prompt/reply. Real inference requires explicit host opt-in; see the
   [try-it guide](openai-responses.md).
+- Live subscription inference verified after user-completed login. GPT-6 Luna
+  returned `Persistent CIL is alive.` through 49 CIL instructions and one
+  provider operation. A fresh process reopened the saved result with zero
+  instructions and provider operations. Headerless SSE is accepted through the
+  same bounded terminal parser; explicitly different transport types fail.
 
 ## Validation
 
@@ -70,7 +75,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 113 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 114 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -85,15 +90,18 @@ request encoding preserves exact UTF-16. ChatHarnessScore returns 11 like CoreCL
 Sixteen auth tests cover protocol validation, invalid identities, scopes,
 registration reuse, profiles, redaction, storage, sign-out, and actual refresh
 SIGKILL recovery, and refreshing a profile independently of active selection.
-Nine inference tests cover SSE framing/fragmentation, terminal validation and
+Ten inference tests cover SSE framing/fragmentation, terminal validation and
 bounds, full wire requests, fixed profiles, offline and mismatched receipts,
 preflight rejections, uncertain errors, receipt commit failure, concurrent
 reservations, foreign ledgers, live CIL delivery, and actual SIGKILL before and
-after completion receipt commit. A CLI integration test verifies opt-in,
+after completion receipt commit, missing MIME headers, and non-SSE diagnostics.
+A CLI integration test verifies opt-in,
 durable preflight rejection, zero budgets, and credential absence from snapshots.
 Both ignored subprocess probes are launched by their parent crash tests.
 Production discovery and CLI status were smoke-tested in the auth milestone.
-No interactive login or real inference has been initiated. Read
+The user completed interactive login. Plan permission, account model discovery,
+live inference, and a zero-operation restore have now been verified. Initial
+header-rejection probes remain uncertain and were not resubmitted. Read
 [the auth guide](openai-auth.md) and [Responses guide](openai-responses.md).
 
 On this host the shell may require `/Users/daeken/.cargo/bin/cargo` explicitly.
@@ -111,11 +119,12 @@ force-push, and preserve local commits if the remote is temporarily unavailable.
 ## Next implementation target
 
 The user selected **OpenAI Responses API through their ChatGPT subscription**,
-specifically requiring OAuth. The adapter is implemented and ready for the user
-to sign in, discover models, and run the persistent one-prompt demo. No model
-has been selected. Keep subscription access as the intended path, with no API-key
-billing fallback. Do not start interactive login or real inference in an
-unattended heartbeat. Existing local fixtures allow independent progress.
+specifically requiring OAuth. Sign-in, discovery, a live one-prompt CIL demo,
+and zero-operation restore are verified. GPT-6 Luna was selected explicitly for
+the smoke test, not made a default; continue selecting models from account
+discovery. Keep subscription access as the intended path, with no API-key billing
+fallback. Do not start login or more real inference in an unattended heartbeat.
+Existing local fixtures allow independent progress.
 
 The next useful milestone is a persistent interactive conversation CLI: append
 ordinary linked guest messages, submit the complete captured history, and resume

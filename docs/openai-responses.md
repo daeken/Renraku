@@ -90,6 +90,9 @@ reasoning items and commentary are skipped. Tool calls, refusals, and other
 non-text output fail explicitly. Partial text never becomes a guest result.
 
 SSE framing supports LF/CRLF, comments, multi-line data, and fragmented UTF-8.
+An absent Content-Type header is accepted, as observed during live testing;
+the same bounded parser and terminal validation still apply. An explicitly
+different content type is rejected with bounded transport/shape diagnostics.
 Only a fully framed `response.completed` with completed status and matching
 response identity can produce a receipt. Failed/incomplete events, malformed
 data, missing terminal events, transport failures, and unsupported outputs leave
@@ -136,4 +139,15 @@ a partial stream and after receipt commit but before VM response commit. They
 restore the original CIL frames and assert that no second POST occurs. CLI
 tests cover opt-in, durable preflight rejection, zero budgets, and token absence
 from checkpoints. The test-only HTTP endpoints are inaccessible in production.
-No interactive account login or live inference has been initiated by the agent.
+Live validation on October 28, 2026 verified user-completed sign-in, granted plan
+permission, account-specific discovery, and a GPT-6 Luna request through the CIL
+harness returning `Persistent CIL is alive.` in 49 guest instructions and one
+provider operation. Reopening in a fresh process returned the same saved reply
+with zero instructions and zero provider operations.
+
+The first two live probes exposed an omitted Content-Type header and were kept
+as uncertain attempts without completion receipts. They were not resubmitted.
+After the parser fix, a new probe completed and saved its receipt. Reopening an
+earlier uncertain probe still stopped without sending another request. Local
+regression cases cover headerless terminal/partial streams, ordinary SSE MIME
+parameters, declared non-SSE bodies, bounded diagnostics, and receipt behavior.

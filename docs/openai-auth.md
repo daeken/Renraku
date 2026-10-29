@@ -101,8 +101,10 @@ A subprocess test kills a host after the refresh marker commits and the request
 reaches the server; reopening the store requires sign-in and sends no retry.
 The ignored probe in the test listing is invoked by that parent test.
 
-The live production discovery document was fetched successfully. An interactive
-sign-in with the user's account has not yet been run. The Responses adapter now
+The production discovery document and user-completed interactive sign-in have
+been verified, including granted plan permission and account model discovery.
+A live Responses request and zero-operation checkpoint restore also passed.
+The Responses adapter now
 binds each effect to a specific profile and selected account-available model,
 with durable local completion receipts. `refresh_profile(id)` renews that exact
 profile independently of active UI selection. Interrupted inference remains

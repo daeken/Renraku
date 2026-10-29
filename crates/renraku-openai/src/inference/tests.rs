@@ -87,6 +87,17 @@ struct Server {
 }
 impl Server {
     fn new(payload: String, status: u16, pause: bool) -> Self {
+        Self::with_content_type(payload, status, pause, Some("text/event-stream"))
+    }
+    fn with_content_type(
+        payload: String,
+        status: u16,
+        pause: bool,
+        content_type: Option<&str>,
+    ) -> Self {
+        let content_type = content_type
+            .map(|v| format!("Content-Type: {v}\r\n"))
+            .unwrap_or_default();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -170,7 +181,7 @@ impl Server {
                 } else {
                     let _ = write!(
                         socket,
-                        "HTTP/1.1 {status} Test\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+                        "HTTP/1.1 {status} Test\r\n{content_type}Connection: close\r\n\r\n"
                     );
                     let _ = socket.write_all(payload.as_bytes());
                     let _ = socket.flush();
@@ -197,6 +208,60 @@ impl Server {
             .iter()
             .filter(|r| r.path == "/responses")
             .count()
+    }
+}
+
+#[test]
+fn missing_content_type_still_requires_terminal_sse_and_rejects_declared_other_transports() {
+    let json_response =
+        object!({"object":"response","status":"completed","output_text":"secret-output"})
+            .to_string();
+    let cases = [
+        (None, completion("reply"), true, ""),
+        (
+            Some("Text/Event-Stream; charset=utf-8"),
+            completion("reply"),
+            true,
+            "",
+        ),
+        (
+            None,
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"secret-partial\"}\n\n"
+                .into(),
+            false,
+            "without response.completed",
+        ),
+        (
+            Some("application/json"),
+            json_response,
+            false,
+            "content type application/json; completed response JSON",
+        ),
+        (
+            Some("text/html"),
+            completion("secret-output"),
+            false,
+            "SSE with an unexpected content type",
+        ),
+    ];
+    for (content_type, payload, succeeds, diagnostic) in cases {
+        let directory = Directory::new();
+        let id = profile(&directory.0.join("auth"), "a", "secret-bearer");
+        let server = Server::with_content_type(payload, 200, false, content_type);
+        let mut provider = adapter(&directory.0, id, &server.base);
+        let request = request(id);
+        let result = provider.submit(&request);
+        if succeeds {
+            assert_eq!(result.unwrap(), "reply".encode_utf16().collect::<Vec<_>>());
+            assert!(provider.reconcile(&request).unwrap().is_some());
+        } else {
+            let error = result.unwrap_err().0;
+            assert!(error.contains(diagnostic), "{error}");
+            assert!(!error.contains("secret-"));
+            assert!(provider.reconcile(&request).unwrap().is_none());
+            assert!(provider.submit(&request).is_err());
+        }
+        assert_eq!(server.posts(), 1);
     }
 }
 impl Drop for Server {
