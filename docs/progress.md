@@ -312,6 +312,29 @@ and do not inherit persistence.
   advertises the module conditionally; old universes do not gain it implicitly.
   Format 7, all legacy fixtures and demo universes remain unchanged. See
   [managed integer text](integer-text.md). No live inference was needed.
+- Bounded managed ordinal StringMap in the separate `Renraku.Collections` module:
+  Get/Set/Remove/Count operate on ordinary linked objects with 64 entries,
+  128-unit keys, and 4096-unit nullable values. Empty keys, NUL, and exact lone
+  surrogate units work; data results distinguish missing/invalid/full outcomes
+  from stored null values. Equal-content Set preserves the existing node/key/value
+  identities; removal reuses capacity. No new opcodes, intrinsics, capabilities,
+  or checkpoint fields were added. CoreLib and Renraku.Library remain unchanged.
+  Four tests compare 441 stateful operations with CoreCLR's ordinal dictionary,
+  verify shared string/no-op identities and removed-result receipt roots, recover
+  eight mutations at every instruction with GC and pinned IDs, and resume in a
+  native SDK-free process. A typed argument/receipt retains an old map after its
+  static root is replaced. The test harness is a separate fixture module.
+  A fifth website test compiles/installs both libraries, exports their own-module
+  closures, and publishes `guest/examples/GroupedWebsite.cs` against existing
+  global visit state. POST bodies select group keys with decimal counters. The
+  test pauses after a group link changes but before the original visit, then
+  resumes the same execution over native TCP without compiler ledger or SDK.
+  Old responses, multiple/default groups, invalid keys, conflict detection, and
+  one-context exclusion survive. Mutators have intermediate fields; whole methods
+  are not atomic transactions. The page's cross-module Counts field currently
+  makes exporting a facade for GroupedWebsite itself reject explicitly, as tested.
+  Source/CIL and raw state remain inspectable. See [managed string map](string-map.md).
+  All legacy fixtures, format 7, and existing demos are unchanged; no live inference.
 
 ## Validation
 
@@ -319,7 +342,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 226 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 231 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -588,26 +611,29 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next add a bounded managed string map as a second installable library module.**
-Use ordinary linked CIL objects and exact ordinal UTF-16 string keys/values, with
-explicit entry/key/value limits and data results for absent/invalid/full cases.
-Start with Get/Set/Remove rather than generics, arrays, indexer properties, native
-Dictionary storage, or broad collection compatibility. Keep null/empty key/value
-and replacement/removal semantics precise. Pure operations stay ordinary CIL;
-partial frames, new nodes, removed values and typed argument roots must survive
-instruction cuts, GC, and recovery. Do not claim an entire multi-instruction
-method is atomic: the current one-context rule excludes concurrent guest work,
-and durable invoke/request receipts prevent replaying committed mutations.
-Compile as a distinct append-only module (for example Renraku.Collections);
-do not replace the existing Renraku.Library/CoreLib or silently mint replacement
-live types. Export its frozen reference closure and preserve all original IDs.
-Compare actual C# with a host ordinal dictionary under the declared bounded
-contract, including shared strings, lone surrogates, replacement, removal and
-capacity reuse. Demonstrate a narrow persistent CIL website using the map plus
-IntegerText against existing state, with deduplication and SDK-free TCP recovery.
-Preserve HTTP-v1, compiler/publication/preview/inspection contracts, all legacy
-fixtures and demos, default capability denial, and the one-context limit. Use
-live inference only if it answers a new model acceptance question.
+**Next export dependency-aware frozen reference sets for acyclic cross-module
+declarations.** GroupedWebsite.Counts is a concrete case: its declared StringMap
+type belongs to another installed module, so exporting GroupedWebsite currently
+rejects. Keep each facade scoped to its original logical module. Never inline
+foreign types into the wrong assembly, mint replacement live identities, or
+compile callers against implementation DLLs as a shortcut. Discover bounded
+signature/base/field dependencies, merge roots per module, and produce a frozen
+hashed set with explicit module/type-ID bindings. Emit dependency facades before
+callers; reject cycles explicitly until a separate cycle contract is implemented.
+Keep original isolated format-1 reference views/compiled receipts usable. Version
+new host metadata shapes deliberately; heap checkpoint format need not change.
+Compilation captures the entire frozen dependency set and installation validates
+all bindings/provenance before mutating code. Extend existing native/agent tools
+within current view/root/source bounds instead of adding general host authority.
+Demonstrate an externally compiled caller reading GroupedWebsite.Counts and using
+its existing map, preserving map/object/type/field IDs, saved page state, durable
+compile/install/invoke receipts, GC, restart, and SDK-free replay. Test missing,
+changed, ambiguous and cyclic dependencies, deterministic ordering/hashes, failed
+publication, and old-view compatibility. Preserve all library/core modules,
+HTTP-v1, managed transcripts, capability denial, one-context limits, demos and
+legacy fixtures. This follows a verified limitation, rather than adding unrelated
+host infrastructure. Native functions, broad .NET compatibility, replacement
+bodies and same-universe concurrency remain unsupported.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

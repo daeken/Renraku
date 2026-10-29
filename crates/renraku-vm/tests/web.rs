@@ -76,6 +76,239 @@ fn web_cli(args: &[&str]) -> serde_json::Value {
 }
 
 #[test]
+fn managed_map_page_recovers_between_group_and_visit_mutations_then_replays_over_native_tcp() {
+    let test = Test::new();
+    let mut store = CheckpointStore::open(&test.database).unwrap();
+    let baseline = test
+        .host()
+        .process(&request("before-groups"), 10000)
+        .unwrap();
+    publish_handler(&mut store, "original", HANDLER).unwrap();
+    let compiler_path = test.directory.join("groups-compiler.db");
+    let mut compiler = CompilationStore::open(&compiler_path).unwrap();
+    for (id, name, file, source) in [
+        (
+            "text",
+            "Renraku.Library",
+            "IntegerText.cs",
+            include_bytes!("../../../guest/IntegerText.cs").as_slice(),
+        ),
+        (
+            "map",
+            "Renraku.Collections",
+            "StringMap.cs",
+            include_bytes!("../../../guest/StringMap.cs").as_slice(),
+        ),
+    ] {
+        let saved = store.load().unwrap();
+        let input = CompilationRequest::capture(
+            &saved.snapshot.program,
+            test.host().universe(),
+            toolchain(),
+            name.into(),
+            vec![(file.into(), source.to_vec())],
+            vec![],
+        )
+        .unwrap();
+        compiler.prepare(id, &input).unwrap();
+        let built = compiler
+            .drive(test.host().universe(), id, toolchain())
+            .unwrap();
+        install_once(
+            &mut store,
+            &format!("{id}-install"),
+            built.artifact.as_ref().unwrap(),
+        )
+        .unwrap();
+    }
+    let saved = store.load().unwrap();
+    let program = &saved.snapshot.program;
+    let views = [
+        "Renraku.Guest.Website",
+        "Renraku.Text.IntegerText",
+        "Renraku.Collections.StringMap",
+    ]
+    .map(|name| {
+        program
+            .reference_view(&[program.find_type(name).unwrap()])
+            .unwrap()
+    });
+    let page = CompilationRequest::capture(
+        program,
+        test.host().universe(),
+        toolchain(),
+        "Generated.GroupedWebsite".into(),
+        vec![(
+            "GroupedWebsite.cs".into(),
+            include_bytes!("../../../guest/examples/GroupedWebsite.cs").to_vec(),
+        )],
+        views.to_vec(),
+    )
+    .unwrap();
+    compiler.prepare("group-page", &page).unwrap();
+    let page = compiler
+        .drive(test.host().universe(), "group-page", toolchain())
+        .unwrap();
+    assert!(page.artifact.is_some(), "{:?}", page.report);
+    install_once(
+        &mut store,
+        "group-page-install",
+        page.artifact.as_ref().unwrap(),
+    )
+    .unwrap();
+    publish_handler(&mut store, "groups", "GroupedWebsite::Handle").unwrap();
+    let exported = store.load().unwrap();
+    assert!(
+        exported
+            .snapshot
+            .program
+            .reference_view(&[exported
+                .snapshot
+                .program
+                .find_type("GroupedWebsite")
+                .unwrap()])
+            .unwrap_err()
+            .0
+            .contains("closure across non-core modules"),
+        "foreign map fields require a future dependency-aware reference set"
+    );
+    drop(compiler);
+    fs::remove_file(compiler_path).unwrap();
+    let host = WebHost::open_published(&test.database).unwrap();
+    let mut red = request("red-one");
+    red.body = "red".into();
+    let pending = host.process(&red, 0).unwrap();
+    assert_eq!(pending.status, 202);
+    let group_value = |key: &str| {
+        let mut store = CheckpointStore::open(&test.database).unwrap();
+        let saved = store.load().unwrap();
+        let program = &saved.snapshot.program;
+        let vm = saved.snapshot.restore().unwrap();
+        let owner = program.find_type("GroupedWebsite").unwrap();
+        let field = program
+            .fields()
+            .find(|f| f.owner == owner && f.name == "Counts")
+            .unwrap();
+        let map = vm.static_fields()[&field.id].referenced_object()?;
+        let field = |id, name| {
+            let object = vm.heap().object(id).unwrap();
+            let field = program
+                .fields()
+                .find(|f| f.owner == object.type_id() && f.name == name)
+                .unwrap();
+            object.fields()[&field.id]
+        };
+        let mut node = field(map, "head").referenced_object();
+        while let Some(id) = node {
+            let key_id = field(id, "Key").referenced_object().unwrap();
+            if vm.heap().object(key_id).unwrap().string_units().unwrap()
+                == key.encode_utf16().collect::<Vec<_>>()
+            {
+                let value = field(id, "Value").referenced_object().unwrap();
+                return Some(
+                    String::from_utf16(vm.heap().object(value).unwrap().string_units().unwrap())
+                        .unwrap(),
+                );
+            }
+            node = field(id, "Next").referenced_object();
+        }
+        None
+    };
+    let mut cut = false;
+    for _ in 0..2000 {
+        collect(&test.database);
+        if group_value("red").as_deref() == Some("1") {
+            cut = true;
+            break;
+        }
+        let partial = host.process(&red, 1).unwrap();
+        assert_eq!(partial.status, 202);
+        assert_eq!(partial.execution, pending.execution);
+    }
+    assert!(cut);
+    assert_eq!(state(&test.database).0, 1);
+    assert_eq!(
+        host.process(&request("excluded"), 10000)
+            .unwrap_err()
+            .status,
+        503
+    );
+    // The checkpoint contains a new group link and the original pending CIL
+    // frames, before the original website visit executes. Resume in a process.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+        .args([
+            "web-serve",
+            test.database.to_str().unwrap(),
+            "@published",
+            "127.0.0.1:0",
+            "10000",
+            "3",
+        ])
+        .env("PATH", "/no-map-page-tools")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::BufRead;
+    let mut ready = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    ready.read_line(&mut line).unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let address = metadata["listening"].as_str().unwrap().parse().unwrap();
+    let first = exchange_at(address, &wire("POST", "/visit", Some("red-one"), b"red"));
+    assert!(
+        body(std::str::from_utf8(&first).unwrap())
+            .contains("Visits: 2; groups: 1; selected group: 1")
+    );
+    let second = exchange_at(address, &wire("POST", "/visit", Some("red-two"), b"red"));
+    assert!(
+        body(std::str::from_utf8(&second).unwrap())
+            .contains("Visits: 3; groups: 1; selected group: 2")
+    );
+    assert_eq!(
+        exchange_at(address, &wire("POST", "/visit", Some("red-one"), b"red")),
+        first
+    );
+    assert!(child.wait().unwrap().success());
+    assert_eq!(group_value("red").as_deref(), Some("2"));
+    assert_eq!(state(&test.database).0, 3);
+    let mut blue = request("blue");
+    blue.body = "blue".into();
+    assert!(
+        host.process(&blue, 10000)
+            .unwrap()
+            .body
+            .contains("Visits: 4; groups: 2; selected group: 1")
+    );
+    assert!(
+        host.process(&request("default"), 10000)
+            .unwrap()
+            .body
+            .contains("Visits: 5; groups: 3; selected group: 1")
+    );
+    let mut invalid = request("invalid-key");
+    invalid.body = "x".repeat(129);
+    assert!(
+        host.process(&invalid, 10000)
+            .unwrap()
+            .body
+            .contains("Invalid group key.")
+    );
+    assert_eq!(state(&test.database).0, 5);
+    let replay = host.process(&red, 10000).unwrap();
+    assert_eq!(replay.execution, pending.execution);
+    assert_eq!(replay.instructions, 0);
+    assert_eq!(replay.body, body(std::str::from_utf8(&first).unwrap()));
+    let mut conflict = red.clone();
+    conflict.body = "blue".into();
+    assert_eq!(host.process(&conflict, 10000).unwrap_err().status, 409);
+    assert_eq!(
+        host.process(&request("before-groups"), 10000).unwrap().body,
+        baseline.body
+    );
+}
+
+#[test]
 fn append_only_decimal_library_and_page_reuse_saved_visits_with_durable_numeric_preconditions() {
     let test = Test::new();
     let mut store = CheckpointStore::open(&test.database).unwrap();

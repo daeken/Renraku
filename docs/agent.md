@@ -392,6 +392,13 @@ frozen type view. `FormatInt32`/`FormatInt64` return canonical decimal strings;
 accepts an optional ASCII sign and digits within 64 UTF-16 units. Old universes
 keep their saved core and do not automatically gain this separate module.
 
+The separately installed [StringMap module](string-map.md) exposes bounded
+ordinal UTF-16 string Get/Set/Remove/Count with data results. Search/describe
+`Renraku.Collections.StringMap` and select its frozen view before compiling calls.
+Its methods require a non-null receiver; missing/null stored values are distinct.
+Map mutators have intermediate instruction safe points, so resume their original
+invocation rather than starting a new call after a lost result.
+
 ## Validation
 
 ```sh

@@ -65,6 +65,9 @@ compiler or getter.
 The first [managed text library](docs/integer-text.md) formats and parses bounded
 signed decimal integers in ordinary checkpointable CIL. It installs alongside an
 existing core and powers a numbered-visit page with a decimal count precondition.
+A [managed string map](docs/string-map.md) supplies bounded ordinal Get/Set/Remove
+over checkpointed linked objects. A grouped-visit handler combines both libraries
+and resumes a request between updates without repeating a committed visit.
 
 ## Run the demonstration
 

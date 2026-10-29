@@ -156,6 +156,9 @@ The separately installable [managed integer text library](integer-text.md) build
 bounded signed decimal formatting/parsing from these CIL primitives and string
 operations. Its loops, calls, and result objects use the normal portable frames;
 it adds no InternalCall or instruction. Existing core images remain unchanged.
+The separate [managed string map](string-map.md) likewise uses ordinary classes,
+calls, and fields. Its bounded mutators can pause with partial updates; method
+boundaries, one-context exclusion, and durable receipts retain their distinct roles.
 
 Strings are immutable heap objects with ordinary object identities and exact
 UTF-16 payloads. Length and indexing count UTF-16 units, following
