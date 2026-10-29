@@ -4,7 +4,8 @@ The current implementation connects CIL callers, a host API, and CLI delivery
 to the durable `local.echo` capability and `echo-v1` model. The provider returns
 `echo: ` followed by the exact UTF-16 content of the final user message. The
 selected first real provider is OpenAI Responses with subscription-backed ChatGPT
-OAuth; its adapter and sign-in flow are still future work.
+OAuth. The [host sign-in flow](openai-auth.md) is implemented; its inference adapter
+is still future work.
 
 ## Guest calls and waiting frames
 

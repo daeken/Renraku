@@ -41,6 +41,13 @@ and do not inherit persistence.
   receipts in place, retaining their original bytes and submission counts.
 - Payload format 5 with backward reading of formats 1 through 4. Preserve all
   checked-in legacy fixtures; they were captured from the earlier writers.
+- Separate host-only `renraku-openai` crate and CLI: subscription OAuth login,
+  profile metadata and selection, refresh, and logout. Uses production discovery,
+  bounded loopback callbacks, PKCE, state/nonce and JWT validation, and explicit
+  granted plan permission. Credentials never enter guest state.
+- Private Unix credential files outside Git, atomic commits and process locks.
+  Pending refresh markers prevent reuse of rotating tokens after uncertain
+  outcomes or SIGKILL. Logout clears local credentials before remote revocation.
 
 ## Validation
 
@@ -48,7 +55,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 86 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 101 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -60,6 +67,11 @@ Eight structured-model tests cover frozen histories/bindings, malformed chains,
 full-body receipts, model rejection, limits, per-instruction and SIGKILL recovery,
 and upgrade of a legacy waiting call with its accepted receipt. A golden canonical
 request encoding preserves exact UTF-16. ChatHarnessScore returns 11 like CoreCLR.
+Fifteen auth tests cover protocol validation, invalid identities, scopes,
+registration reuse, profiles, redaction, storage, sign-out, and actual refresh
+SIGKILL recovery. Its ignored subprocess probe is launched by the parent test.
+Production discovery and CLI status were smoke-tested. No interactive login or
+model inference was performed. Read [the auth guide](openai-auth.md).
 
 On this host the shell may require `/Users/daeken/.cargo/bin/cargo` explicitly.
 The .NET 10 SDK is needed for compiler fixtures. Restore itself does not need it.
@@ -77,8 +89,8 @@ force-push, and preserve local commits if the remote is temporarily unavailable.
 
 The user selected **OpenAI Responses API through their ChatGPT subscription**,
 specifically requiring OAuth. Structured requests and durable model bindings are
-complete. The next milestone is host-side OAuth/networking with local HTTP
-fixtures, then the subscription-backed Responses adapter. Keep subscription
+complete. Host-side OAuth/networking is implemented and ready for interactive
+login. The next milestone is the subscription-backed Responses adapter. Keep subscription
 access as the intended path, rather than requiring an API billing account/key.
 
 Current official docs verified October 28, 2026:
@@ -92,12 +104,18 @@ Current official docs verified October 28, 2026:
 - [Official integration cookbook](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt):
   local/open-source apps can use eligible users' ChatGPT plans.
 
-Implement bounded loopback callback handling, token exchange/refresh, and
-host-only protected credential profiles. Keep credentials out of guest objects,
-checkpoints, logs, and Git. Use the app's own registration; no sign-in has been
-started and no remote inference call has been made.
-Bind capabilities to the verified OAuth profile so account switching cannot
-silently retarget pending effects.
+Auth implementation is in `crates/renraku-openai`. Public metadata contains no
+tokens; native credential types are private. New login opens the browser;
+`cargo run -p renraku-openai -- login` is ready for the user to try. Model
+discovery and inference are not wired yet. No live account sign-in or inference
+has been started. Continue with local HTTP fixtures before live inference.
+
+Extend credential access for a specific profile ID, including expiry and refresh
+handling for that exact profile, rather than silently following the active UI
+selection. Bind capabilities to the verified OAuth profile so account switching
+cannot retarget pending effects. Preserve the existing pending-refresh marker,
+private storage, and lock invariants. The first backend is Unix private files,
+not a keychain; Windows auth storage remains explicit future work.
 
 The subscription flow's `store: false` requirement changes the earlier generic
 background-polling idea. Do not assume GET retrieval or remote idempotency can

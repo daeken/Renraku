@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/renraku-vm"]
+members = ["crates/renraku-vm", "crates/renraku-openai"]
 resolver = "3"
 
 [workspace.package]

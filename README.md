@@ -203,6 +203,25 @@ dependencies. Rust uses `uuid` for identities, `sha2` for checkpoint checksums,
 and `rusqlite` with bundled SQLite for storage. Building SQLite requires a C
 compiler.
 
+## Sign in with your ChatGPT subscription
+
+The host OAuth CLI is ready for macOS and Linux:
+
+```sh
+cargo run -p renraku-openai -- login
+cargo run -p renraku-openai -- status
+```
+
+Login opens Continue with ChatGPT in your browser, verifies the returned
+identity, and saves a private host profile. Refresh, account selection, and
+logout are also implemented. See [subscription authentication](docs/openai-auth.md)
+for commands and storage details.
+
+This is the authentication milestone; the streamed Responses adapter is next.
+No model inference is performed yet. Credentials stay outside the guest universe.
+The auth crate uses HTTPS and JWT libraries; its TLS backend also needs CMake
+and a C build toolchain.
+
 ## Design and next steps
 
 [The supplied architecture draft](docs/architecture-draft-v0.1.md) is preserved
@@ -213,8 +232,9 @@ The local model harness now demonstrates strings, linked conversation history,
 durable requests, waiting CIL callers, and bounded automatic execution and
 delivery. Structured model requests and saved provider bindings are implemented.
 The selected first real provider is the OpenAI Responses API using the user's
-ChatGPT subscription through OAuth. Its adapter and sign-in flow,
-broader introspection, and live code evolution remain on the architecture roadmap.
+ChatGPT subscription through OAuth. Host sign-in is implemented; the streamed
+inference adapter is next. Broader introspection and live code evolution remain
+on the architecture roadmap.
 
 [Progress and handoff](docs/progress.md) records the current state and the next
 implementation targets for recurring development.
