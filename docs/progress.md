@@ -378,8 +378,23 @@ and do not inherit persistence.
   IDs and exact retained assembly source/hash/artifact provenance, omitting CIL
   instructions and buildManifest and marking source_provenance. Default/old frozen
   input shapes remain unchanged, and the same output bound/capability policy
-  applies. See [agent source inspection](agent.md). A separate bounded live
-  multi-module acceptance is being recorded under target.
+  applies. See [agent source inspection](agent.md).
+- Live multi-module GPT-6.1 Sol acceptance now completes the new workflow: inspect
+  the original map/node and red=2, read page/library source and dependency
+  contracts, compile a 1,212-byte two-method assembly against four frozen facades
+  on the first attempt, install, invoke the guarded update exactly once, inspect
+  red=3, publish/preview its own read-only page, and recheck map/visit state.
+  Twenty main-goal model operations/tool actions and 3,126 guest instructions ran
+  across seven fresh processes with three-operation budget stops. One bootstrap
+  finish allowed ordinary operator setup and a durable zero-budget follow-up;
+  overall 21 turns/45 messages have 21 terminal private model receipts. Native
+  verification retained the exact map/type/field/node IDs and one map object,
+  global visits=2, original POST responses, invoke execution/result replay, and
+  read-only inspection generation/digest. Finished recovery without publication
+  authority/compiler/tools used zero operations. Evidence is
+  [the live report](acceptance/live-multimodule-2026-10-29.md) and
+  target/live-multimodule-20261029-01/. The bounded edge exited; both older demos
+  remain unchanged. This evidence is separate from scripted HTTP fault fixtures.
 
 ## Validation
 
@@ -656,27 +671,25 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next validate a model using the installed libraries and cross-module website
-state through the subscription adapter.** Begin with deterministic local HTTP
-Responses actions/history that discover/inspect GroupedWebsite.Counts, describe
-its dependency contract, read retained library/page source, compile a caller or
-new handler against the complete set, install/invoke or explicitly publish it,
-and observe the same saved map. Exercise corrective diagnostics and lost
-compile/install/invoke/publication results with GC/restarts; reconcile receipts
-and preserve one-context ownership. Keep the actual linked managed transcript
-and frozen actions authoritative. No more host infrastructure is required first.
-Then use the already-authorized bounded live subscription path for this new
-multi-module acceptance question, with a fresh universe/session and explicitly
-available account model. Retain exact transcripts/private receipts and preserve
-original map/object/type/field IDs, old HTTP responses, and zero-operation finished
-recovery. Do not repeat earlier single-module demonstrations or imply scripted
-fixtures prove model autonomy. Do not touch either existing demo universe; use a
-bounded verification edge and stop it afterward. Never resubmit uncertain model
-outcomes or start unattended login. Preserve default publication denial, strict
-JSON final-text actions, all limits, compiler/profile binding, pure-CIL library
-semantics, native function-call limitations, legacy readers and checkpoint format.
-Cross-module cycles, extern aliases/ambiguous names, general BCL compatibility,
-replacement bodies and same-universe concurrency remain future work.
+**Next extend fixed-width CIL conversion and unsigned decimal library support.**
+Start with the integer conversions actually emitted for UInt32/UInt64 decimal
+formatting/parsing (for example conv.u8, conv.i4/conv.u4 where required), preserving
+raw I32/I64 storage bits. Consult the primary ECMA-335 specification for truncation,
+signed/unsigned extension and stack/result types; compare actual emitted C# and
+CoreCLR boundary results rather than assuming Rust casts match every opcode.
+Keep unsupported floating/native integers and checked conversions explicit.
+Then add bounded pure managed unsigned formatting/parsing as a new append-only
+module instead of changing Renraku.Library/CoreLib bodies. Reuse the signed text
+API's explicit lexical/bounds/result conventions where appropriate, with correct
+UInt32/UInt64 minima/maxima/high bits and overflow guards. No host formatter or
+new generic/native collection is needed. Test every new opcode with exact storage
+bits, per-instruction/GC/recovery, stable IDs and old readers; compare the actual
+library against CoreCLR under its declared syntax. Demonstrate compilation and
+use through frozen reference sets and SDK-free replay. Preserve default authority
+denial, all receipts/transcripts, demo universes and sourceOnly projection bounds.
+Do not repeat completed live model runs without a new acceptance question. Shifts,
+bitwise operations, general formatting/culture, broad BCL compatibility, cyclic
+facades, replacement bodies and same-universe concurrency remain future work.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

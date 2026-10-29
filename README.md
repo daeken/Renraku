@@ -70,6 +70,9 @@ over checkpointed linked objects. A grouped-visit handler combines both librarie
 and resumes a request between updates without repeating a committed visit.
 [Frozen reference sets](docs/reference-sets.md) let compiled callers use fields
 and APIs across installed modules while preserving their existing identities.
+A [live multi-module model run](docs/acceptance/live-multimodule-2026-10-29.md)
+used those libraries to update the original map once and publish/preview its own
+read-only page, retaining old HTTP responses across fresh processes.
 
 ## Run the demonstration
 
