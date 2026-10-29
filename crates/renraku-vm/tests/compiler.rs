@@ -168,6 +168,260 @@ impl Directory {
 }
 
 #[test]
+fn ordinal_library_searches_existing_saved_text_through_frozen_callers_and_sdk_free_replay() {
+    let directory = Directory::new();
+    let program = common::program();
+    let counter_type = program.find_type("Renraku.Guest.Counter").unwrap();
+    let value_field = program
+        .fields()
+        .find(|f| f.owner == counter_type && f.name == "Value")
+        .unwrap()
+        .id;
+    let root = program
+        .fields()
+        .find(|f| {
+            f.owner == program.find_type("Renraku.Guest.Simulation").unwrap() && f.name == "Saved"
+        })
+        .unwrap()
+        .id;
+    let database = directory.0.join("ordinal.db");
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let mut vm = Vm::new(&program);
+    vm.start(common::entry(&program, "SaveObject"), vec![])
+        .unwrap();
+    assert_eq!(
+        vm.run(1000).unwrap(),
+        RunOutcome::Completed(Some(Value::I32(19)))
+    );
+    let counter = vm.static_fields()[&root];
+    let units = vec![115, 97, 118, 101, 100, 0, 0xd800, 45, 116, 97, 105, 108];
+    let text = vm.new_string(units.clone()).unwrap();
+    vm.set_root("saved-text", text).unwrap();
+    store.save(&vm).unwrap();
+    let source = directory.source(
+        "OrdinalText.cs",
+        include_str!("../../../guest/OrdinalText.cs"),
+    );
+    let (output, report) = directory.compile_named(
+        std::slice::from_ref(&source),
+        "ordinal-library",
+        &[],
+        "Renraku.OrdinalText",
+    );
+    assert_success(&output, &report);
+    let library = BuildArtifact::from_bundle(directory.0.join("ordinal-library")).unwrap();
+    let installed = install_once(&mut store, "ordinal/install", &library).unwrap();
+    assert_eq!(
+        install_once(&mut store, "ordinal/install", &library).unwrap(),
+        installed
+    );
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    for method in program.methods() {
+        assert_eq!(
+            registry.method(method.binding.method).unwrap().binding,
+            method.binding
+        );
+    }
+    for before in program.types() {
+        let after = registry.types().find(|t| t.id == before.id).unwrap();
+        assert_eq!(
+            (&after.name, after.base, &after.fields),
+            (&before.name, before.base, &before.fields)
+        );
+    }
+    let ordinal_type = registry.find_type("Renraku.Text.OrdinalText").unwrap();
+    let result_type = registry
+        .find_type("Renraku.Text.StringMatchResult")
+        .unwrap();
+    let set = registry
+        .reference_set(&[ordinal_type, counter_type])
+        .unwrap();
+    assert_eq!(set.views.len(), 2);
+    let view = directory.0.join("ordinal-set.json");
+    fs::write(&view, set.to_json().unwrap()).unwrap();
+    let caller = directory.source(
+        "OrdinalCaller.cs",
+        r#"
+using Renraku.Text;
+public static class OrdinalCaller {
+ public static int Calls;
+ public static StringMatchResult Last;
+ public static int Run(Renraku.Guest.Counter counter, string text) {
+  StringMatchResult result = OrdinalText.IndexOf(text, "\0\ud800", 0);
+  Last = result;
+  if (!result.Success || !result.Found) return result.Index;
+  Calls = Calls + 1;
+  counter.Add(result.Index);
+  return result.Index;
+ }
+}"#,
+    );
+    let caller_source = fs::read_to_string(&caller).unwrap();
+    let (output, report) = directory.compile_with_views(
+        std::slice::from_ref(&caller),
+        "ordinal-caller",
+        std::slice::from_ref(&view),
+    );
+    assert_success(&output, &report);
+    let artifact = BuildArtifact::from_bundle(directory.0.join("ordinal-caller")).unwrap();
+    assert_eq!(
+        manifest(&directory.0.join("ordinal-caller"))["references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    install_once(&mut store, "ordinal-caller/install", &artifact).unwrap();
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.heap().roots()["saved-text"], text);
+    assert_eq!(
+        vm.heap().object(text).unwrap().string_units(),
+        Some(units.as_slice())
+    );
+    let method = registry.entry("OrdinalCaller::Run").unwrap();
+    let args = vec![counter, Value::Reference(text)];
+    let intent = vm
+        .invoke_once(
+            &mut store,
+            "ordinal-caller/invoke",
+            method,
+            args.clone(),
+            0,
+            1,
+        )
+        .unwrap();
+    let mut saw_loop = false;
+    for _ in 0..500 {
+        let receipt = vm
+            .invoke_once(
+                &mut store,
+                "ordinal-caller/invoke",
+                method,
+                args.clone(),
+                1,
+                1,
+            )
+            .unwrap();
+        assert_eq!(receipt.execution, intent.execution);
+        assert_eq!(
+            receipt.state,
+            renraku_vm::invocation::InvocationState::Running
+        );
+        if vm.context().frames.iter().any(|f| {
+            let m = registry.method(f.method.method).unwrap();
+            m.owner == ordinal_type && m.name == "MatchAt"
+        }) {
+            saw_loop = true;
+            break;
+        }
+    }
+    assert!(saw_loop);
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    drop(store);
+    for path in ["ordinal-library", "ordinal-caller"] {
+        fs::remove_dir_all(directory.0.join(path)).unwrap();
+    }
+    for path in [source, caller, view] {
+        fs::remove_file(path).unwrap();
+    }
+    let counter_arg = format!("object:{}", counter.referenced_object().unwrap());
+    let text_arg = format!("object:{text}");
+    let native = || -> Json {
+        let output = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+            .args([
+                "invoke-once",
+                database.to_str().unwrap(),
+                "ordinal-caller/invoke",
+                &method.to_string(),
+                "10000",
+                &counter_arg,
+                &text_arg,
+            ])
+            .env("PATH", "/no-ordinal-compiler-or-sdk")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let first = native();
+    assert_eq!(first["state"], "completed");
+    assert_eq!(first["execution"], intent.execution.to_string());
+    assert_eq!(first["result"]["value"], 5);
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    let receipt = vm.invocation("ordinal-caller/invoke").unwrap().clone();
+    let calls = registry
+        .fields()
+        .find(|f| f.owner == registry.find_type("OrdinalCaller").unwrap() && f.name == "Calls")
+        .unwrap()
+        .id;
+    let last = registry
+        .fields()
+        .find(|f| f.owner == registry.find_type("OrdinalCaller").unwrap() && f.name == "Last")
+        .unwrap()
+        .id;
+    let result = vm
+        .heap()
+        .object(vm.static_fields()[&last].referenced_object().unwrap())
+        .unwrap();
+    assert_eq!(result.type_id(), result_type);
+    let index = registry
+        .fields()
+        .find(|f| f.owner == result_type && f.name == "Index")
+        .unwrap()
+        .id;
+    assert_eq!(result.fields()[&index], Value::I32(5));
+    vm.start(common::entry(registry, "Arithmetic"), vec![])
+        .unwrap();
+    vm.run(1000).unwrap();
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    drop(store);
+    let replay = native();
+    for key in [
+        "state",
+        "execution",
+        "result",
+        "methodId",
+        "codeVersion",
+        "requestId",
+    ] {
+        assert_eq!(first[key], replay[key]);
+    }
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.static_fields()[&root], counter);
+    assert_eq!(vm.static_fields()[&calls], Value::I32(1));
+    assert_eq!(
+        vm.heap()
+            .object(counter.referenced_object().unwrap())
+            .unwrap()
+            .fields()[&value_field],
+        Value::I32(24)
+    );
+    assert_eq!(vm.heap().roots()["saved-text"], text);
+    assert_eq!(
+        vm.heap().object(text).unwrap().string_units(),
+        Some(units.as_slice())
+    );
+    assert_eq!(vm.invocation("ordinal-caller/invoke").unwrap(), &receipt);
+    let code = vm.read_code(&method.to_string()).unwrap();
+    assert_eq!(code["sourceAvailable"], true);
+    assert_eq!(code["sources"][0]["text"], caller_source);
+}
+
+#[test]
 fn hex_library_reuses_frozen_foreign_results_and_saved_objects_without_implementation_references() {
     let directory = Directory::new();
     let program = Program::load(&[

@@ -435,6 +435,13 @@ without a prefix; input permits ASCII hex digits and an optional 0x/0X prefix
 within 64 units, with no signs or whitespace. It returns the existing unsigned
 result types. Select HexIntegerText as a frozen root; the result-module dependency
 is included automatically. Stored I32/I64 bits still carry unsigned values.
+The separate [ordinal search module](ordinal-text.md) exposes
+`Renraku.Text.OrdinalText` IndexOf(text, needle, startIndex), StartsWith and EndsWith
+with StringMatchResult (Success/Found/Index/Error). Text/needle bounds are 256/32
+UTF-16 units, and comparison preserves exact ordinal units including surrogates.
+IndexOf can require up to the tested 150,000-instruction ceiling for a worst-case
+bounded search; resume its original invocation under smaller budgets. Select the
+installed root before compiling; this adds no host search authority.
 
 The separately installed [StringMap module](string-map.md) exposes bounded
 ordinal UTF-16 string Get/Set/Remove/Count with data results. Search/describe

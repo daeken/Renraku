@@ -531,6 +531,30 @@ and do not inherit persistence.
   tag, capability, host wait or checkpoint format; checked/native/floating and EH
   remain unsupported. See [CIL profile](cil-profile.md); no inference was needed.
 
+- Bounded ordinal string search is implemented in the separate append-only
+  Renraku.OrdinalText module from guest/OrdinalText.cs. OrdinalText supplies
+  IndexOf(text,needle,startIndex), StartsWith, EndsWith and 256/32-unit text/needle
+  limits. Readonly StringMatchResult fields Success/Found/Index/Error distinguish
+  valid no-match from null_text/null_needle/text_too_long/needle_too_long/
+  start_out_of_range data, with explicit precedence and UTF-16 indices. Empty
+  needles match startIndex/0/text.Length respectively. Exact case-sensitive units,
+  overlapping candidates, NUL, composed/decomposed differences and surrogate units
+  retain ordinal semantics. Searches are ordinary CIL loops, not new host search
+  intrinsics/culture/regex/normalization. IndexOf is O(text*needle), at most 7,200
+  comparisons; the worst regression uses 118,422 instructions under a tested
+  150,000 ceiling, with ordinary budget pauses/resumes.
+  Three tests compare 2,913 cases with real CoreCLR ordinal APIs, restore six
+  operations each instruction with GC/result constructors/exact inputs/shared
+  references, and resume/replay three SDK-free native operations. A compiler test
+  saves a Counter=19 and a named-root NUL/lone-surrogate string before installing
+  the module, exports ordinal/Counter frozen views, compiles a caller and pauses
+  in MatchAt. After GC/deleting source/view/bundle files, a native SDK-free process
+  searches the original string, returns index 5 and mutates the same Counter once
+  to 24. Later-context/GC replay preserves Calls=1, Counter=24, input/root/type/
+  field/method/code IDs, source and installation/invocation receipts. CoreLib,
+  older libraries, checkpoint format 7/all fixtures and both idle demos remain
+  unchanged. See [ordinal search](ordinal-text.md); no inference was needed.
+
 
 ## Validation
 
@@ -538,7 +562,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 267 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 271 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -807,23 +831,22 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next add bounded pure managed ordinal string search.** A separate append-only
-module such as Renraku.OrdinalText can supply IndexOf/StartsWith/EndsWith over
-exact UTF-16 strings using ordinary CIL loops and the existing Length/indexer.
-Define modest text/needle limits, start-index rules, null/empty behavior, result
-indices and error precedence explicitly. Use ordinary data results for invalid/
-not-found cases rather than guest exceptions; no host search intrinsic, culture,
-normalization, regex, arrays or generic/byref API. Choose bounds and document
-worst-case work with the existing instruction budgets; budget pauses resume the
-same helper frames. Empty needles, overlapping matches, NUL, surrogate pairs and
-lone surrogates must retain ordinal unit semantics. Compare actual C# with CoreCLR
-Ordinal APIs under the declared syntax/bounds, then cut representative matching/
-failure loops and result construction at every instruction with GC/recovery.
-Demonstrate external frozen-reference compilation/use against existing saved
-strings/objects, retained source/receipts and SDK-free invoke-once replay without
-repeating a mutation. Keep CoreLib and all saved module bodies unchanged. Preserve
-all arithmetic/conversion/library/foreign-type/provenance/transcript/capability/
-demo/legacy contracts. No live model run is needed for this pure library milestone.
+**Next implement bounded integer CIL switch dispatch.** Consult primary
+ECMA-335 III.3.66 for the I32 index, unsigned selection/fallthrough semantics,
+relative target base and stack transition. Add no guest array/value kind: a
+branch table belongs to immutable method metadata. Bound the table count against
+remaining body bytes before allocation, use checked offset arithmetic, and reject
+truncated tables/invalid or non-instruction targets explicitly. Validate all
+branch/fallthrough stack paths and preserve a failing non-I32 operand. Compare
+actual emitted dense C# integer/enum switches with CoreCLR, plus raw zero-entry,
+duplicate-target, negative/out-of-range and relative-offset edge cases. Test
+instruction-cut GC/recovery, pinned IDs, a durable switch-selected mutation and
+SDK-free replay without repeating it. Keep string-switch patterns unsupported
+unless separately verified against the existing profile; do not infer new arrays,
+generics, EH or body replacement. Preserve all old code/library/foreign-type/
+receipt/provenance/transcript/reference-set/capability/demo/legacy contracts and
+update model guidance only for implemented dispatch. No live inference is needed
+for this core runtime milestone.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

@@ -35,11 +35,14 @@ try
     string integerText = File.ReadAllText(Path.Combine(root, "guest/IntegerText.cs"));
     string unsignedText = File.ReadAllText(Path.Combine(root, "guest/UnsignedIntegerText.cs"));
     string hexText = File.ReadAllText(Path.Combine(root, "guest/HexIntegerText.cs"));
+    string ordinalText = File.ReadAllText(Path.Combine(root, "guest/OrdinalText.cs"));
     string conversions = File.ReadAllText(Path.Combine(root, "guest/IntegerConversions.cs"));
     byte[] core = Compile("Renraku.CoreLib", File.ReadAllText(Path.Combine(root, "guest/CoreLib.cs")),
         Array.Empty<MetadataReference>());
     byte[] library = Compile("Renraku.Library", integerText, new[] { MetadataReference.CreateFromImage(core) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.Library.dll"), library);
+    File.WriteAllBytes(Path.Combine(output, "Renraku.OrdinalText.dll"), Compile("Renraku.OrdinalText", ordinalText,
+        new[] { MetadataReference.CreateFromImage(core) }));
     byte[] unsignedLibrary = Compile("Renraku.UnsignedText", unsignedText, new[] { MetadataReference.CreateFromImage(core) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.UnsignedText.dll"), unsignedLibrary);
     // Loader/oracle fixture only. Captured hex installation uses frozen runtime
@@ -92,7 +95,7 @@ try
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", smallConversions + Environment.NewLine + negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
+    byte[] reference = Compile("Renraku.Reference", ordinalText + Environment.NewLine + smallConversions + Environment.NewLine + negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
@@ -149,6 +152,7 @@ try
     IntegerTextReference.Write(assembly, output);
     UnsignedTextReference.Write(assembly, output);
     HexTextReference.Write(assembly, output);
+    OrdinalTextReference.Write(assembly, output);
     ConversionReference.Write(assembly, output);
     BitwiseReference.Write(assembly, output);
     ShiftReference.Write(assembly, output);

@@ -267,6 +267,8 @@ text from fixed-width conversion and unsigned division/remainder, with explicit
 overflow results and no native formatter.
 The separate [hexadecimal module](hex-text.md) uses bitwise/shift loops and the
 existing unsigned result types; its foreign constructor frames recover normally.
+The [ordinal search module](ordinal-text.md) uses bounded UTF-16 comparison loops
+and ordinary result objects, with no host search intrinsic or normalization.
 
 Strings are immutable heap objects with ordinary object identities and exact
 UTF-16 payloads. Length and indexing count UTF-16 units, following
