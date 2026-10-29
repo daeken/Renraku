@@ -1166,6 +1166,10 @@ impl AgentHost {
             let mut store = CheckpointStore::open(&self.universe)?;
             let saved = store.load()?;
             let mut vm = saved.snapshot.restore()?;
+            require(
+                !matches!(vm.context().status, ExecutionStatus::WaitingRemote { .. }),
+                "agent driver cannot deliver remote object calls; use the explicit remote driver",
+            )?;
             if let Some(model) = active_owned(&vm)? {
                 if model {
                     // A waiting Chat call has not begun appending its answer.

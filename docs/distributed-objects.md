@@ -2,8 +2,8 @@
 
 This is the next development direction selected by the user on October 29,
 2026. It specifies the implementation sequence and acceptance boundaries;
-remote object references, graph copying and security sandboxes are not
-implemented yet. [Fixed-owner placement and method-grant preflight](placement.md)
+a narrow imported-method handle and portable CIL wait are now implemented,
+while general foreign references, graph copying and child security remain ahead. [Fixed-owner placement and method-grant preflight](placement.md)
 now persists and validates explicit policies, but does not enforce placement on
 all local execution or execute remote calls. The existing localhost website is an HTTP
 application edge, not object-level network transparency.
@@ -19,7 +19,7 @@ useful landmarks, but implementation has crossed their boundaries.
 | 4: introspection and live evolution | Saved-code/source and object/static inspection, frozen references, append-only compilation/installation and model coding loop work; body replacement, rollback and a general browser explorer remain |
 | 5: transient integration | Durable external effect boundaries and real subscription inference work; general resource handles and guest transient-arena APIs remain |
 | 6: process mobility | Fresh-process restart with stable identity is proven; explicit fenced ownership transfer between hosts is not |
-| 7: networked universe | Remote references, cross-node invocation and ownership routing are not implemented |
+| 7: networked universe | Authenticated loopback instance calls through fieldless contract handles and portable caller waits now work; general returned references, cross-machine routing and ownership transfer remain |
 | 8: ecosystem | Narrow pure CIL libraries are useful now; broad BCL, JIT and concurrency remain future work |
 
 Networked objects and universe authority are next, ahead of further standalone
@@ -132,20 +132,26 @@ validation permitted below, not remote invocation or a child security boundary.
 with atomic intent/authority, pinned frames/receipts, revocation reconciliation
 and native SDK-free recovery. [Authenticated loopback transport](peer-transport.md) now connects separate
 owner/caller universes through real native TCP, with durable host caller intent,
-execution acknowledgement and result recovery. Ordinary caller CIL references/
-waits are still absent. Next connect them to this path; host-only network calls
-remain partial evidence. Keep preflight separate from admission and receipt replay.
+execution acknowledgement and result recovery. [Imported contract handles](remote-calls.md)
+now route ordinary CIL instance calls to that path, with a separate portable wait
+and atomic reply/stack/continuation commit. Two native universes with different
+core/type IDs survive both process kills and GC after owner commit before reply.
+The caller never contains Counter state; the referent keeps its original owner/
+object identity. This first contract is one object/method per fieldless local
+type, not the actual foreign Counter type or hostile child isolation. Keep
+preflight separate from admission and receipt replay.
 
-## First independently demonstrable network slice
+## First network slice and its acceptance contract
 
-Implement an explicit host-created export/import grant for one saved Counter
-between two independent owner/caller universes in two native processes. Begin
+The first saved-Counter call is now verified through an explicit host-created
+export/import binding in two independent native universes. The acceptance
+contract below remains the boundary for extensions. Start
 with authenticated loopback transport, fixed endpoints and no remote public
 listener. Freeze type/member/code bindings and bounded integer/string/null
 arguments/results; imported references must not become copied Counter instances.
 Do not route the general workbench or all of a module across the network.
 
-A normal supported CIL instance call through the imported reference should park
+A normal supported CIL instance call through the imported reference parks
 an explicit portable guest frame while the owner performs it. Keep network
 sockets and native futures outside the checkpoint. Unsupported remote field
 access, callbacks and nested remote calls reject explicitly in this first slice;

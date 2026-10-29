@@ -23,6 +23,7 @@ pub mod owner;
 pub mod peer;
 pub mod placement;
 pub mod program;
+pub mod remote;
 pub mod runtime;
 pub mod value;
 pub mod web;

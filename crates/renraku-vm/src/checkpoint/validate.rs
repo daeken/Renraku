@@ -57,6 +57,7 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
     crate::placement::read(vm)?;
     crate::owner::validate(vm)?;
     crate::peer::validate(vm)?;
+    crate::remote::validate(vm)?;
     let retained = vm.retained_objects()?;
     let program = vm.program;
     for id in retained {
@@ -217,7 +218,10 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
         let expected = match frame.continuation {
             Continuation::Execute { next } => {
                 require(
-                    !matches!(vm.context.status, ExecutionStatus::Waiting { .. }),
+                    !matches!(
+                        vm.context.status,
+                        ExecutionStatus::Waiting { .. } | ExecutionStatus::WaitingRemote { .. }
+                    ),
                     "waiting context has an executable active frame",
                 )?;
                 require(
@@ -228,6 +232,39 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
                     .get(&next)
                     .cloned()
                     .ok_or_else(|| Error("saved offset is not reachable in this method".into()))?
+            }
+            Continuation::AwaitRemote {
+                call_site,
+                next,
+                request,
+            } => {
+                require(
+                    index + 1 == vm.context.frames.len(),
+                    "remote waiter must be active",
+                )?;
+                require(
+                    vm.context.status == (ExecutionStatus::WaitingRemote { request })
+                        || matches!(vm.context.status, ExecutionStatus::Faulted { .. }),
+                    "remote waiter status mismatch",
+                )?;
+                let instruction = method
+                    .instructions
+                    .get(&call_site)
+                    .ok_or_else(|| Error("invalid remote call offset".into()))?;
+                require(instruction.next == next, "remote return offset mismatch")?;
+                let Op::Call { token, .. } = instruction.op else {
+                    return Err(Error("remote waiter is not a call".into()));
+                };
+                let callee = program.method(program.method_tokens[&(method.assembly, token)])?;
+                crate::remote::validate_wait(vm, request, callee)?;
+                let mut shape = positions
+                    .get(&call_site)
+                    .cloned()
+                    .ok_or_else(|| Error("unreachable remote call".into()))?;
+                let count = callee.signature.parameters.len() + 1;
+                require(shape.len() >= count, "remote call stack underflow")?;
+                shape.truncate(shape.len() - count);
+                shape
             }
             Continuation::AwaitEffect {
                 call_site,

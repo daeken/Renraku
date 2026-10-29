@@ -106,6 +106,9 @@ fn structured_chat_restores_every_instruction_and_freezes_history_and_binding() 
         let outcome = vm.run(1).unwrap();
         store.save(&vm).unwrap();
         match outcome {
+            RunOutcome::WaitingRemote(_) => {
+                panic!("model fixture unexpectedly awaited a remote object")
+            }
             RunOutcome::Paused => {}
             RunOutcome::Waiting(id) => {
                 let context = vm.context().clone();

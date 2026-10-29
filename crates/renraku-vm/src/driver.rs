@@ -79,6 +79,11 @@ impl Invocation {
                 ExecutionStatus::Completed { result } => {
                     return Ok(Action::Stop(DriverStop::Completed(result)));
                 }
+                ExecutionStatus::WaitingRemote { .. } => {
+                    return Err(Error(
+                        "model driver cannot deliver remote object calls".into(),
+                    ));
+                }
                 ExecutionStatus::Waiting { effect } => {
                     if self.operations == self.limits.provider_operations {
                         return Ok(Action::Stop(DriverStop::ProviderBudget { effect }));

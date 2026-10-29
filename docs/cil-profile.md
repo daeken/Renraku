@@ -416,6 +416,13 @@ transitions. Budget exhaustion pauses the context; another `Vm::run` call resume
 it. A fault retains the failing stack. Native Rust frames never represent
 suspended guest calls.
 
+Ordinary instance calls can also target an explicitly host-imported, fieldless
+[remote contract handle](remote-calls.md). Its local contract IDs remain separate
+from the original owner/type/object/code IDs. The call freezes peer input and
+parks AwaitRemote/WaitingRemote state; explicit host delivery commits result and
+continuation wakeup together. This adds no opcode or value kind and no implicit
+network authority. Remote construction/fields/returned references are absent.
+
 The effectful intrinsics are `Renraku.Model.Complete(string) -> string` and
 `Renraku.Model.Chat(ModelBinding, ChatMessage) -> string` in Renraku.CoreLib.
 Complete captures a single user prompt with the local default binding; Chat

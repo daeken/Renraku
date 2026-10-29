@@ -32,6 +32,8 @@ fn execute() -> Result<()> {
         "       renraku-vm inspect-checkpoint <universe.db>\n",
         "       renraku-vm agent-inspect <universe.db>\n",
         "       renraku-vm agent-input <universe.db> <input-ID> <goal> [instruction-budget]\n",
+        "       renraku-vm remote-import <owner.db> <caller.db> <owner-ID> <node-ID> <epoch> <address:port> <grant-ID> <contract-method>\n",
+        "       renraku-vm remote-drive <caller.db> [key-file]\n",
         "       renraku-vm peer-serve <owner.db> <node-ID> <epoch> <loopback-address:port> <caller-ID> <key-file> [instruction-budget] [connection-limit]\n",
         "       renraku-vm peer-call <caller.db> <owner-ID> <node-ID> <epoch> <loopback-address:port> <key-file> <call.json>\n",
         "       renraku-vm peer-resume <caller.db> <operation-ID> [key-file]\n",
@@ -88,6 +90,57 @@ fn execute() -> Result<()> {
             } else {
                 print_json(&renraku_vm::web::inspect_publications(&mut store)?)?;
             }
+            return Ok(());
+        }
+        Some("remote-import") if args.len() == 9 => {
+            if !std::path::Path::new(&args[1]).is_file()
+                || !std::path::Path::new(&args[2]).is_file()
+            {
+                return Err(Error("owner/caller checkpoint does not exist".into()));
+            }
+            use renraku_vm::{
+                identity::{GrantId, NodeId, UniverseId},
+                peer::Endpoint,
+            };
+            let id = |s: &str| {
+                uuid::Uuid::parse_str(s)
+                    .map(|id| *id.as_bytes())
+                    .map_err(|_| Error("invalid import identity".into()))
+            };
+            let endpoint = Endpoint {
+                owner: UniverseId::from_bytes(id(&args[3])?),
+                node: NodeId::from_bytes(id(&args[4])?),
+                epoch: number(args.get(5), 0)?,
+                address: args[6]
+                    .parse()
+                    .map_err(|_| Error("invalid import address".into()))?,
+            };
+            let mut owner = CheckpointStore::open(&args[1])?;
+            let mut caller = CheckpointStore::open(&args[2])?;
+            let saved = caller.load()?;
+            let p = &saved.snapshot.program;
+            let contract = p.method(p.entry(&args[8])?)?.binding;
+            let handle = renraku_vm::remote::import_method(
+                &mut owner,
+                &mut caller,
+                &endpoint,
+                GrantId::from_bytes(id(&args[7])?),
+                contract,
+            )?;
+            print_json(&serde_json::json!({"format":1,"handle":handle.to_string()}))?;
+            return Ok(());
+        }
+        Some("remote-drive") if (2..=3).contains(&args.len()) => {
+            if !std::path::Path::new(&args[1]).is_file() {
+                return Err(Error("caller checkpoint does not exist".into()));
+            }
+            let mut store = CheckpointStore::open(&args[1])?;
+            let key = args
+                .get(2)
+                .map(renraku_vm::peer::PeerKey::load_private)
+                .transpose()?;
+            let report = renraku_vm::remote::drive(&mut store, key.as_ref())?;
+            print_json(&renraku_vm::peer::report_json(&report)?)?;
             return Ok(());
         }
         Some("peer-serve") if (7..=9).contains(&args.len()) => {
@@ -735,6 +788,9 @@ fn execute() -> Result<()> {
         vm.set_model_calls_enabled(allow_model);
         vm.start(program.entry(entry)?, Vec::new())?;
         match vm.run(budget)? {
+            RunOutcome::WaitingRemote(request) => {
+                println!("waiting for remote object call: {request}")
+            }
             RunOutcome::Waiting(effect) => println!("waiting for model request: {effect}"),
             RunOutcome::Completed(result) => {
                 match result {
@@ -840,6 +896,13 @@ fn invocation_json(
         report["callKind"] = json!("instance");
         report["receiver"] = value(Value::Reference(record.receiver(vm).unwrap()));
     }
+    if vm.context().id == record.execution
+        && let renraku_vm::execution::ExecutionStatus::WaitingRemote { request } =
+            vm.context().status
+    {
+        report["format"] = json!(3);
+        report["waitingRemote"] = json!({"request":request.to_string()});
+    }
     report
 }
 
@@ -889,6 +952,7 @@ fn persistent_report(vm: &Vm<'_>, store: &CheckpointStore, outcome: RunOutcome) 
         store.generation()
     );
     match outcome {
+        RunOutcome::WaitingRemote(request) => println!("waiting for remote object call: {request}"),
         RunOutcome::Waiting(effect) => println!("waiting for model request: {effect}"),
         RunOutcome::Paused => println!("paused: {} frames", vm.context().frames.len()),
         RunOutcome::Completed(result) => match result {

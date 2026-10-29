@@ -17,6 +17,7 @@ use std::{
 pub enum RunOutcome {
     Paused,
     Waiting(EffectId),
+    WaitingRemote(ObjectId),
     Completed(Option<Value>),
 }
 
@@ -62,6 +63,10 @@ enum Mutation {
     },
 }
 enum Transition {
+    Remote {
+        frame: Frame,
+        prepared: crate::remote::Prepared,
+    },
     Continue(Frame),
     Wait {
         frame: Frame,
@@ -258,6 +263,10 @@ impl<'a> Vm<'a> {
         )?;
         let method = self.entry_method(binding)?;
         self.check_entry_arguments(method, &arguments)?;
+        require(
+            !crate::remote::contract_type(self, method.owner)?,
+            "remote contracts cannot execute as local entries",
+        )?;
         let frame = new_frame(method, arguments);
         self.entry = Some(binding);
         self.context = ExecutionContext {
@@ -272,6 +281,9 @@ impl<'a> Vm<'a> {
             ExecutionStatus::Completed { result } => return Ok(RunOutcome::Completed(*result)),
             ExecutionStatus::Faulted { message } => return Err(Error(message.clone())),
             ExecutionStatus::Waiting { effect } => return Ok(RunOutcome::Waiting(*effect)),
+            ExecutionStatus::WaitingRemote { request } => {
+                return Ok(RunOutcome::WaitingRemote(*request));
+            }
             _ => {}
         }
         self.context.status = ExecutionStatus::Runnable;
@@ -287,6 +299,9 @@ impl<'a> Vm<'a> {
             if let ExecutionStatus::Completed { result } = self.context.status {
                 self.finish_invocation();
                 return Ok(RunOutcome::Completed(result));
+            }
+            if let ExecutionStatus::WaitingRemote { request } = self.context.status {
+                return Ok(RunOutcome::WaitingRemote(request));
             }
             if let ExecutionStatus::Waiting { effect } = self.context.status {
                 return Ok(RunOutcome::Waiting(effect));
@@ -397,6 +412,9 @@ impl<'a> Vm<'a> {
             }
         }
         match transition {
+            Transition::Remote { frame, prepared } => {
+                crate::remote::park(self, frame, prepared)?;
+            }
             Transition::Continue(frame) => {
                 *self.context.frames.last_mut().unwrap() = frame;
             }
@@ -729,6 +747,16 @@ impl<'a> Vm<'a> {
                 let mut arguments = frame
                     .evaluation_stack
                     .split_off(frame.evaluation_stack.len() - count);
+                if let Some(prepared) =
+                    crate::remote::prepare(self, callee, &arguments, constructing)?
+                {
+                    frame.continuation = Continuation::AwaitRemote {
+                        call_site: offset,
+                        next: instruction.next,
+                        request: prepared.request,
+                    };
+                    return Ok((Transition::Remote { frame, prepared }, None));
+                }
                 let result = if constructing {
                     self.check_parameters(callee, &arguments)?;
                     let mut id = ObjectId::fresh();

@@ -4,8 +4,9 @@
 [durable owner instance calls](owner-calls.md). It authenticates bounded messages,
 commits caller intent before sending, reconciles accepted owner work after lost
 replies, and commits caller results before returning them. This is a host API
-and native CLI milestone. Ordinary CIL imported references and guest wait frames
-are still future work; this is partial network-transparency evidence.
+and native CLI milestone. [Imported contract handles](remote-calls.md) now
+connect ordinary CIL calls and portable guest waits to this transport. General
+foreign references and hostile child isolation remain future work.
 
 ## Authentication and scope
 
@@ -86,8 +87,9 @@ There are at most 128 calls and 64 KiB per metadata record. Save/recovery valida
 root agreement, caller binding, exact canonical bytes, hashes, acknowledgements,
 result bounds and terminal state. All metadata commits with existing code, heap,
 statics, frames, effects and receipts in format 7, with no new guest value/frame
-kind. The caller does not create a private Counter object; remote identity is
-recorded as data here, not yet as a guest reference. Owner registration continues
+kind for the host journal. The caller does not create a private Counter object;
+remote identity is recorded here as data, and the separate remote contract
+binds a fieldless local handle. Owner registration continues
 to retain its authoritative object; distributed leases/GC are not introduced.
 
 An explicit call_once first commits intent. It connects without sending, then

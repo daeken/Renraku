@@ -45,7 +45,9 @@ fn each_instruction_can_pause_and_resume_with_nested_frames_and_constructor_stat
                 return;
             }
             RunOutcome::Paused => {}
-            RunOutcome::Waiting(_) => panic!("pure simulation unexpectedly waited for an effect"),
+            RunOutcome::Waiting(_) | RunOutcome::WaitingRemote(_) => {
+                panic!("pure simulation unexpectedly waited for an effect")
+            }
         }
         assert_eq!(vm.context().status, ExecutionStatus::Paused);
         saw_nested_calls |= vm.context().frames.len() >= 3;

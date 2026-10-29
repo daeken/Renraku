@@ -1,5 +1,5 @@
 //! Authenticated loopback owner transport and a durable host caller journal.
-//! This is not an imported guest reference or a portable guest wait yet.
+//! The remote module supplies imported contract handles and portable guest waits.
 use crate::{
     checkpoint::CheckpointStore,
     error::{Error, Result, require},
@@ -776,6 +776,87 @@ pub fn inspect(store: &mut CheckpointStore, operation: &str) -> Result<Option<Ca
     }
     Ok(Some(CallReport::Unresolved))
 }
+pub(crate) struct GuestIntent {
+    pub id: ObjectId,
+    intent: Intent,
+    bytes: Vec<u8>,
+}
+pub(crate) fn prepare_guest(
+    vm: &Vm<'_>,
+    endpoint: &Endpoint,
+    call: &OwnerCall,
+) -> Result<GuestIntent> {
+    let records = journal(vm)?;
+    require(
+        records.len() < MAX_CALLS && !records.contains_key(&call.operation),
+        "guest peer operation limit/collision",
+    )?;
+    let intent = Intent {
+        format: 1,
+        caller: vm.universe_id().to_string(),
+        node: endpoint.node.to_string(),
+        address: endpoint.address.to_string(),
+        call: WireCall::from_call(call)?,
+    };
+    require(
+        self::endpoint(&intent)? == *endpoint,
+        "guest endpoint mismatch",
+    )?;
+    let bytes = json(&intent)?;
+    let mut id = ObjectId::fresh();
+    while vm.heap.object(id).is_ok() {
+        id = ObjectId::fresh();
+    }
+    vm.program.string_type()?;
+    Ok(GuestIntent { id, intent, bytes })
+}
+pub(crate) fn publish_guest(vm: &mut Vm<'_>, prepared: GuestIntent) -> Result<()> {
+    let units = String::from_utf8(prepared.bytes)
+        .unwrap()
+        .encode_utf16()
+        .collect();
+    vm.heap
+        .allocate_string(prepared.id, vm.program.string_type()?, units)?;
+    vm.set_root(intent_key(&prepared.intent.call.operation)?, prepared.id)
+}
+pub(crate) fn guest_call(vm: &Vm<'_>, request: ObjectId) -> Result<(Endpoint, OwnerCall)> {
+    let records = journal(vm)?;
+    let intent = records
+        .values()
+        .find(|i| {
+            vm.heap
+                .roots()
+                .get(&format!("{NS}call/{}", i.call.operation))
+                == Some(&request)
+        })
+        .ok_or_else(|| Error("guest remote intent missing".into()))?;
+    let call = intent.call.call()?;
+    require(
+        call.operation
+            == format!(
+                "g.{}.{}",
+                vm.context.id,
+                vm.instructions_executed
+                    .checked_sub(1)
+                    .ok_or_else(|| Error("remote instruction counter underflow".into()))?
+            ),
+        "guest remote operation/execution mismatch",
+    )?;
+    Ok((endpoint(intent)?, call))
+}
+pub(crate) fn guest_reply(vm: &Vm<'_>, operation: &str) -> Result<Option<OwnerReply>> {
+    root_bytes(vm, &named("reply", operation))?
+        .map(|b| parse::<SavedReply>(&b)?.reply.reply())
+        .transpose()
+}
+pub(crate) fn call_guest(
+    store: &mut CheckpointStore,
+    endpoint: &Endpoint,
+    call: &OwnerCall,
+    key: &PeerKey,
+) -> Result<CallReport> {
+    call_inner(store, endpoint, call, key, true)
+}
 /// Commit caller intent before any socket write. Explicit retries after a sent
 /// marker reconcile only existing owner receipts; a missing ledger never starts.
 pub fn call_once(
@@ -783,6 +864,15 @@ pub fn call_once(
     peer: &Endpoint,
     call: &OwnerCall,
     key: &PeerKey,
+) -> Result<CallReport> {
+    call_inner(store, peer, call, key, false)
+}
+fn call_inner(
+    store: &mut CheckpointStore,
+    peer: &Endpoint,
+    call: &OwnerCall,
+    key: &PeerKey,
+    guest: bool,
 ) -> Result<CallReport> {
     require(
         peer.address.ip().is_loopback()
@@ -794,6 +884,12 @@ pub fn call_once(
     let saved = store.load()?;
     let mut vm = saved.snapshot.restore()?;
     let records = journal(&vm)?;
+    require(
+        !guest
+            || (records.contains_key(&call.operation)
+                && crate::remote::owns(&vm, &call.operation)?),
+        "guest remote call has no active owned intent",
+    )?;
     let intent = Intent {
         format: 1,
         caller: vm.universe_id().to_string(),
@@ -825,10 +921,11 @@ pub fn call_once(
         store.save(&vm)?;
     }
     require(
-        matches!(
-            vm.context().status,
-            ExecutionStatus::Completed { .. } | ExecutionStatus::Faulted { .. }
-        ),
+        guest
+            || matches!(
+                vm.context().status,
+                ExecutionStatus::Completed { .. } | ExecutionStatus::Faulted { .. }
+            ),
         "caller universe is busy",
     )?;
     let sent = named("sent", &call.operation);
@@ -914,8 +1011,12 @@ pub fn call_once(
             })?,
         )?;
     }
+    let projected = reply.reply()?;
+    if guest {
+        crate::remote::complete(&mut vm, &projected)?;
+    }
     store.save(&vm)?;
-    Ok(CallReport::Owner(reply.reply()?))
+    Ok(CallReport::Owner(projected))
 }
 pub fn resume(
     store: &mut CheckpointStore,

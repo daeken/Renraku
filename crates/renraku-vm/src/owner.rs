@@ -193,6 +193,10 @@ fn journal(vm: &Vm<'_>) -> Result<BTreeMap<String, Accepted>> {
     {
         return Ok(records);
     }
+    require(
+        !crate::remote::has_imports(vm),
+        "owner universes cannot import remote contracts in this profile",
+    )?;
     let registry = placement::read(vm)?
         .ok_or_else(|| Error("owner acceptance has no placement registry".into()))?;
     let mut seen = BTreeSet::new();
@@ -368,6 +372,10 @@ fn drive(
     let id = key(authenticated_caller, &call.operation)?;
     let saved = store.load()?;
     let mut vm = saved.snapshot.restore()?;
+    require(
+        !crate::remote::has_imports(&vm),
+        "owner universes cannot import remote contracts in this profile",
+    )?;
     let records = journal(&vm)?;
     placement::check_owner_context(&vm, context, call.owner, call.epoch, call.object)?;
     let arguments = if let Some(record) = records.get(&id) {

@@ -33,6 +33,12 @@ pub enum Continuation {
         next: u32,
         result: CallResult,
     },
+    /// A remote instance call has frozen inputs in the peer journal.
+    AwaitRemote {
+        call_site: u32,
+        next: u32,
+        request: ObjectId,
+    },
     /// A capability call has moved its prompt into the durable outbox.
     AwaitEffect {
         call_site: u32,
@@ -60,7 +66,8 @@ impl Frame {
                 result: CallResult::ConstructedObject(id),
                 ..
             } => Some(id),
-            Continuation::AwaitEffect { request, .. } => Some(request),
+            Continuation::AwaitEffect { request, .. }
+            | Continuation::AwaitRemote { request, .. } => Some(request),
             _ => None,
         };
         self.arguments
@@ -78,6 +85,9 @@ pub enum ExecutionStatus {
     Paused,
     Waiting {
         effect: EffectId,
+    },
+    WaitingRemote {
+        request: ObjectId,
     },
     Completed {
         result: Option<Value>,

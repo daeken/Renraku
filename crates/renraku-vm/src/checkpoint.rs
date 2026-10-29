@@ -462,6 +462,10 @@ fn encode(vm: &Vm<'_>) -> Result<Vec<u8>> {
     match &vm.context.status {
         ExecutionStatus::Runnable => w.byte(0),
         ExecutionStatus::Paused => w.byte(1),
+        ExecutionStatus::WaitingRemote { request } => {
+            w.byte(5);
+            w.id(request.as_bytes());
+        }
         ExecutionStatus::Waiting { effect } => {
             w.byte(4);
             w.id(effect.as_bytes());
@@ -507,6 +511,16 @@ fn encode(vm: &Vm<'_>) -> Result<Vec<u8>> {
                         w.id(id.as_bytes());
                     }
                 }
+            }
+            Continuation::AwaitRemote {
+                call_site,
+                next,
+                request,
+            } => {
+                w.byte(3);
+                w.word(call_site);
+                w.word(next);
+                w.id(request.as_bytes());
             }
             Continuation::AwaitEffect {
                 call_site,
@@ -867,6 +881,9 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
     let status = match r.u8()? {
         0 => ExecutionStatus::Runnable,
         1 => ExecutionStatus::Paused,
+        5 if format >= 7 => ExecutionStatus::WaitingRemote {
+            request: ObjectId::from_bytes(id(&mut r)?),
+        },
         4 if format >= 4 => ExecutionStatus::Waiting {
             effect: EffectId::from_bytes(id(&mut r)?),
         },
@@ -911,6 +928,11 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
                     result,
                 }
             }
+            3 if format >= 7 => Continuation::AwaitRemote {
+                call_site: r.u32()?,
+                next: r.u32()?,
+                request: ObjectId::from_bytes(id(&mut r)?),
+            },
             2 if format >= 4 => Continuation::AwaitEffect {
                 call_site: r.u32()?,
                 next: r.u32()?,

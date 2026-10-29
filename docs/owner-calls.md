@@ -4,9 +4,9 @@
 actual CIL instance execution on the authoritative object. It accepts an exact
 operation once, resumes its saved frames, or returns its terminal result after a
 lost reply. [Authenticated loopback transport](peer-transport.md) now connects
-this backend to a durable host caller journal. Caller-side ordinary CIL remote
-references/waits and secure child universes remain unimplemented; this is not
-full network transparency.
+this backend to a durable host caller journal. [Imported contract handles](remote-calls.md)
+now connect ordinary caller CIL and saved waits to that path. General foreign
+reference APIs and secure child universes remain future work.
 
 ## Explicit instance entry
 

@@ -106,6 +106,9 @@ fn linked_cil_conversation_restores_at_every_instruction_and_effect_boundary() {
         let outcome = vm.run(1).unwrap();
         store.save(&vm).unwrap();
         match outcome {
+            RunOutcome::WaitingRemote(_) => {
+                panic!("effect fixture unexpectedly awaited a remote object")
+            }
             RunOutcome::Paused => {}
             RunOutcome::Waiting(id) => {
                 assert!(vm.context().frames.len() >= 3);

@@ -118,7 +118,8 @@ impl Vm<'_> {
                         InvocationState::Running,
                         ExecutionStatus::Runnable
                         | ExecutionStatus::Paused
-                        | ExecutionStatus::Waiting { .. },
+                        | ExecutionStatus::Waiting { .. }
+                        | ExecutionStatus::WaitingRemote { .. },
                     ) => true,
                     (
                         InvocationState::Completed { result: a },

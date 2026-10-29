@@ -797,13 +797,53 @@ and do not inherit persistence.
   [peer transport](peer-transport.md); no live inference was needed.
 
 
+
+- Ordinary C# instance calls through imported contract handles now park portable
+  AwaitRemote/WaitingRemote frames and route through the authenticated peer path.
+  Trusted import reads the authoritative owner registry/grant/schema and compares
+  a separately installed local fieldless sealed one-method contract. Owner/core/
+  type/object/method/code identities remain explicit and separate from local
+  contract IDs; a canonical managed handle contains no Counter state. Same-pair
+  retries return the same handle; changed bindings, preexisting instances,
+  construction/local body entry, ungranted methods and unsupported profiles deny.
+  One referent per contract type/one method per handle and 64 imports are explicit
+  initial limits. No foreign facade tokens become live owner types. Import roots
+  and handle roots are canonical/typed; existing lifetime barriers remain.
+  The CIL call freezes exact inputs and endpoint/grant/code with a stable
+  execution/instruction-derived operation before networking. Lower stacks,
+  locals and nested frames persist. Peer intent and separate remote wait commit
+  together; no Model AwaitEffect or socket/future/key is used as a guest frame.
+  Explicit remote delivery handles Pending/uncertain work, and atomically commits
+  terminal reply, caller-core String allocation, result stack and wakeup. Failed
+  success/fault saves reload the original wait without repeated mutations. Owner
+  faults retain prior mutations/frozen inputs and update invocation fault receipts.
+  Format 7 adds explicit status 5/continuation 3; old state bytes/value tags,
+  readers 1..6 and all original fixtures remain. Runtime/abstract stack recovery
+  checks pinned call site/continuation/request/operation/schema and rejects bad
+  frames/metadata, including repaired digests. Trusted remote-import/remote-drive
+  commands add no agent action; format-3 invocation wait reports are explicit,
+  and old report shapes remain. Model/agent drivers stop at remote waits. Owner
+  calls conservatively reject importing universes, preventing nested callbacks.
+  Sixteen integrations cover each-instruction GC, independent core IDs, all
+  primitive/String/null/void wakeups, I64 extrema/surrogate units, repeated loop/
+  call sites/lower stacks, authority/busy/bounds/shape denials, save failures,
+  metadata corruption and old receipt replay. Counter 19->26->23 yields caller
+  27 then 24; first replay stays 27 and leaves 23. Native caller and owner both
+  die after owner commit before reply; revoked-grant/GC/same-endpoint recovery
+  finishes the original call once, and SDK-free CIL then returns 27 without the
+  key/server. CoreLib/old bodies, demos and all old provenance/receipts remain.
+  This is a narrow imported method capability, not arbitrary foreign types,
+  returned object graphs, ownership transfer or hostile child isolation. See
+  [remote CIL calls](remote-calls.md). No live inference was used.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 349 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 365 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -1110,12 +1150,18 @@ placement/grant descriptors and denial fixtures are implemented as preparatory
 [host preflight](placement.md). [Durable owner instance acceptance](owner-calls.md)
 is now implemented and verified, including revocation/receipt recovery.
 [Authenticated loopback transport](peer-transport.md) and durable host caller
-recovery are implemented. Next connect this path to ordinary caller CIL imported
-references and portable waits, with coherent remote type/identity bindings.
-Host-only network calls remain partial evidence, not complete transparency or
-sandbox security. Then extend endowment security,
-returned references, graph copies, fenced mobility and cross-machine execution
-in independently verified steps. Preserve legacy readers and all current runtime,
+recovery are implemented. [Remote CIL contract calls](remote-calls.md) now add
+ordinary instance syntax, portable waiting frames and atomic result/wakeup with
+distinct local/authoritative identity bindings. Both native processes can die in
+the commit-before-reply window without repeating the original mutation. This
+first contract is one object/method per fieldless local type; arbitrary foreign
+references, returned object grants and hostile child isolation remain absent.
+Next enforce explicit child object/class/effect endowments across loading,
+resolution, execution and inspection, with adversarial parent/sibling-escape
+fixtures. Keep the trusted workbench separate from child-facing views. Then
+extend attenuated returned references, bounded method sets/multiple referents,
+graph copies, fenced mobility and cross-machine execution in verified steps.
+Preserve legacy readers and all current runtime,
 compiler, receipt, model/publication, library and demo contracts.
 
 The compiler service ledger is outside the guest and must not replace managed

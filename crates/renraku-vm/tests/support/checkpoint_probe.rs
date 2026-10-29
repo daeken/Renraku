@@ -19,6 +19,17 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("remote-run") if args.len() == 2 => {
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let mut vm = saved.snapshot.restore()?;
+            let outcome = vm.run_checkpointed(&mut store, 10000, 1)?;
+            println!(
+                "{}",
+                serde_json::json!({"execution":vm.context().id.to_string(),"outcome":format!("{outcome:?}")})
+            );
+            Ok(())
+        }
         Some("peer-server") if args.len() == 9 => {
             use renraku_vm::{
                 identity::NodeId,
