@@ -711,13 +711,39 @@ and do not inherit persistence.
   are unchanged. See [ObjectMap](object-map.md); no live inference was needed.
 
 
+- The first network-object preparation now persists fixed-owner placement and
+  recipient-bound method-grant preflight in host-owned format-1 metadata. Opaque
+  NodeId/GrantId complement existing logical IDs. Original objects retain exact
+  type IDs and typed GC roots; policies explicitly list allowed nodes/resources
+  and independent copy/mobility flags. Grants pin one object, other recipient
+  universe and exact ordinary instance method/code; revocation is permanent and
+  retries never rebind/reactivate. Preflight checks original owner/node/positive
+  epoch, caller/target/code, resources and bounded scalar/String/null arguments,
+  preserving raw widths/exact UTF-16 and rejecting boxing or owner-local IDs.
+  Method grants deny field/static/object/type/source inspection, discovery,
+  copying and movement. Limits are 256 objects, 256 grants, 16 nodes/resources,
+  64-character resource labels, 256 KiB registry, 16 arguments and 4096/8192
+  per-string/total UTF-16 units. Canonical ordering/hash and strict schema/root/
+  live binding validation apply on save/recovery without a binary format change.
+  Nine tests cover principal/epoch/placement/access denials, value/declaration
+  bounds, full capacity, deterministic hashes, typed roots through static
+  replacement/GC/paused frames, malformed metadata/repaired-digest recovery, failed registration/export/
+  revocation commits and SDK-free native recovery with zero guest instructions.
+  This is preparatory host preflight, not network transport/authentication,
+  remote references/waits, ownership transfer, copying, global local-execution
+  placement enforcement or a hostile-code sandbox. No new agent actions, guest
+  capabilities,
+  CoreLib bodies or value/frame/checkpoint fields were added. Format 7,
+  every old fixture and both demos remain unchanged. See [placement](placement.md).
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 316 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 325 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -1019,12 +1045,16 @@ one mutation of the original object. Deny changed requests, missing/wrong/revoke
 grants, stale epochs and ambient object/type/static/source access. Keep one
 context per owner universe and separate checkpoints; initially reject remote
 field access/callbacks/nested remote effects explicitly. Timeout is not proof of
-non-acceptance or permission to copy/elect another owner. Start with bounded
-placement/grant descriptors and denial fixtures if necessary, but label that
-preparatory until real network invocation passes. Then extend endowment security,
+non-acceptance or permission to copy/elect another owner. The bounded
+placement/grant descriptors and denial fixtures are implemented as preparatory
+[host preflight](placement.md). Now connect them to durable pinned instance
+invocation/owner acceptance and the actual two-process transport/wait proof;
+preflight alone must not be reported as network invocation or sandbox security.
+Then extend endowment security,
 returned references, graph copies, fenced mobility and cross-machine execution
 in independently verified steps. Preserve legacy readers and all current runtime,
 compiler, receipt, model/publication, library and demo contracts.
+
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

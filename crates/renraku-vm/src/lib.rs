@@ -19,6 +19,7 @@ mod image;
 pub mod inspection;
 pub mod invocation;
 pub mod model;
+pub mod placement;
 pub mod program;
 pub mod runtime;
 pub mod value;

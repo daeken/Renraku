@@ -19,6 +19,55 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("placement") if args.len() == 4 => {
+            use renraku_vm::{
+                identity::{GrantId, UniverseId},
+                placement::{self, Access, Argument, OwnerContext},
+            };
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let vm = saved.snapshot.restore()?;
+            let registry =
+                placement::read(&vm)?.ok_or_else(|| Error("missing placement registry".into()))?;
+            let grant_id = GrantId::from_bytes(
+                *uuid::Uuid::parse_str(&args[2])
+                    .map_err(|_| Error("invalid grant ID".into()))?
+                    .as_bytes(),
+            );
+            let recipient = UniverseId::from_bytes(
+                *uuid::Uuid::parse_str(&args[3])
+                    .map_err(|_| Error("invalid caller ID".into()))?
+                    .as_bytes(),
+            );
+            let grant = registry
+                .grants()
+                .find(|g| g.id == grant_id)
+                .ok_or_else(|| Error("unknown grant".into()))?;
+            let owner = registry.owner();
+            let context = OwnerContext {
+                node: owner.node,
+                epoch: owner.epoch,
+                resources: std::collections::BTreeSet::new(),
+            };
+            let call = placement::authorize(
+                &mut store,
+                &context,
+                recipient,
+                grant_id,
+                &Access::Invoke {
+                    owner: owner.universe,
+                    epoch: owner.epoch,
+                    object: grant.object,
+                    method: grant.method,
+                    arguments: vec![Argument::I32(7)],
+                },
+            )?;
+            println!(
+                "{}",
+                serde_json::json!({"authorized":true,"object":call.object.to_string(),"method":call.method.method.to_string(),"code":call.method.code.to_string(),"registryHash":registry.hash()?,"generation":saved.generation,"instructions":vm.instructions_executed()})
+            );
+            Ok(())
+        }
         Some("web-publish") if args.len() == 5 => {
             let mut store = CheckpointStore::open(&args[1])?;
             let stop = match args[4].as_str() {

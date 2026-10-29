@@ -49,3 +49,6 @@ identity!(ArenaId);
 identity!(AssemblyId);
 identity!(UniverseId);
 identity!(EffectId);
+
+identity!(NodeId);
+identity!(GrantId);

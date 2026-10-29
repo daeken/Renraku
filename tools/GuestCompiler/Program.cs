@@ -64,6 +64,9 @@ try
     File.WriteAllBytes(Path.Combine(output, "Renraku.ObjectCollectionTests.dll"), Compile("Renraku.ObjectCollectionTests", objectHarness,
         new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(objectLibrary) }));
 
+    File.WriteAllBytes(Path.Combine(output, "Renraku.ExportPolicyTests.dll"), Compile("Renraku.ExportPolicyTests",
+        File.ReadAllText(Path.Combine(root, "guest/ExportPolicyHarness.cs")), new[] { MetadataReference.CreateFromImage(core) }));
+
     // Real metadata dependency/collision fixtures, never executed by the host.
     var coreReference = MetadataReference.CreateFromImage(core);
     byte[] cycleStub = Compile("Cycle.Left", "namespace Cycle.Left { public class Node { } }", new[] { coreReference });

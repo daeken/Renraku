@@ -2,8 +2,10 @@
 
 This is the next development direction selected by the user on October 29,
 2026. It specifies the implementation sequence and acceptance boundaries;
-remote object references, placement enforcement, graph copying and security
-sandboxes are not implemented yet. The existing localhost website is an HTTP
+remote object references, graph copying and security sandboxes are not
+implemented yet. [Fixed-owner placement and method-grant preflight](placement.md)
+now persists and validates explicit policies, but does not enforce placement on
+all local execution or execute remote calls. The existing localhost website is an HTTP
 application edge, not object-level network transparency.
 
 ## Position in the original rollout
@@ -116,6 +118,19 @@ The current coding agent controls trusted computation and is **not** a hostile
 code sandbox. That claim cannot change until runtime enforcement and adversarial
 escape tests exist. ObjectMap is a useful container of endowed references, not
 an enforcement boundary by itself.
+
+## Implemented preparatory slice
+
+The host-only [placement registry](placement.md) now binds original managed
+objects to explicit node/resource/mobility/copy policies and recipient-bound,
+pinned instance-method grants. Canonical bounded records and typed retention
+roots commit in existing format-7 checkpoints; recovery validates their original
+universe/type/code bindings. Revocation and exact preflight denial survive GC,
+failed commits and SDK-free native recovery. This implements the descriptors and
+validation permitted below, not remote invocation or a child security boundary.
+No network protocol or authentication implementation exists yet. Next connect
+these grants to durable owner acceptance and a real suspended CIL call across
+processes; keep preflight separate from execution admission and receipt replay.
 
 ## First independently demonstrable network slice
 

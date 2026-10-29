@@ -87,6 +87,8 @@ The [managed object map](docs/object-map.md) holds nullable object references
 with identity-based updates; its frozen caller and website reuse the same saved
 Counter through native recovery. The next development phase is
 [networked objects, placement and universe boundaries](docs/distributed-objects.md).
+[Fixed-owner placement and method-grant preflight](docs/placement.md) now persists
+explicit policies and denies ungranted access under its bounded host API.
 Object-level remote references and hostile-code universe sandboxes remain
 unimplemented; localhost website serving does not provide them.
 
