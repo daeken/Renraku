@@ -94,6 +94,9 @@ Counter across restarts. Existing-body replacement and native model tool calling
 remain future work. `invoke-once` adds durable request IDs: retrying a call after
 a lost reply resumes the original execution or returns its saved result without
 repeating the mutation. Receipts commit with heap/code/frames and survive GC.
+`install-once` likewise commits a captured compiler bundle and installation
+receipt with the code. `read-code` can show its original source after the bundle
+is deleted; old/raw DLL loads still expose saved CIL.
 
 ## Save and resume a universe
 
@@ -113,7 +116,7 @@ calls. It contains no persistence, serialization, or restart code.
 Use `Renraku.Guest.Simulation::Strings` as the entry method to try a persistent
 conversation object containing embedded NULs, an emoji, and an unpaired
 surrogate. The result is **167861**. Checkpoints preserve its exact UTF-16 units.
-Existing format 1 through 5 universes remain readable and upgrade to format 6 on their next commit.
+Existing format 1 through 6 universes remain readable and upgrade to format 7 on their next commit.
 
 Unexpected process termination restores the most recent committed checkpoint.
 Uncommitted instructions and their heap mutations are rolled back together.

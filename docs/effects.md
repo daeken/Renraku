@@ -245,7 +245,7 @@ The integration suite checks:
   are rejected even with recomputed checksums.
 - Capability mismatch, idempotency-key reuse with changed data, duplicate effect
   IDs, malformed state tags, and missing payload objects fail explicitly.
-- Original format 1 through 5 checkpoints restore and upgrade to format 6.
+- Original format 1 through 6 checkpoints restore and upgrade to format 7.
 - A format 4 waiting call and its schema 1 accepted receipt upgrade together
   and reconcile without resubmission.
 - Structured histories restore at every instruction and through process kills;

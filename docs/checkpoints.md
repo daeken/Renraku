@@ -44,7 +44,7 @@ row contains a generation, universe ID, payload format version, SHA-256 checksum
 and binary payload. The checksum detects damaged payloads; it is not an
 authentication mechanism.
 
-The writer emits payload format version 6 and still reads versions 1 through 5. All start
+The writer emits payload format version 7 and still reads versions 1 through 6. All start
 with the eight bytes `RENRAKU\0` followed by a
 32-bit little endian version number and a 16-byte universe ID. It then records:
 
@@ -56,9 +56,10 @@ with the eight bytes `RENRAKU\0` followed by a
 5. Interned literal string identities.
 6. Durable effect records.
 7. Durable invocation request/receipt records.
-8. Execution identity, status, optional result, and original entry method version.
-9. The cumulative instruction count and configured frame limit.
-10. Frames with pinned method versions, continuations, arguments, locals, and
+8. Installation receipts and captured build provenance.
+9. Execution identity, status, optional result, and original entry method version.
+10. The cumulative instruction count and configured frame limit.
+11. Frames with pinned method versions, continuations, arguments, locals, and
    evaluation stacks.
 
 IDs are opaque 16-byte values. Counts, byte lengths, IL offsets, schema versions,
@@ -102,13 +103,24 @@ most 10,000 records. Earlier formats restore with an empty invocation registry.
 Receipts retain referenced arguments/results and are saved atomically with the
 heap, code, and frames. See [durable invocations](workbench.md#durable-invocation-requests).
 
-The next successful commit writes version 6. Unmodified fixtures captured from
+Version 7 adds installation records between invocation receipts and the execution
+identity. Each contains a length-prefixed UTF-8 request ID, 16-byte assembly ID,
+exact manifest bytes, and a counted map of length-prefixed UTF-8 filenames and
+file bytes. There are at most 128 installations, 66 files / 64 MiB per artifact,
+and 128 KiB per manifest. Artifact validation checks file lengths/hashes, supported
+compiler inputs, sources, references, and bindings to the retained implementation.
+Earlier formats restore with no installation records or attached source. All
+code, provenance, and receipts are committed together; no original paths are
+consulted on recovery. See [captured builds](workbench.md#captured-builds-and-durable-installation).
+
+The next successful commit writes version 7. Unmodified fixtures captured from
 the earlier writers verify active version 1 frames, exact version 2 strings,
 and a version 3 completed effect alongside active frames. A format 4 waiting call
 has a matching original schema 1 provider receipt, proving upgrade and
 reconciliation without resubmission. A format 5 fixture contains a structured
 ChatHarnessScore wait at instruction 54 and upgrades to result 11 with the local
-provider. All upgrade without
+provider. A format 6 invocation captured after its static mutation resumes to 4
+and returns the same receipt on retry, rather than mutating again. All upgrade without
 changing their identities. Host authorization for future model calls is never
 serialized; it defaults to disabled after restoration.
 
@@ -165,6 +177,10 @@ IDs. Their exact method/code binding, argument count/types, and completed result
 must match the retained code. A running record must own the current execution;
 any record for that execution must agree with its entry and terminal status.
 Malformed or conflicting receipts are rejected even with a repaired checksum.
+Installation requests cannot collide with invocation IDs or duplicate a module's
+provenance record. The captured implementation/core bytes and reference bindings
+must match the live registry; damaged source or manifests fail recovery even if
+the checkpoint checksum is repaired.
 
 This validator covers the supported profile and its checkpoint states. It is not
 a complete static CLI verifier or an isolation boundary for hostile code.

@@ -1,4 +1,5 @@
 use renraku_vm::{
+    artifact::{BuildArtifact, InstallationRecord, install_once},
     checkpoint::CheckpointStore,
     driver::{DriverLimits, DriverStop},
     effects::{EffectState, LocalModelProvider},
@@ -32,6 +33,8 @@ fn execute() -> Result<()> {
         "       renraku-vm read-code <universe.db> <method-or-code-ID>\n",
         "       renraku-vm export-reference <universe.db> <type-name-or-ID> [type ...]\n",
         "       renraku-vm install <universe.db> <implementation.dll> [reference-view.json ...]\n",
+        "       renraku-vm install-once <universe.db> <request-ID> <bundle-directory>\n",
+        "       renraku-vm installation <universe.db> <request-ID>\n",
         "       renraku-vm invoke <universe.db> <Type::Method> <instruction-budget> [i32:N|i64:N|object:ID|static:Type::Field|null ...]\n",
         "       renraku-vm invoke-once <universe.db> <request-ID> <Type::Method> <instruction-budget> [arguments ...]\n",
         "       renraku-vm invocation <universe.db> <request-ID>\n",
@@ -56,7 +59,7 @@ fn execute() -> Result<()> {
     match args.first().map(String::as_str) {
         Some(
             "search" | "read-code" | "export-reference" | "install" | "invoke" | "invoke-once"
-            | "invocation",
+            | "invocation" | "install-once" | "installation",
         ) => {
             let command = args[0].as_str();
             let valid = match command {
@@ -67,6 +70,8 @@ fn execute() -> Result<()> {
                 "invoke" => (4..=132).contains(&args.len()),
                 "invoke-once" => (5..=133).contains(&args.len()),
                 "invocation" => args.len() == 3,
+                "install-once" => args.len() == 4,
+                "installation" => args.len() == 3,
                 _ => false,
             };
             if !valid {
@@ -86,7 +91,19 @@ fn execute() -> Result<()> {
                             .map_err(|_| Error("invalid search limit".into()))?,
                     )?,
                 )?,
-                "read-code" => print_json(&program.read_code(&args[2])?)?,
+                "read-code" => print_json(&saved.snapshot.restore()?.read_code(&args[2])?)?,
+                "install-once" => {
+                    let artifact = BuildArtifact::from_bundle(&args[3])?;
+                    let record = install_once(&mut store, &args[2], &artifact)?;
+                    print_json(&installation_json(&args[2], &record, store.generation())?)?;
+                }
+                "installation" => {
+                    let vm = saved.snapshot.restore()?;
+                    let record = vm
+                        .installation(&args[2])
+                        .ok_or_else(|| Error("installation request ID is not recorded".into()))?;
+                    print_json(&installation_json(&args[2], record, store.generation())?)?;
+                }
                 "export-reference" => {
                     let roots = args[2..]
                         .iter()
@@ -295,6 +312,12 @@ fn execute() -> Result<()> {
             for (request, record) in vm.invocations() {
                 println!("invocation {request}: {record:?}");
             }
+            for (request, record) in vm.installations() {
+                println!(
+                    "installation {}",
+                    installation_json(request, record, saved.generation)?
+                );
+            }
             return Ok(());
         }
         Some("queue-model") if args.len() == 3 => {
@@ -498,6 +521,17 @@ fn invocation_json(
     json!({"format":1,"requestId":request,"execution":record.execution.to_string(),"checkpoint":generation,
         "methodId":record.method.method.to_string(),"codeVersion":record.method.code.to_string(),
         "state":state,"result":result,"diagnostic":message,"waitingEffect":waiting})
+}
+
+fn installation_json(
+    request: &str,
+    record: &InstallationRecord,
+    generation: u64,
+) -> Result<serde_json::Value> {
+    Ok(
+        serde_json::json!({"format":1,"requestId":request,"state":"installed","artifactId":record.artifact.id(),
+        "assemblyId":record.assembly.to_string(),"module":record.artifact.assembly_name()?,"checkpoint":generation}),
+    )
 }
 
 fn print_json(value: &serde_json::Value) -> Result<()> {

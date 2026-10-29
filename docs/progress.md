@@ -40,7 +40,7 @@ and do not inherit persistence.
 - Provider model support is checked before external calls. Local echo-v1 receipts
   bind the entire versioned request body. Ledger schema 2 migrates schema 1
   receipts in place, retaining their original bytes and submission counts.
-- Payload format 6 with backward reading of formats 1 through 5. Preserve all
+- Payload format 7 with backward reading of formats 1 through 6. Preserve all
   checked-in legacy fixtures; they were captured from the earlier writers.
 - Separate host-only `renraku-openai` crate and CLI: subscription OAuth login,
   profile metadata and selection, refresh, and logout. Uses production discovery,
@@ -104,6 +104,20 @@ and do not inherit persistence.
   the saved result without a second mutation. Read receipts with `invocation`.
   Receipt arguments/object results remain GC roots across unrelated executions.
   Requests are generation-fenced and capped at 10,000, with no automatic eviction.
+- Captured `BuildArtifact` inputs validate manifest formats 1/2, compiler options,
+  all file hashes/lengths, source encoding, exact runtime core, marked reference
+  images, and live logical-ID views. Bundle paths/symlinks are restricted, and
+  captured files are bounded to 64 MiB. Artifact IDs hash exact captured contents.
+- `install-once` / `artifact::install_once` commits new code, captured build
+  provenance, and a stable request receipt atomically. Replays preserve all IDs
+  and do not advance the generation. Query `installation` without the bundle.
+  Invocation/installation IDs cannot collide. Paused frames, receipts, effects,
+  and newer concurrent heap state remain coherent. Limits are 128 installations
+  and the existing global 128 MiB checkpoint size, without automatic eviction.
+- `Vm::read_code` and native `read-code` now include original UTF-8 sources,
+  hashes, artifact ID, and build manifest for captured modules after deleting
+  the external bundle. CIL stays authoritative; source scope is explicitly the
+  entire assembly, without fabricated per-method source locations or attestation.
 
 ## Validation
 
@@ -111,7 +125,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 143 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 151 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -162,6 +176,14 @@ An original format 5 structured-chat snapshot, captured before the writer change
 upgrades with an empty invocation registry and finishes with result 11.
 The compiler/CLI acceptance fixture now retries the same generated call and
 receives 26 again with the same execution ID, then uses a new ID to reach 33.
+Seven additional artifact/installation tests cover manifest/content validation,
+traversal/symlink and encoding rejection, exact original source retention,
+receipt replay and conflicting IDs, paused invocation preservation, failed writes
+and lost post-commit replies, SIGKILL at commit boundaries, checksum-repaired
+source/receipt corruption, wrong-core/CIL rejection, cross-universe binding
+rejection, and concurrent-writer fencing that preserves the newer heap.
+A genuine format 6 paused invocation, captured before the writer change, upgrades
+with an empty installation registry and resumes/replays to 4 instead of 8.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -241,11 +263,17 @@ reading existing code, writing C#, pulling it in, and executing it.** The
 [workbench](workbench.md) supplies the host tools and a complete deterministic
 fixture. Next connect a bounded model-selected tool loop, retain its transcript
 and source provenance, and prove recovery across compile/install/invoke actions.
-`invoke-once` now supplies the invocation identity/replay boundary; compile and
-install still need their own durable action/receipt protocol and source/artifact
-provenance. Keep the next milestones independently demonstrable: first make a
-compiled artifact/installation recoverable without replaying code installation,
-then connect a bounded model-selected loop using these host tools. Keep the
+`invoke-once` supplies the invocation identity/replay boundary. Captured build
+artifacts and `install-once` now supply atomic installation, receipts, and durable
+source/reference/compiler provenance. Compilation requests still need an intent
+and terminal diagnostics/artifact protocol before a bounded model-selected loop
+owns them. Capture source/reference/options/compiler identities before launching
+Roslyn; retain a stable request ID and published artifact or diagnostics after
+restart. Compilation is a pure host operation, so recovery may rerun a pinned
+compiler request under an explicit policy, but must never install a different
+artifact after publication or treat a changed compiler as the original request.
+Keep the next milestones independently demonstrable, then connect the loop.
+Keep the
 model's actual transcript/source and tool result ownership durable. Tool loop
 state must not be an ephemeral Rust conversation vector. The existing linked
 managed conversation provides an initial source of truth.
@@ -258,8 +286,9 @@ mutation a durable request/execution identity so a lost reply resumes rather tha
 reruns it. Do not claim the deterministic provider fixture is an actual model's
 autonomous acceptance. No new live inference ran in these milestones.
 Current `read-code` returns authoritative saved CIL with resolved logical targets;
-it explicitly reports no original source attached. Bundles retain exact C# source,
-but checkpointed source maps/provenance and decompilation remain future work.
+captured installations also return exact original source inputs and manifests,
+even after deleting their bundles. Older/raw loads explicitly have no attached
+source. Method-level PDB/source maps and decompilation remain future work.
 
 The next useful milestone is a persistent interactive conversation CLI: append
 ordinary linked guest messages, submit the complete captured history, and resume
@@ -289,7 +318,7 @@ overrides are private to unit tests. Profile-bound capabilities are
 `openai.chatgpt.<profile-uuid>`. A ledger also binds issuer, subject, issued
 client, model, and canonical full request bytes. The new receipt ledger has
 application ID 0x52454f41 / schema 1; the old local.echo ledger remains schema 2.
-Keep both backends and all original format 1–5 fixtures intact.
+Keep both backends and all original format 1–6 fixtures intact.
 
 Public metadata contains no tokens. Preserve the pending-refresh marker,
 private Unix storage, profile registration/identity mapping, and lock invariants.

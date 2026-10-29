@@ -59,9 +59,10 @@ a general resource-isolation guarantee. Publication writes a sibling staging
 directory and renames it into place after compilation; normal errors remove
 staging. Process termination can leave an unpublished staging directory.
 
-The manifest records compilation inputs; the current VM CLI still takes the two
-DLL paths directly and does not validate the build manifest. Use the core copy
-inside the bundle. `Program::load` checks its metadata, bindings, and supported
+The manifest records compilation inputs. Raw `run` and `run-persistent` still take
+DLL paths directly; use the core copy inside the bundle. The workbench's
+`install-once` captures and validates the manifest and every declared file, then
+retains that build with its installation receipt. `Program::load` checks metadata, bindings, and supported
 instruction profile. Roslyn can emit CIL that Renraku explicitly rejects, such
 as division or generics; successful compilation alone does not imply execution
 support. See [the current CIL profile](cil-profile.md).
@@ -81,8 +82,9 @@ cargo run -p renraku-vm -- resume target/compiled-hello-universe.db
 The first command pauses after ten instructions; the second returns 36. The
 checkpoint captures the original assembly bytes, code/metadata identities,
 frames, statics, and heap together. Restore needs neither Roslyn/.NET nor the
-source and DLL files. The build manifest and copied source remain external
-build provenance; they are not automatically stored in the guest checkpoint.
+source and DLL files. Raw DLL loading does not attach source provenance;
+`install-once` stores the captured build and exposes original source inputs through
+`read-code`, even after the bundle is deleted. See the [workbench](workbench.md).
 
 Five integration tests cover deterministic compilation from different source
 directories, multi-file input, exact hashes/options, structured errors, absent

@@ -31,3 +31,10 @@ SHA-256 is `ef1d346a345b2799ea79fa7b016876abdd0aa740815ed61e42f8ac8e6530871f`.
 All fixtures must stay unchanged. They test reading earlier formats and
 upgrading on the next successful commit; regenerating them with the current
 writer would lose that coverage.
+
+`checkpoint-v6.bin` was captured from commit 0c25356's format 6 writer before
+installation provenance was added. After Reset, request `legacy-v6` ran four
+instructions of StaticRoundTrip, already committing Total=4 while still paused.
+Its cumulative instruction count is 7. Recovery must resume that same execution
+to result 4 and return 4 on retries. Its SHA-256 is
+`61098f09377337a23bd3550c1a4979f3081216bc80f9513095cfbd00679fbf10`.

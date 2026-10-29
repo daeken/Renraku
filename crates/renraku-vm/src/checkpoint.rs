@@ -2,6 +2,7 @@
 mod validate;
 
 use crate::{
+    artifact::{BuildArtifact, InstallationRecord, MAX_ARTIFACT_BYTES, MAX_INSTALLATIONS},
     cil::Reader,
     effects::{EffectRecord, EffectState},
     error::{Error, Result, require},
@@ -24,7 +25,7 @@ use sha2::{Digest, Sha256};
 use std::{cell::Cell, collections::BTreeMap, path::Path, time::Duration};
 
 const MAGIC: &[u8; 8] = b"RENRAKU\0";
-const FORMAT: u32 = 6;
+const FORMAT: u32 = 7;
 const APPLICATION_ID: i64 = 0x52454e52;
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_ITEMS: usize = 1_000_000;
@@ -38,6 +39,7 @@ struct State {
     interned_strings: BTreeMap<Vec<u16>, ObjectId>,
     effects: BTreeMap<EffectId, EffectRecord>,
     invocations: BTreeMap<String, InvocationRecord>,
+    installations: BTreeMap<String, InstallationRecord>,
     context: ExecutionContext,
     entry: Option<MethodVersion>,
     instructions: u64,
@@ -71,6 +73,7 @@ impl Snapshot {
             interned_strings: state.interned_strings,
             effects,
             invocations: state.invocations,
+            installations: state.installations,
             model_calls_enabled: false,
             context: state.context,
             universe: state.universe,
@@ -238,7 +241,7 @@ impl CheckpointStore {
             payload,
         } = row.ok_or_else(|| Error("no committed checkpoint".into()))?;
         require(
-            generation > 0 && matches!(format, 1..=6),
+            generation > 0 && matches!(format, 1..=7),
             "unsupported checkpoint format or generation",
         )?;
         require(
@@ -444,6 +447,17 @@ fn encode(vm: &Vm<'_>) -> Result<Vec<u8>> {
             }
         }
     }
+    w.count(vm.installations.len())?;
+    for (request, record) in &vm.installations {
+        w.bytes(request.as_bytes())?;
+        w.id(record.assembly.as_bytes());
+        w.bytes(&record.artifact.manifest)?;
+        w.count(record.artifact.files.len())?;
+        for (name, data) in &record.artifact.files {
+            w.bytes(name.as_bytes())?;
+            w.bytes(data)?;
+        }
+    }
     w.id(vm.context.id.as_bytes());
     match &vm.context.status {
         ExecutionStatus::Runnable => w.byte(0),
@@ -594,7 +608,7 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
     require(r.take(8)? == MAGIC, "unsupported checkpoint payload format")?;
     let format = r.u32()?;
     require(
-        matches!(format, 1..=6),
+        matches!(format, 1..=7),
         "unsupported checkpoint payload format",
     )?;
     let universe = UniverseId::from_bytes(id(&mut r)?);
@@ -802,6 +816,53 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
             )?;
         }
     }
+    let mut installations = BTreeMap::new();
+    if format >= 7 {
+        let length = count(&mut r, 32)?;
+        require(
+            length <= MAX_INSTALLATIONS,
+            "installation receipt limit reached",
+        )?;
+        for _ in 0..length {
+            let request = std::str::from_utf8(bytes(&mut r)?)
+                .map_err(|_| Error("invalid installation request UTF-8".into()))?
+                .to_owned();
+            let assembly = AssemblyId::from_bytes(id(&mut r)?);
+            let manifest = bytes(&mut r)?.to_vec();
+            require(
+                manifest.len() <= 128 * 1024,
+                "build manifest exceeds its size limit",
+            )?;
+            let length = count(&mut r, 8)?;
+            require(length <= 66, "too many captured build files")?;
+            let mut files = BTreeMap::new();
+            let mut total = 0usize;
+            for _ in 0..length {
+                let name = std::str::from_utf8(bytes(&mut r)?)
+                    .map_err(|_| Error("invalid build filename UTF-8".into()))?
+                    .to_owned();
+                let data = bytes(&mut r)?;
+                total = total
+                    .checked_add(data.len())
+                    .ok_or_else(|| Error("artifact size overflow".into()))?;
+                require(
+                    total <= MAX_ARTIFACT_BYTES,
+                    "artifact exceeds its aggregate size limit",
+                )?;
+                require(
+                    files.insert(name, data.to_vec()).is_none(),
+                    "duplicate captured build file",
+                )?;
+            }
+            let artifact = BuildArtifact::from_files(manifest, files)?;
+            require(
+                installations
+                    .insert(request, InstallationRecord { assembly, artifact })
+                    .is_none(),
+                "duplicate installation request ID",
+            )?;
+        }
+    }
     let execution = ExecutionId::from_bytes(id(&mut r)?);
     let status = match r.u8()? {
         0 => ExecutionStatus::Runnable,
@@ -887,6 +948,7 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
             interned_strings,
             effects,
             invocations,
+            installations,
             context: ExecutionContext {
                 id: execution,
                 status,

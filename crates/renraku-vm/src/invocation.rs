@@ -45,7 +45,7 @@ pub(crate) fn validate_request_id(id: &str) -> Result<()> {
             && id
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"._-/:".contains(&b)),
-        "invocation request ID must contain 1-128 ASCII identifier characters",
+        "workbench request ID must contain 1-128 ASCII identifier characters",
     )
 }
 
@@ -151,6 +151,10 @@ impl Vm<'_> {
         interval: u64,
     ) -> Result<InvocationRecord> {
         validate_request_id(request_id)?;
+        require(
+            !self.installations.contains_key(request_id),
+            "request ID is already bound to an installation",
+        )?;
         require(interval > 0, "checkpoint interval must be positive")?;
         let method = self.program.method(entry)?;
         if let Some(record) = self.invocations.get(request_id) {

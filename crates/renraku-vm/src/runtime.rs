@@ -35,6 +35,7 @@ pub struct Vm<'a> {
     pub(crate) interned_strings: BTreeMap<Vec<u16>, ObjectId>,
     pub(crate) effects: BTreeMap<crate::identity::EffectId, EffectRecord>,
     pub(crate) invocations: BTreeMap<String, crate::invocation::InvocationRecord>,
+    pub(crate) installations: BTreeMap<String, crate::artifact::InstallationRecord>,
     // Host authorization is deliberately not persisted by guest checkpoints.
     pub(crate) model_calls_enabled: bool,
 }
@@ -84,6 +85,11 @@ impl<'a> Vm<'a> {
         store: &mut crate::checkpoint::CheckpointStore,
         program: &'b Program,
     ) -> Result<Vm<'b>> {
+        let vm = self.rebind_program(program)?;
+        store.save(&vm)?;
+        Ok(vm)
+    }
+    pub(crate) fn rebind_program<'b>(self, program: &'b Program) -> Result<Vm<'b>> {
         program.extends(self.program)?;
         let mut statics = self.statics;
         for field in program
@@ -108,9 +114,9 @@ impl<'a> Vm<'a> {
             interned_strings: self.interned_strings,
             effects: self.effects,
             invocations: self.invocations,
+            installations: self.installations,
             model_calls_enabled: self.model_calls_enabled,
         };
-        store.save(&vm)?;
         Ok(vm)
     }
     pub fn new(program: &'a Program) -> Self {
@@ -125,6 +131,7 @@ impl<'a> Vm<'a> {
             interned_strings: BTreeMap::new(),
             effects: BTreeMap::new(),
             invocations: BTreeMap::new(),
+            installations: BTreeMap::new(),
             model_calls_enabled: false,
             universe: UniverseId::fresh(),
             entry: None,

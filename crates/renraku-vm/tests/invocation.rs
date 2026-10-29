@@ -507,7 +507,7 @@ fn legacy_format_five_structured_wait_upgrades_without_invocation_receipts() {
         .unwrap()
         .query_row("SELECT format FROM checkpoint", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(format, 6);
+    assert_eq!(format, 7);
 }
 
 #[test]
@@ -565,4 +565,58 @@ fn malformed_invocation_records_are_rejected_even_with_repaired_checksums() {
             "case {case} accepted malformed invocation"
         );
     }
+}
+
+#[test]
+fn original_format_six_invocation_upgrades_and_resumes_without_repeating_committed_steps() {
+    let database = Database::new();
+    let mut store = CheckpointStore::open(&database.path).unwrap();
+    let payload = include_bytes!("fixtures/checkpoint-v6.bin");
+    Connection::open(&database.path)
+        .unwrap()
+        .execute(
+            "INSERT INTO checkpoint VALUES(1,1,?1,6,?2,?3)",
+            params![
+                &payload[12..28],
+                Sha256::digest(payload).as_slice(),
+                payload.as_slice()
+            ],
+        )
+        .unwrap();
+    let snapshot = store.load().unwrap();
+    let mut vm = snapshot.snapshot.restore().unwrap();
+    assert_eq!(vm.installations().count(), 0);
+    assert_eq!(vm.instructions_executed(), 7);
+    let original = vm.invocation("legacy-v6").unwrap().clone();
+    let result = vm
+        .invoke_once(
+            &mut store,
+            "legacy-v6",
+            original.method.method,
+            vec![],
+            1000,
+            5,
+        )
+        .unwrap();
+    assert_eq!(result.execution, original.execution);
+    assert_eq!(result.state, completed(4));
+    let instructions = vm.instructions_executed();
+    assert_eq!(
+        vm.invoke_once(
+            &mut store,
+            "legacy-v6",
+            original.method.method,
+            vec![],
+            1000,
+            5
+        )
+        .unwrap(),
+        result
+    );
+    assert_eq!(vm.instructions_executed(), instructions);
+    let format: u32 = Connection::open(&database.path)
+        .unwrap()
+        .query_row("SELECT format FROM checkpoint", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(format, 7);
 }

@@ -4,6 +4,7 @@
 //! retain code, identity bindings, reachable objects, statics, and active frames.
 //! See docs/checkpoints.md for recovery and docs/cil-profile.md for compatibility.
 
+pub mod artifact;
 pub mod checkpoint;
 pub mod cil;
 pub mod driver;

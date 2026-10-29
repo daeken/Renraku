@@ -1,5 +1,6 @@
 //! Subprocess used by integration tests to force termination at commit boundaries.
 use renraku_vm::{
+    artifact::{BuildArtifact, install_once_with_observer},
     checkpoint::{CheckpointStore, CommitStage},
     error::{Error, Result},
     program::Program,
@@ -16,6 +17,25 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("install") if args.len() == 5 => {
+            let mut store = CheckpointStore::open(&args[1])?;
+            let artifact = BuildArtifact::from_bundle(&args[3])?;
+            let stop = match args[4].as_str() {
+                "prepared" => CommitStage::Prepared,
+                "written" => CommitStage::Written,
+                "committed" => CommitStage::Committed,
+                _ => return Err(Error("invalid installation crash stage".into())),
+            };
+            install_once_with_observer(&mut store, &args[2], &artifact, |stage| {
+                if stage == stop {
+                    println!("READY {stage:?}");
+                    std::io::stdout().flush()?;
+                    std::io::stdin().read_exact(&mut [0u8; 1])?;
+                }
+                Ok(())
+            })?;
+            Ok(())
+        }
         Some("invoke") if args.len() == 4 => {
             let mut store = CheckpointStore::open(&args[1])?;
             let saved = store.load()?;

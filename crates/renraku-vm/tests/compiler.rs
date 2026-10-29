@@ -2,9 +2,10 @@
 mod common;
 use common::fixtures;
 use renraku_vm::{
+    artifact::{BuildArtifact, install_once, install_once_with_observer},
     checkpoint::CheckpointStore,
     effects::{ModelProvider, ModelRequest},
-    error::Result,
+    error::{Error, Result},
     identity::UniverseId,
     program::Program,
     runtime::{RunOutcome, Vm},
@@ -14,10 +15,13 @@ use renraku_vm::{
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Command, Output},
-    sync::OnceLock,
+    process::{Command, Output, Stdio},
+    sync::{OnceLock, mpsc},
+    time::Duration,
 };
 
 fn compiler() -> &'static Path {
@@ -207,6 +211,491 @@ fn manifest(directory: &Path) -> Json {
     serde_json::from_slice(&fs::read(directory.join("renraku-build.json")).unwrap()).unwrap()
 }
 
+fn artifact_inputs(bundle: &Path) -> (Vec<u8>, BTreeMap<String, Vec<u8>>) {
+    let bytes = fs::read(bundle.join("renraku-build.json")).unwrap();
+    let manifest: Json = serde_json::from_slice(&bytes).unwrap();
+    let mut records = vec![manifest["core"].clone(), manifest["assembly"].clone()];
+    records.extend(manifest["sources"].as_array().unwrap().iter().cloned());
+    for reference in manifest["references"].as_array().unwrap() {
+        records.extend([reference["image"].clone(), reference["view"].clone()]);
+    }
+    let files = records
+        .iter()
+        .map(|record| {
+            let name = record["file"].as_str().unwrap();
+            (name.to_owned(), fs::read(bundle.join(name)).unwrap())
+        })
+        .collect();
+    (bytes, files)
+}
+fn digest_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+fn compile_artifact(directory: &Directory, source: &str, output: &str) -> BuildArtifact {
+    let source = directory.source("Captured.cs", source);
+    let (result, report) = directory.compile(&[source], output);
+    assert_success(&result, &report);
+    BuildArtifact::from_bundle(directory.0.join(output)).unwrap()
+}
+
+#[test]
+fn captured_artifacts_validate_all_declared_files_and_reject_unsafe_paths_and_changed_contracts() {
+    let directory = Directory::new();
+    let source = "\u{feff}// captured Ω 😀\npublic static class Extra { public static int Run() { return 9; } }";
+    let artifact = compile_artifact(&directory, source, "bundle");
+    let copied = compile_artifact(&directory, source, "copy");
+    assert_eq!(artifact.id(), copied.id());
+    let bundle = directory.0.join("bundle");
+    let (manifest, files) = artifact_inputs(&bundle);
+    assert_eq!(
+        BuildArtifact::from_files(manifest.clone(), files.clone())
+            .unwrap()
+            .id(),
+        artifact.id()
+    );
+    for case in 0..6 {
+        let mut manifest: Json = serde_json::from_slice(&manifest).unwrap();
+        let mut files = files.clone();
+        match case {
+            0 => {
+                files.get_mut("sources/Captured.cs").unwrap().push(b' ');
+            }
+            1 => manifest["sources"][0]["file"] = serde_json::json!("sources/../../outside.cs"),
+            2 => manifest["options"]["allowUnsafe"] = serde_json::json!(true),
+            3 => {
+                files.insert("extra.bin".into(), vec![]);
+            }
+            4 => {
+                let data = vec![0xff];
+                manifest["sources"][0]["bytes"] = serde_json::json!(data.len());
+                manifest["sources"][0]["sha256"] = serde_json::json!(digest_hex(&data));
+                files.insert("sources/Captured.cs".into(), data);
+            }
+            5 => manifest["sources"][0]["bytes"] = serde_json::json!(1024 * 1024 + 1),
+            _ => unreachable!(),
+        }
+        assert!(
+            BuildArtifact::from_files(serde_json::to_vec(&manifest).unwrap(), files).is_err(),
+            "case {case}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        fs::remove_file(bundle.join("sources/Captured.cs")).unwrap();
+        std::os::unix::fs::symlink(
+            directory.0.join("Captured.cs"),
+            bundle.join("sources/Captured.cs"),
+        )
+        .unwrap();
+        assert!(
+            BuildArtifact::from_bundle(bundle)
+                .unwrap_err()
+                .0
+                .contains("symlinks")
+        );
+    }
+}
+
+#[test]
+fn recorded_installation_retains_source_frames_and_invocations_and_replays_without_new_identities()
+{
+    let directory = Directory::new();
+    let program = common::program();
+    let source = "\u{feff}// original source Ω 😀\npublic static class Extra { public static int Run() { return 9; } }";
+    let artifact = compile_artifact(&directory, source, "bundle");
+    let mut store = CheckpointStore::open(directory.0.join("universe.db")).unwrap();
+    let mut vm = Vm::new(&program);
+    vm.invoke_once(
+        &mut store,
+        "original-call",
+        common::entry(&program, "Run"),
+        vec![],
+        6,
+        6,
+    )
+    .unwrap();
+    let frames = vm.context().frames.clone();
+    let execution = vm.context().id;
+    let instructions = vm.instructions_executed();
+    drop(vm);
+    let receipt = install_once(&mut store, "install-1", &artifact).unwrap();
+    let generation = store.generation();
+    assert_eq!(
+        install_once(&mut store, "install-1", &artifact).unwrap(),
+        receipt
+    );
+    assert_eq!(store.generation(), generation);
+    assert!(install_once(&mut store, "original-call", &artifact).is_err());
+    assert!(install_once(&mut store, "install-2", &artifact).is_err()); // existing module name
+    let other = compile_artifact(
+        &directory,
+        "public static class Extra { public static int Run() { return 10; } }",
+        "other",
+    );
+    assert!(install_once(&mut store, "install-1", &other).is_err());
+    fs::remove_dir_all(directory.0.join("bundle")).unwrap();
+    fs::remove_file(directory.0.join("Captured.cs")).unwrap();
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.context().frames, frames);
+    assert_eq!(vm.context().id, execution);
+    assert_eq!(vm.instructions_executed(), instructions);
+    assert!(
+        vm.invoke_once(
+            &mut store,
+            "install-1",
+            saved.snapshot.program.entry("Extra::Run").unwrap(),
+            vec![],
+            1000,
+            5
+        )
+        .is_err()
+    );
+    assert_eq!(
+        vm.run_checkpointed(&mut store, 1000, 5).unwrap(),
+        RunOutcome::Completed(Some(Value::I32(48)))
+    );
+    let code = vm.read_code("Extra::Run").unwrap();
+    assert_eq!(code["sourceAvailable"], true);
+    assert_eq!(code["sources"][0]["text"], source);
+    assert_eq!(code["artifactId"], artifact.id());
+    assert_eq!(code["sourceScope"], "assembly");
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    assert_eq!(
+        vm.invoke_once(
+            &mut store,
+            "new-call",
+            saved.snapshot.program.entry("Extra::Run").unwrap(),
+            vec![],
+            1000,
+            5
+        )
+        .unwrap()
+        .state,
+        renraku_vm::invocation::InvocationState::Completed {
+            result: Some(Value::I32(9))
+        }
+    );
+    let next = store.load().unwrap();
+    assert_eq!(
+        next.snapshot.restore().unwrap().installation("install-1"),
+        Some(&receipt)
+    );
+}
+
+#[test]
+fn installation_commit_failures_bad_cil_and_mismatched_cores_publish_no_partial_registry() {
+    let directory = Directory::new();
+    let program = common::program();
+    let artifact = compile_artifact(
+        &directory,
+        "public static class Extra { public static int Run() { return 9; } }",
+        "bundle",
+    );
+    let database = directory.0.join("universe.db");
+    let mut store = CheckpointStore::open(&database).unwrap();
+    store.save(&Vm::new(&program)).unwrap();
+    for failure in [
+        renraku_vm::checkpoint::CommitStage::Prepared,
+        renraku_vm::checkpoint::CommitStage::Written,
+    ] {
+        assert!(
+            install_once_with_observer(&mut store, "install-1", &artifact, |stage| {
+                if stage == failure {
+                    Err(Error("injected install error".into()))
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err()
+        );
+        let saved = store.load().unwrap();
+        assert!(saved.snapshot.program.entry("Extra::Run").is_err());
+        assert!(
+            saved
+                .snapshot
+                .restore()
+                .unwrap()
+                .installation("install-1")
+                .is_none()
+        );
+    }
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_install BEFORE UPDATE ON checkpoint BEGIN SELECT RAISE(ABORT,'injected installation failure'); END;").unwrap();
+    assert!(install_once(&mut store, "install-1", &artifact).is_err());
+    assert_eq!(store.generation(), 1);
+    connection
+        .execute_batch("DROP TRIGGER reject_install")
+        .unwrap();
+    let bad = compile_artifact(
+        &directory,
+        "public static class Extra { public static int Run(int a,int b) { return a/b; } }",
+        "bad-cil",
+    );
+    assert!(
+        install_once(&mut store, "bad-cil", &bad)
+            .unwrap_err()
+            .0
+            .contains("unsupported CIL")
+    );
+    let (manifest, mut files) = artifact_inputs(&directory.0.join("bundle"));
+    let mut manifest: Json = serde_json::from_slice(&manifest).unwrap();
+    files.get_mut("Renraku.CoreLib.dll").unwrap().push(0);
+    let bytes = &files["Renraku.CoreLib.dll"];
+    manifest["core"]["bytes"] = serde_json::json!(bytes.len());
+    manifest["core"]["sha256"] = serde_json::json!(digest_hex(bytes));
+    let changed = BuildArtifact::from_files(serde_json::to_vec(&manifest).unwrap(), files).unwrap();
+    assert!(
+        install_once(&mut store, "wrong-core", &changed)
+            .unwrap_err()
+            .0
+            .contains("core does not match")
+    );
+    assert_eq!(store.generation(), 1);
+    assert!(
+        install_once_with_observer(&mut store, "install-1", &artifact, |stage| {
+            if stage == renraku_vm::checkpoint::CommitStage::Committed {
+                Err(Error("lost post-commit reply".into()))
+            } else {
+                Ok(())
+            }
+        })
+        .is_err()
+    );
+    let saved = store.load().unwrap();
+    let first = saved.snapshot.program.entry("Extra::Run").unwrap();
+    let receipt = install_once(&mut store, "install-1", &artifact).unwrap();
+    assert_eq!(store.generation(), 2);
+    assert_eq!(
+        store
+            .load()
+            .unwrap()
+            .snapshot
+            .program
+            .entry("Extra::Run")
+            .unwrap(),
+        first
+    );
+    assert_eq!(receipt.artifact, artifact);
+}
+
+#[test]
+fn sigkill_installation_recovery_commits_source_code_and_receipt_together() {
+    let directory = Directory::new();
+    let program = common::program();
+    let artifact = compile_artifact(
+        &directory,
+        "public static class Extra { public static int Run() { return 9; } }",
+        "bundle",
+    );
+    for stage in ["prepared", "written", "committed"] {
+        let database = directory.0.join(format!("{stage}.db"));
+        let mut store = CheckpointStore::open(&database).unwrap();
+        store.save(&Vm::new(&program)).unwrap();
+        drop(store);
+        let mut child = Command::new(env!("CARGO_BIN_EXE_renraku-checkpoint-probe"))
+            .arg("install")
+            .arg(&database)
+            .arg("install-1")
+            .arg(directory.0.join("bundle"))
+            .arg(stage)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (send, receive) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut line = String::new();
+            let result = BufReader::new(stdout).read_line(&mut line);
+            let _ = send.send((result, line));
+        });
+        let ready = receive.recv_timeout(Duration::from_secs(20));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        reader.join().unwrap();
+        let (read, line) = ready.expect("install probe did not reach commit boundary");
+        assert!(read.unwrap() > 0 && line.starts_with("READY"), "{line}");
+        let mut store = CheckpointStore::open(&database).unwrap();
+        let saved = store.load().unwrap();
+        let vm = saved.snapshot.restore().unwrap();
+        assert_eq!(vm.installation("install-1").is_some(), stage == "committed");
+        assert_eq!(
+            saved.snapshot.program.entry("Extra::Run").is_ok(),
+            stage == "committed"
+        );
+        let prior = vm.installation("install-1").map(|record| record.assembly);
+        let record = install_once(&mut store, "install-1", &artifact).unwrap();
+        if let Some(prior) = prior {
+            assert_eq!(record.assembly, prior);
+        }
+        let next = store.load().unwrap();
+        assert_eq!(
+            next.snapshot
+                .restore()
+                .unwrap()
+                .read_code("Extra::Run")
+                .unwrap()["sourceAvailable"],
+            true
+        );
+    }
+}
+
+#[test]
+fn installation_references_cannot_be_retargeted_to_another_universe() {
+    let directory = Directory::new();
+    let original = common::program();
+    let view = original
+        .reference_view(&[original.find_type("Renraku.Guest.Counter").unwrap()])
+        .unwrap();
+    let view_file = directory.0.join("view.json");
+    fs::write(&view_file, view.to_json().unwrap()).unwrap();
+    let source=directory.source("Caller.cs","public static class Caller { public static int Run(Renraku.Guest.Counter value) { return value.Add(7); } }");
+    let (result, report) = directory.compile_with_views(&[source], "bundle", &[view_file]);
+    assert_success(&result, &report);
+    let artifact = BuildArtifact::from_bundle(directory.0.join("bundle")).unwrap();
+    let different = common::program();
+    let mut other_store = CheckpointStore::open(directory.0.join("different.db")).unwrap();
+    other_store.save(&Vm::new(&different)).unwrap();
+    assert!(install_once(&mut other_store, "install-1", &artifact).is_err());
+    assert_eq!(other_store.generation(), 1);
+    assert!(
+        other_store
+            .load()
+            .unwrap()
+            .snapshot
+            .program
+            .entry("Caller::Run")
+            .is_err()
+    );
+    let mut original_store = CheckpointStore::open(directory.0.join("original.db")).unwrap();
+    original_store.save(&Vm::new(&original)).unwrap();
+    install_once(&mut original_store, "install-1", &artifact).unwrap();
+    let saved = original_store.load().unwrap();
+    assert_eq!(
+        saved
+            .snapshot
+            .program
+            .find_type("Renraku.Guest.Counter")
+            .unwrap(),
+        original.find_type("Renraku.Guest.Counter").unwrap()
+    );
+}
+
+#[test]
+fn concurrent_writers_fence_installation_without_losing_their_newer_heap_state() {
+    let directory = Directory::new();
+    let program = common::program();
+    let artifact = compile_artifact(
+        &directory,
+        "public static class Extra { public static int Run() { return 9; } }",
+        "bundle",
+    );
+    let database = directory.0.join("universe.db");
+    let mut store = CheckpointStore::open(&database).unwrap();
+    store.save(&Vm::new(&program)).unwrap();
+    assert!(
+        install_once_with_observer(&mut store, "install-1", &artifact, |stage| {
+            if stage == renraku_vm::checkpoint::CommitStage::Prepared {
+                let mut other = CheckpointStore::open(&database)?;
+                let saved = other.load()?;
+                let mut vm = saved.snapshot.restore()?;
+                vm.start(
+                    common::entry(&saved.snapshot.program, "StaticRoundTrip"),
+                    vec![],
+                )?;
+                vm.run_checkpointed(&mut other, 1000, 1000)?;
+            }
+            Ok(())
+        })
+        .unwrap_err()
+        .0
+        .contains("conflict")
+    );
+    let saved = store.load().unwrap();
+    assert!(saved.snapshot.program.entry("Extra::Run").is_err());
+    assert!(
+        saved
+            .snapshot
+            .restore()
+            .unwrap()
+            .installation("install-1")
+            .is_none()
+    );
+    install_once(&mut store, "install-1", &artifact).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let total = saved
+        .snapshot
+        .program
+        .fields()
+        .find(|field| field.name == "Total")
+        .unwrap()
+        .id;
+    assert_eq!(vm.static_fields()[&total], Value::I32(4));
+}
+
+#[test]
+fn corrupted_installation_receipts_and_captured_source_fail_even_with_repaired_checksums() {
+    let directory = Directory::new();
+    let program = common::program();
+    let source = "// corruption marker source\npublic static class Extra { public static int Run() { return 9; } }";
+    let artifact = compile_artifact(&directory, source, "bundle");
+    for case in 0..4 {
+        let database = directory.0.join(format!("corrupt-{case}.db"));
+        let mut store = CheckpointStore::open(&database).unwrap();
+        let vm = Vm::new(&program);
+        let execution = vm.context().id;
+        store.save(&vm).unwrap();
+        install_once(&mut store, "installation-corruption", &artifact).unwrap();
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        let mut bytes: Vec<u8> = connection
+            .query_row("SELECT payload FROM checkpoint", [], |row| row.get(0))
+            .unwrap();
+        let request = "installation-corruption";
+        let start = bytes
+            .windows(request.len())
+            .position(|data| data == request.as_bytes())
+            .unwrap();
+        match case {
+            0 => {
+                let source_start = bytes
+                    .windows(source.len())
+                    .position(|data| data == source.as_bytes())
+                    .unwrap();
+                bytes[source_start] = b' ';
+            }
+            1 => bytes[start + request.len()..start + request.len() + 16].fill(0),
+            2 => bytes[start] = b' ',
+            3 => {
+                let end = bytes
+                    .windows(16)
+                    .rposition(|data| data == execution.as_bytes())
+                    .unwrap();
+                let copy = bytes[start - 4..end].to_vec();
+                bytes[start - 8..start - 4].copy_from_slice(&2u32.to_le_bytes());
+                bytes.splice(end..end, copy);
+            }
+            _ => unreachable!(),
+        }
+        connection
+            .execute(
+                "UPDATE checkpoint SET payload=?1,digest=?2",
+                rusqlite::params![&bytes, Sha256::digest(&bytes).as_slice()],
+            )
+            .unwrap();
+        assert!(
+            store.load().is_err(),
+            "accepted malformed installation case {case}"
+        );
+    }
+}
+
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
         .args(args)
@@ -314,15 +803,28 @@ fn scripted_codegen_receipt_compiles_installs_and_executes_through_the_tool_cli(
     let bundle = directory.0.join("bundle");
     assert_eq!(manifest(&bundle)["format"], 2);
     let installed: Json = serde_json::from_slice(&cli_ok(&[
-        "install",
+        "install-once",
         database,
-        bundle.join("Compiled.Example.dll").to_str().unwrap(),
-        view_file.to_str().unwrap(),
+        "model-turn-1/install",
+        bundle.to_str().unwrap(),
     ]))
     .unwrap();
-    assert_eq!(installed["installed"], true);
+    assert_eq!(installed["state"], "installed");
+    let replay: Json = serde_json::from_slice(&cli_ok(&[
+        "install-once",
+        database,
+        "model-turn-1/install",
+        bundle.to_str().unwrap(),
+    ]))
+    .unwrap();
+    assert_eq!(replay["assemblyId"], installed["assemblyId"]);
+    assert_eq!(replay["checkpoint"], installed["checkpoint"]);
     fs::remove_dir_all(bundle).unwrap();
     fs::remove_file(view_file).unwrap();
+    let receipt: Json =
+        serde_json::from_slice(&cli_ok(&["installation", database, "model-turn-1/install"]))
+            .unwrap();
+    assert_eq!(receipt["artifactId"], installed["artifactId"]);
     let output = cli_ok(&[
         "invoke-once",
         database,
@@ -362,7 +864,9 @@ fn scripted_codegen_receipt_compiles_installs_and_executes_through_the_tool_cli(
     assert_ne!(second["execution"], first["execution"]);
     let code: Json =
         serde_json::from_slice(&cli_ok(&["read-code", database, "Generated.Entry::Run"])).unwrap();
-    assert_eq!(code["sourceAvailable"], false);
+    assert_eq!(code["sourceAvailable"], true);
+    assert_eq!(code["sources"][0]["text"], source);
+    assert_eq!(code["artifactId"], installed["artifactId"]);
     assert!(
         code["instructions"]
             .as_array()

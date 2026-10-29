@@ -25,8 +25,8 @@ dotnet run --project tools/Compiler -- \
   --core target/guest/Renraku.CoreLib.dll --output target/generated-counter \
   --name Generated.Counter --reference-view target/counter.view.json \
   guest/examples/CounterCall.cs
-target/debug/renraku-vm install target/codegen.db \
-  target/generated-counter/Generated.Counter.dll target/counter.view.json
+target/debug/renraku-vm install-once target/codegen.db counter-install-1 \
+  target/generated-counter
 target/debug/renraku-vm invoke-once target/codegen.db counter-add-1 Generated.Entry::Run 1000 \
   static:Renraku.Guest.Simulation::Saved
 ```
@@ -50,9 +50,13 @@ result limit of 1–100. Results report total count and truncation.
 ambiguous overload requires an ID. It returns the saved, decoded CIL for that
 exact implementation, including offsets and resolved method/field logical IDs.
 String operands retain exact UTF-16. This works after the original files are
-deleted. It reports `sourceAvailable: false`: C# source is captured in compiler
-bundles, but not yet attached to the runtime code registry. The tool does not
-pretend decompiled text is original source.
+deleted. For modules installed from captured bundles, it also returns the exact
+UTF-8 source inputs, their hashes, artifact ID, and build manifest. The source
+scope is explicitly `assembly`: PDB mappings from individual methods to source
+locations remain future work. Legacy/raw DLL loads report `sourceAvailable: false`.
+CIL remains the authoritative executable representation; captured source is build
+provenance supplied by the trusted compiler boundary, not decompiled text or
+cryptographic proof that a particular compiler emitted those instructions.
 
 `export-reference` accepts 1–32 type names/IDs from one logical module. Its JSON
 envelope includes `schemaHash`, `coreSha256`, and `schemaJson`. Parsing the latter
@@ -99,6 +103,62 @@ is an error. The CLI takes exact DLL/view paths rather than interpreting or
 authenticating a build manifest. These are trusted host operations, not a hostile
 code sandbox or a complete CIL verifier. Runtime checkpoints retain CIL and its
 logical bindings; external source/reference provenance remains in the bundle.
+
+## Captured builds and durable installation
+
+`install-once <database> <request-ID> <bundle-directory>` captures the compiler
+bundle, verifies its manifest, and atomically publishes its code, provenance,
+and installation receipt. `artifact::install_once` is the embedding API;
+`BuildArtifact::from_files` accepts an in-memory manifest/file map, and
+`BuildArtifact::from_bundle` captures a host directory. These are host operations;
+the compiler process and its CLR remain external.
+
+The reader accepts the compiler's manifest formats 1 and 2, pins the supported
+compiler options and compiler identity/hash records, and verifies every declared
+file's exact byte length and SHA-256. It captures the original manifest bytes,
+core, implementation, sources, reference images, and reference views. Manifest
+paths must use the expected core/assembly/source/reference locations; duplicate
+names, path traversal, symlinks, missing files, invalid UTF-8 sources, and unknown
+options are rejected. Unlisted directory files are not captured. The core must
+match an exact retained runtime image; reference views must match the live schema,
+facades must be marked compiler references, and implementation assembly scopes
+must have captured compiler references. Normal CIL acceptance still applies.
+
+The artifact ID hashes a versioned domain marker, exact manifest bytes, and sorted
+filename/file-byte pairs with unsigned 64-bit little-endian length prefixes.
+Moving a bundle does not change its ID. Changing source, reference bytes, options,
+or the exact manifest changes the artifact ID, even if the emitted CIL is identical.
+The metadata view's logical-ID bindings remain part of those inputs.
+
+Installation request IDs follow the same rules as invocation IDs. A repeated ID
+with the same artifact returns the committed receipt with the same assembly and
+member identities, without relinking or advancing the checkpoint generation.
+Changed artifacts or IDs already used for an invocation are rejected. A new ID
+does not bypass duplicate assembly-name checks. `installation <database> <ID>`
+retrieves a receipt without the original bundle, so a lost install reply can be
+resolved after its files are deleted. Installation takes a fresh checkpoint and
+uses the normal generation check to reject a concurrent write before publication.
+
+Publication retains paused frames, invocation receipts, effects, heap, and old
+code. The new registry, default storage for new statics, captured build, and
+receipt commit in one snapshot. Before commit, an error leaves the old snapshot;
+after commit, a lost reply is resolved by the receipt. The build bytes survive
+restart and GC and are exposed by `read-code` for that immutable module. Plain
+`install` remains available for trusted raw-DLL loading without this provenance
+or request replay contract.
+
+Bounds are 128 KiB for a manifest, 64 MiB aggregate captured file bytes, 66 files,
+and 128 installation receipts, in addition to compiler source/reference limits
+and the universe's 128 MiB checkpoint limit. Receipts/builds are not evicted
+automatically. Large or accumulated artifacts can therefore hit the checkpoint
+limit earlier. This is append-only module installation; body replacement and
+type migrations need separate code-version/source association policies.
+
+This milestone makes successful compiled artifacts and installation durable.
+Compilation requests themselves still need an intent/diagnostic/recovery protocol
+before the model tool loop can own them. It must capture compiler inputs before
+launch, recover a published artifact after a lost reply, and retain failures;
+host compiler process memory is not a portable guest continuation.
 
 `invoke` starts a new call only when the current context permits it, then runs
 within the explicit instruction budget. Arguments are `i32:N`, `i64:N`, `null`,
@@ -150,8 +210,8 @@ as a committed receipt after a failed save.
 These receipts cover managed invocation within one universe, not distributed
 execution ownership or exactly-once remote effects. Model delivery still uses
 the separate effect/receipt protocol and never resubmits an uncertain request.
-Compile and install requests still need durable action identities of their own;
-the current atomic installer is not an idempotent tool-action protocol.
+Compilation requests still need durable action identities of their own.
+Installation now uses the captured artifact and receipt protocol above.
 
 The acceptance fixture invokes `OpenAIHarness` with a deterministic provider
 that receives actual symbol-search and CIL-inspection output. The completed
@@ -163,7 +223,8 @@ from recurring tests.
 Run it with `cargo test -p renraku-vm --test compiler scripted_codegen`.
 
 The remaining model integration should expose bounded read tools first, retain
-the model's source and tool transcript, and give compile/install actions explicit
-request identities and recovery semantics. Interrupted invocation recovery now
+the model's tool transcript, and give compilation actions explicit request
+identities and recovery semantics. Successful build inputs/source are now retained
+with installations. Interrupted invocation recovery now
 uses the saved receipt and frames. Unknown
 external outcomes must continue to reconcile receipts without automatic retries.
