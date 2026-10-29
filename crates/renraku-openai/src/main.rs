@@ -3,6 +3,7 @@ use renraku_openai::{
     select_profile,
 };
 use renraku_vm::{
+    agent::{AgentHost, AgentLimits, AgentStop},
     checkpoint::CheckpointStore,
     driver::{DriverLimits, DriverStop},
     program::Program,
@@ -49,6 +50,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "usage: renraku-openai [--auth-dir <private-directory>] <command>\n\ncommands:\n  login [--new-profile]\n  status\n  select <profile-id>\n  refresh\n  logout\n  models <profile-id>\n  demo <universe.db> <receipt-directory> <CoreLib.dll> <guest.dll> <profile-id> <model> <prompt> --allow-model-calls\n  drive <universe.db> <receipt-directory> <profile-id> <model> <instructions> <provider-operations> --allow-model-calls"
         );
+        println!(
+            "  agent <universe.db> <receipt-directory> <compiler.db> <Renraku.Compiler.dll> <CoreLib.dll> <guest.dll> <profile-id> <model> <goal> <instructions> <provider-operations> <tool-actions> --allow-model-calls\n  agent-drive <universe.db> <receipt-directory> <compiler.db> <Renraku.Compiler.dll> <profile-id> <model> <instructions> <provider-operations> <tool-actions> --allow-model-calls"
+        );
         return Ok(());
     }
     let directory = directory
@@ -60,6 +64,85 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .ok_or("set RENRAKU_AUTH_DIR to a private directory")?;
     match args.as_slice() {
+        [
+            command,
+            universe,
+            receipts,
+            compiler_ledger,
+            compiler_driver,
+            core,
+            guest,
+            profile,
+            model,
+            goal,
+            instructions,
+            operations,
+            actions,
+        ] if command == "agent" => {
+            if !allow_model {
+                return Err("agent requires --allow-model-calls".into());
+            }
+            let profile = profile.parse()?;
+            let limits = agent_limits(instructions, operations, actions)?;
+            let mut store = CheckpointStore::open(universe)?;
+            if store.generation() != 0 {
+                return Err("universe already has a checkpoint; use agent-drive".into());
+            }
+            let program = Program::load(&[&std::fs::read(core)?, &std::fs::read(guest)?])?;
+            let mut vm = Vm::new(&program);
+            AgentHost::initialize(
+                &mut vm,
+                &mut store,
+                &OpenAIProvider::capability_for(profile),
+                model,
+                goal,
+            )?;
+            let host = AgentHost {
+                universe: PathBuf::from(universe),
+                compiler_ledger: PathBuf::from(compiler_ledger),
+                dotnet: PathBuf::from("dotnet"),
+                compiler_driver: PathBuf::from(compiler_driver),
+            };
+            drop(vm);
+            drop(store);
+            runtime()?.block_on(async {
+                let mut provider =
+                    AsyncOpenAIProvider::open(&directory, receipts, profile, model).await?;
+                show_agent(host.drive(&mut provider, limits).await?)
+            })?;
+        }
+        [
+            command,
+            universe,
+            receipts,
+            compiler_ledger,
+            compiler_driver,
+            profile,
+            model,
+            instructions,
+            operations,
+            actions,
+        ] if command == "agent-drive" => {
+            if !allow_model {
+                return Err("agent-drive requires --allow-model-calls".into());
+            }
+            let profile = profile.parse()?;
+            let limits = agent_limits(instructions, operations, actions)?;
+            if !std::path::Path::new(universe).is_file() {
+                return Err("agent universe does not exist".into());
+            }
+            let host = AgentHost {
+                universe: PathBuf::from(universe),
+                compiler_ledger: PathBuf::from(compiler_ledger),
+                dotnet: PathBuf::from("dotnet"),
+                compiler_driver: PathBuf::from(compiler_driver),
+            };
+            runtime()?.block_on(async {
+                let mut provider =
+                    AsyncOpenAIProvider::open(&directory, receipts, profile, model).await?;
+                show_agent(host.drive(&mut provider, limits).await?)
+            })?;
+        }
         [command, id] if command == "models" => {
             for model in models(&directory, id.parse()?)? {
                 println!("{}\t{}", model.slug, model.display_name);
@@ -175,6 +258,31 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         _ => return Err("unknown command; use --help".into()),
+    }
+    Ok(())
+}
+
+fn agent_limits(
+    instructions: &str,
+    operations: &str,
+    actions: &str,
+) -> Result<AgentLimits, Box<dyn std::error::Error>> {
+    let limits = AgentLimits {
+        instructions: instructions.parse()?,
+        provider_operations: operations.parse()?,
+        tool_actions: actions.parse()?,
+    };
+    if limits.instructions > 1_000_000 || limits.tool_actions > 32 {
+        return Err("agent limits exceed policy (1000000 instructions, 32 tool actions)".into());
+    }
+    Ok(limits)
+}
+fn show_agent(report: renraku_vm::agent::AgentReport) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", serde_json::to_string_pretty(&report.summary())?);
+    if let AgentStop::OutcomeUnknown(effect) = report.stop {
+        return Err(
+            format!("model effect {effect} remains uncertain; request was not resent").into(),
+        );
     }
     Ok(())
 }

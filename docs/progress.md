@@ -1,7 +1,9 @@
 # Renraku progress and next work
 
-As of October 28, 2026, the core process crash-and-resume demonstration, managed
-strings, persistent local model harness, and subscription Responses adapter work.
+As of October 29, 2026, the core process crash-and-resume demonstration, managed
+strings, persistent model harness, subscription Responses adapter, and bounded
+coding-agent loop work. The loop has deterministic acceptance/recovery coverage;
+actual autonomous model acceptance awaits a foreground subscription run.
 CIL is the execution foundation for all
 persistent guest computation. External programs will require explicit capabilities
 and do not inherit persistence.
@@ -129,6 +131,21 @@ and do not inherit persistence.
   `install-compilation`. Captured inputs work after deleting source/view files;
   terminal recovery/install need neither the SDK nor compiler files. Installation
   then retains all required build bytes in the universe without its service ledger.
+- Bounded model-selected search/read-code/describe/compile/install/invoke/finish
+  loop using strict JSON final-text actions. Linked CIL AgentSession, AgentTurn,
+  ChatMessage, and AgentArgument objects retain exact actions, frozen inputs,
+  results, and object roots. Partial journal updates resume their portable frames.
+  Stable universe/turn request IDs reconcile compiler/install/invoke receipts
+  before appending a lost result. Frozen static selectors cannot retarget on replay.
+- Disposable tool workers keep Roslyn off the async executor. Explicit per-run
+  budgets and session turn/transcript/source/output caps bound the loop. Generated
+  invocations have no model authority. Unknown actions/fields and model-supplied
+  host paths reject explicitly. Checkpoint format remains 7.
+- Foreground subscription CLI `agent` and `agent-drive`, plus credential-free
+  `agent-inspect`. The scripted sequence changes Counter 19 -> 26 in six assistant
+  turns, including discovery and exact code inspection. This fixture demonstrates
+  orchestration and persistence, not autonomous intelligence. No live inference
+  ran in this milestone. See the [coding-agent guide](agent.md).
 
 ## Validation
 
@@ -136,7 +153,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 158 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 169 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -201,6 +218,14 @@ inputs and compiler identity, failed preparation/publication, lost post-commit
 replies, foreign/corrupt ledgers, successful compilation with unsupported CIL,
 and actual SIGKILL at prepared, child-started, captured, written, and committed
 boundaries. Terminal replay is tested with an observer that fails if invoked.
+Ten coding-agent tests cover full action selection from actual saved request
+history, lost results after all tools, SDK-free terminal replay, frozen static
+arguments, pre-invocation GC roots, uncertain inference without resubmission,
+strict inputs and all budgets, generated-code capability denial, compiler worker
+yielding to another universe, and partial journal recovery with seven-instruction
+budgets. A foreground CLI test rejects missing opt-in and oversized budgets before
+touching universe/auth state. Existing field-name test lookups now include owners,
+so valid same-named fields in different managed classes cannot make tests flaky.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -231,9 +256,9 @@ Existing local fixtures allow independent progress.
 
 The latest user direction includes website hosting and runtime compilation, with
 Roslyn explicitly allowed to remain external and return a DLL. The reusable host
-compiler seam and append-only installation are implemented. Guest Compile,
-durable compilation requests, and replacement bodies on existing types remain
-future work. Keep
+compiler seam, durable compilation service, append-only installation, and coding
+loop are implemented. A guest Compile intrinsic and replacement bodies on
+existing types remain future work. Keep
 the original architecture's self-hosting/non-arbitrary-.NET limits; do not turn
 running Roslyn inside Renraku into a prerequisite for runtime compilation.
 
@@ -277,35 +302,22 @@ independent durable schema authoring and broader reference shapes are future wor
 
 **The next acceptance target, selected by the user, is an LLM discovering APIs,
 reading existing code, writing C#, pulling it in, and executing it.** The
-[workbench](workbench.md) supplies the host tools and a complete deterministic
-fixture. Next connect a bounded model-selected tool loop, retain its transcript
-and source provenance, and prove recovery across compile/install/invoke actions.
-The read tools, durable compiler service, atomic installation receipts, and
-durable invocations now supply the required host operations. **Connect a bounded
-model-selected loop next**, rather than extending host infrastructure first.
-Keep the model's actual transcript/source and tool-result ownership durable. Tool loop
-state must not be an ephemeral Rust conversation vector. The existing linked
-managed conversation provides an initial source of truth.
-Use read-only search/code tools first. Existing subscription Responses transport
-accepts only final text, so native function calls need an explicit wire/result
-representation and receipt upgrade; do not silently treat function calls as text.
-A host-orchestrated structured-text tool protocol is another explicit prototype
-choice, but must validate every action and retain it before mutation. Give each
-mutation a durable request/execution identity so a lost reply resumes rather than
-reruns it. Do not claim the deterministic provider fixture is an actual model's
-autonomous acceptance. No new live inference ran in these milestones.
-An initial explicit JSON action per text response can reuse the existing final
-text transport without enabling native function calls. Put the instructions and
-actual assistant/tool-result messages in ordinary linked CIL objects. Stable IDs
-derived from a saved turn should identify compile/install/invoke operations.
-On recovery inspect the saved last action and reconcile its receipt, then append
-its result and make the next model call. Retain the transcript before host action
-execution and the next guest request before inference. Bound turns, instructions,
-provider operations, tool outputs, and source sizes; reject unknown operations
-and model-supplied host/compiler paths. Test a model-selected search -> read code
--> compile -> install -> invoke -> finish sequence using a deterministic provider,
-with restart around action results, and expose a foreground subscription command
-with explicit opt-in when ready. Do not run live inference from a heartbeat.
+[workbench](workbench.md) supplies the host tools, and the [coding agent](agent.md)
+now connects model-selected search -> read code -> compile -> install -> invoke
+-> finish. Managed linked objects retain the actual assistant/tool transcript,
+canonical input, and typed reference roots. Compiler/install/invoke IDs derive
+from saved turns; lost results reconcile before continuing. Keep these objects
+authoritative and preserve partial helper-frame recovery. The strict text/JSON
+prototype reuses final-text transport; native Responses function calls still need
+an explicit wire/result representation and receipt compatibility work.
+
+**Next validate the agent through the subscription adapter using local HTTP
+fixtures**, including full-history JSON actions, corrective compiler diagnostics,
+and uncertain stream recovery. The foreground command is ready for the user to
+try a real model. Do not run live subscription inference or login unattended, and
+do not claim a scripted fixture proves actual model intelligence. Improve bounded
+error feedback and foreground recovery based on evidence; avoid another unrelated
+host-infrastructure detour. The longer-term website direction remains authorized.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a
@@ -318,15 +330,16 @@ captured installations also return exact original source inputs and manifests,
 even after deleting their bundles. Older/raw loads explicitly have no attached
 source. Method-level PDB/source maps and decompilation remain future work.
 
-The next useful milestone is a persistent interactive conversation CLI: append
+An additional useful milestone is a persistent interactive conversation CLI: append
 ordinary linked guest messages, submit the complete captured history, and resume
 the same universe between turns. Keep conversation work in CIL and treat host
 input as an explicit boundary. Test restart/GC between turns and multiple calls
 with changing account UI selection. Avoid persisting native socket state or
 making the host's own Rust conversation vector the guest's source of truth.
-Tool calls need a separate effect/recovery policy before model tools are enabled.
+The coding agent already supplies one bounded tool policy; broader remote tools
+need explicit operation identities and uncertainty rules of their own.
 
-Current official docs verified October 28, 2026:
+Current official subscription HTTP requirements rechecked October 29, 2026:
 
 - [Registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in):
   dynamic registration, stable host ID, issued client ID, loopback callback,

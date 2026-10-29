@@ -30,6 +30,7 @@ fn execute() -> Result<()> {
         "       renraku-vm run-persistent <universe.db> <CoreLib.dll> <guest.dll> <Type::Method> [budget] [checkpoint-interval]\n",
         "       renraku-vm resume <universe.db> [budget] [checkpoint-interval]\n",
         "       renraku-vm inspect-checkpoint <universe.db>\n",
+        "       renraku-vm agent-inspect <universe.db>\n",
         "       renraku-vm search <universe.db> <query> [limit]\n",
         "       renraku-vm read-code <universe.db> <method-or-code-ID>\n",
         "       renraku-vm export-reference <universe.db> <type-name-or-ID> [type ...]\n",
@@ -160,7 +161,7 @@ fn execute() -> Result<()> {
         }
         Some(
             "search" | "read-code" | "export-reference" | "install" | "invoke" | "invoke-once"
-            | "invocation" | "install-once" | "installation",
+            | "invocation" | "install-once" | "installation" | "agent-inspect",
         ) => {
             let command = args[0].as_str();
             let valid = match command {
@@ -173,6 +174,7 @@ fn execute() -> Result<()> {
                 "invocation" => args.len() == 3,
                 "install-once" => args.len() == 4,
                 "installation" => args.len() == 3,
+                "agent-inspect" => args.len() == 2,
                 _ => false,
             };
             if !valid {
@@ -185,6 +187,7 @@ fn execute() -> Result<()> {
             let saved = store.load()?;
             let program = &saved.snapshot.program;
             match command {
+                "agent-inspect" => print_json(&saved.snapshot.restore()?.agent_status()?)?,
                 "search" => print_json(
                     &program.search_symbols(
                         &args[2],

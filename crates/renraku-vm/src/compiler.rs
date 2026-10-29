@@ -204,6 +204,31 @@ struct RequestManifest {
     views: u32,
 }
 impl CompilationRequest {
+    pub fn matches_inputs(
+        &self,
+        name: &str,
+        sources: &[(String, Vec<u8>)],
+        views: &[ReferenceView],
+    ) -> Result<bool> {
+        let manifest = self.parsed()?;
+        if manifest.name != name
+            || manifest.sources.len() != sources.len()
+            || manifest.views as usize != views.len()
+        {
+            return Ok(false);
+        }
+        for (expected, (name, bytes)) in manifest.sources.iter().zip(sources) {
+            if expected != name || self.files.get(&format!("sources/{name}")) != Some(bytes) {
+                return Ok(false);
+            }
+        }
+        for (index, view) in views.iter().enumerate() {
+            if self.files.get(&format!("views/{index}.json")) != Some(&view.to_json()?) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
     pub fn capture(
         program: &Program,
         universe: UniverseId,
@@ -525,9 +550,12 @@ impl CompilationStore {
         })
     }
     pub fn get(&self, universe: UniverseId, id: &str) -> Result<Compilation> {
-        validate_request_id(id)?;
-        load(&self.connection, universe, id)?
+        self.find(universe, id)?
             .ok_or_else(|| Error("compilation request is not prepared".into()))
+    }
+    pub fn find(&self, universe: UniverseId, id: &str) -> Result<Option<Compilation>> {
+        validate_request_id(id)?;
+        load(&self.connection, universe, id)
     }
     pub fn drive(
         &mut self,

@@ -136,7 +136,13 @@ fn runtime_reference_view_links_callers_to_existing_objects_and_installs_with_li
         vm.run_checkpointed(&mut store, 1000, 5).unwrap(),
         RunOutcome::Completed(Some(Value::I32(19)))
     );
-    let saved = program.fields().find(|f| f.name == "Saved").unwrap().id;
+    let saved = program
+        .fields()
+        .find(|f| {
+            f.name == "Saved" && f.owner == program.find_type("Renraku.Guest.Simulation").unwrap()
+        })
+        .unwrap()
+        .id;
     let object = vm.static_fields()[&saved];
     let invocation = vm
         .invoke_once(
@@ -750,7 +756,13 @@ fn scripted_codegen_receipt_compiles_installs_and_executes_through_the_tool_cli(
     vm.start(common::entry(&program, "SaveObject"), vec![])
         .unwrap();
     vm.run_checkpointed(&mut store, 1000, 5).unwrap();
-    let saved = program.fields().find(|f| f.name == "Saved").unwrap().id;
+    let saved = program
+        .fields()
+        .find(|f| {
+            f.name == "Saved" && f.owner == program.find_type("Renraku.Guest.Simulation").unwrap()
+        })
+        .unwrap()
+        .id;
     let object = vm.static_fields()[&saved];
     let search: Json =
         serde_json::from_slice(&cli_ok(&["search", database, "counter", "20"])).unwrap();

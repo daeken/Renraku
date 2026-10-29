@@ -698,10 +698,20 @@ fn durable_budget() -> u64 {
     let program = program();
     let mut vm = Vm::new(&program);
     vm.start(entry(&program, "DurableRun"), vec![]).unwrap();
-    let saved_field = program.fields().find(|f| f.name == "Saved").unwrap().id;
+    let saved_field = program
+        .fields()
+        .find(|f| {
+            f.name == "Saved" && f.owner == program.find_type("Renraku.Guest.Simulation").unwrap()
+        })
+        .unwrap()
+        .id;
     let value_field = program
         .fields()
-        .find(|f| f.name == "Value" && !f.is_static)
+        .find(|f| {
+            f.name == "Value"
+                && !f.is_static
+                && f.owner == program.find_type("Renraku.Guest.Counter").unwrap()
+        })
         .unwrap()
         .id;
     for _ in 0..500 {

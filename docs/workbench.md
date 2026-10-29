@@ -223,9 +223,10 @@ a new ID performs the next mutation. Live model inference is deliberately absent
 from recurring tests.
 Run it with `cargo test -p renraku-vm --test compiler scripted_codegen`.
 
-The remaining model integration should expose bounded read tools first and retain
-the model's actual tool transcript and action IDs in managed state. Compiler,
-installation, and invocation requests now have explicit recovery protocols.
-Successful build inputs/source are retained with installations. Interrupted invocation recovery
-uses the saved receipt and frames. Unknown
-external outcomes must continue to reconcile receipts without automatic retries.
+The [persistent coding agent](agent.md) now exposes these tools through a bounded
+text/JSON protocol, retaining actual assistant actions, frozen inputs, tool
+results, and reference roots in linked managed objects. Stable turn IDs connect
+compiler, installation, and invocation receipts. Its deterministic provider tests
+model-selected actions and lost-result recovery; actual autonomous model
+acceptance still needs a foreground subscription run. Unknown inference outcomes
+continue to reconcile receipts without automatic resubmission.

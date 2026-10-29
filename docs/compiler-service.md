@@ -123,6 +123,9 @@ containing captured inputs/output. It is never treated as a published receipt
 or reused on resume. Cleanup of abandoned workspaces is currently manual.
 The API is synchronous and is intended for a host worker; it must not be called
 on an async executor worker that needs to keep unrelated universes progressing.
+The [coding agent](agent.md) uses disposable worker threads and derives compiler
+request IDs from durable managed turns. Published replay validates the frozen
+inputs without requiring the SDK; prepared recovery requires the pinned toolchain.
 
 The ledger has application ID `0x52454343`, schema 1, WAL, and `synchronous=FULL`.
 It rejects foreign databases and in-memory storage. Initial limits are 1,000

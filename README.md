@@ -100,7 +100,13 @@ is deleted; old/raw DLL loads still expose saved CIL.
 The [compiler service](docs/compiler-service.md) also saves pinned compilation
 requests before execution and retains completed artifacts or diagnostics. Its
 CLI can resume after deleting source files and install a published result without
-the SDK. A model-selected tool loop is the next integration milestone.
+the SDK. The [persistent coding agent](docs/agent.md) now connects these tools:
+assistant actions and tool results live in linked CIL objects, and stable turn
+IDs reconcile compilation, installation, and invocation after a lost result.
+A scripted provider discovers Counter, inspects its code, writes and installs a
+caller, then changes the same persistent object from 19 to 26. A foreground
+subscription command is available; actual autonomous model acceptance still
+needs a live foreground run.
 
 ## Save and resume a universe
 
@@ -197,7 +203,9 @@ For a waiting harness, `drive-local` can reconcile and resume within its budgets
 Alternatively, reconcile using its universe and provider paths, then resume
 with `--allow-model-calls`. This demonstration uses a local echo
 substitute. A [subscription-backed Responses harness](docs/openai-responses.md)
-is also available. Tools and explicit retry policies are later work. See the
+is also available, including the coding agent's bounded JSON action protocol.
+Native Responses function calls and explicit inference retry policies remain
+future work. See the
 [effect contract](docs/effects.md).
 
 ## Development and validation
@@ -269,9 +277,10 @@ durable requests, waiting CIL callers, and bounded automatic execution and
 delivery. Structured model requests and saved provider bindings are implemented.
 The selected first real provider is the OpenAI Responses API using the user's
 ChatGPT subscription through OAuth. Sign-in, account-specific discovery, streamed
-inference, and local receipt recovery are implemented. Interactive conversation,
-model tool calling and existing-body replacement remain on the architecture
-roadmap. Read-only symbol/code tools and append-only code installation now work.
+inference, and local receipt recovery are implemented. The coding agent now
+selects workbench tools through a strict text/JSON protocol with a durable managed
+transcript. Native model function calls, general interactive conversation, and
+existing-body replacement remain on the architecture roadmap.
 
 The replacement BCL's direction is [suspension by default](docs/suspension.md):
 waiting operations park portable guest contexts, with explicit concurrency and

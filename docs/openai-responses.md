@@ -61,7 +61,11 @@ are authorization work, outside that count. Budgets reset on each explicit
 invocation; they are not spending quotas. Zero budgets are supported. A saved
 completed program returns its result without inference. An unresolved stream
 returns an error and stays waiting; rerunning does not authorize a resubmission.
-This demo handles one prompt. An interactive conversation command is later work.
+This demo handles one prompt. The [persistent coding agent](agent.md) adds a
+foreground `agent` / `agent-drive` command with bounded model-selected tools and
+a managed transcript. It uses one strict JSON action per final-text response;
+native Responses function calls remain unsupported. Both commands require
+explicit model opt-in. A general interactive conversation command is later work.
 
 ## Profile and transport contract
 

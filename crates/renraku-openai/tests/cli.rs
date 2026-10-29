@@ -124,3 +124,43 @@ fn cli_requires_opt_in_checkpoints_preflight_rejection_and_resumes_with_zero_pro
         );
     }
 }
+
+#[test]
+fn agent_cli_requires_explicit_opt_in_and_validates_budgets_before_touching_state_or_auth() {
+    let directory = Directory::new();
+    let universe = directory.0.join("agent.db");
+    let mut args = vec![
+        "agent".into(),
+        universe.display().to_string(),
+        directory.0.join("receipts").display().to_string(),
+        directory.0.join("compiler.db").display().to_string(),
+        "/missing/Renraku.Compiler.dll".into(),
+        "/missing/CoreLib.dll".into(),
+        "/missing/guest.dll".into(),
+        Uuid::new_v4().to_string(),
+        "chosen-model".into(),
+        "compile a caller".into(),
+        "10000".into(),
+        "6".into(),
+        "6".into(),
+    ];
+    let output = command(&directory.0, &args);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--allow-model-calls"));
+    args[10] = "1000001".into();
+    args.push("--allow-model-calls".into());
+    let output = command(&directory.0, &args);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("limits exceed policy"));
+    args[10] = "10000".into();
+    args[12] = "33".into();
+    let output = command(&directory.0, &args);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("limits exceed policy"));
+    assert!(!universe.exists());
+    assert!(!directory.0.join("auth").exists());
+    assert!(!directory.0.join("compiler.db").exists());
+    let help = command(&directory.0, &["--help".into()]);
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("agent-drive"));
+}

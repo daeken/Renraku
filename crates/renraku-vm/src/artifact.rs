@@ -301,14 +301,14 @@ impl BuildArtifact {
         let manifest = Manifest::parse(&self.manifest)?;
         Ok(manifest.assembly.file.strip_suffix(".dll").unwrap().into())
     }
-    fn implementation(&self) -> Result<&[u8]> {
+    pub(crate) fn implementation(&self) -> Result<&[u8]> {
         let manifest = Manifest::parse(&self.manifest)?;
         self.files
             .get(&manifest.assembly.file)
             .map(Vec::as_slice)
             .ok_or_else(|| Error("missing implementation".into()))
     }
-    fn views(&self) -> Result<Vec<ReferenceView>> {
+    pub(crate) fn views(&self) -> Result<Vec<ReferenceView>> {
         let manifest = Manifest::parse(&self.manifest)?;
         manifest
             .references

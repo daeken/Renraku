@@ -1,5 +1,84 @@
 namespace Renraku.Guest
 {
+    // The tool protocol is host interpreted, while transcript, turns, and pending
+    // inputs/results are ordinary managed objects in the same durable universe.
+    public sealed class AgentArgument
+    {
+        public object Value;
+        public AgentArgument Next;
+        public AgentArgument(object value, AgentArgument next) { Value = value; Next = next; }
+    }
+    public sealed class AgentTurn
+    {
+        public int Number;
+        public string Action;
+        public string Input;
+        public string Result;
+        public AgentArgument Retained;
+        public AgentTurn Next;
+        public AgentTurn(int number, string action) { Number = number; Action = action; }
+    }
+    public sealed class AgentSession
+    {
+        public string Id;
+        public Renraku.ModelBinding Binding;
+        public Renraku.ChatMessage First;
+        public Renraku.ChatMessage Last;
+        public AgentTurn FirstTurn;
+        public AgentTurn Current;
+        public int Count;
+        public int Phase; // 0 model, 1 action, 2 next model, 3 finished.
+        public AgentSession(string id, string capability, string model, string system, string prompt)
+        {
+            Id = id; Binding = new Renraku.ModelBinding(capability, model);
+            First = new Renraku.ChatMessage(0, system);
+            Last = new Renraku.ChatMessage(1, prompt); First.Next = Last;
+        }
+    }
+    public static class AgentHarness
+    {
+        public static AgentSession Saved;
+        public static string Initialize(string id, string capability, string model, string system, string prompt)
+        {
+            Saved = new AgentSession(id, capability, model, system, prompt);
+            if (Simulation.Saved == null) Simulation.Saved = new Counter(19);
+            return Ask();
+        }
+        public static string Ask()
+        {
+            AgentSession session = Saved; session.Phase = 0;
+            string action = Renraku.Model.Chat(session.Binding, session.First);
+            Renraku.ChatMessage message = new Renraku.ChatMessage(2, action);
+            session.Last.Next = message; session.Last = message;
+            AgentTurn turn = new AgentTurn(session.Count + 1, action);
+            if (session.Current == null) session.FirstTurn = turn;
+            else session.Current.Next = turn;
+            session.Current = turn; session.Count = turn.Number; session.Phase = 1;
+            return action;
+        }
+        public static void Freeze(string input, object a0, object a1, object a2, object a3,
+            object a4, object a5, object a6, object a7)
+        {
+            Saved.Current.Input = input;
+            AgentArgument retained = null;
+            if (a7 != null) retained = new AgentArgument(a7, retained);
+            if (a6 != null) retained = new AgentArgument(a6, retained);
+            if (a5 != null) retained = new AgentArgument(a5, retained);
+            if (a4 != null) retained = new AgentArgument(a4, retained);
+            if (a3 != null) retained = new AgentArgument(a3, retained);
+            if (a2 != null) retained = new AgentArgument(a2, retained);
+            if (a1 != null) retained = new AgentArgument(a1, retained);
+            if (a0 != null) retained = new AgentArgument(a0, retained);
+            Saved.Current.Retained = retained;
+        }
+        public static void Apply(string result, bool finish)
+        {
+            AgentSession session = Saved; session.Current.Result = result;
+            Renraku.ChatMessage message = new Renraku.ChatMessage(1, result);
+            session.Last.Next = message; session.Last = message;
+            session.Phase = finish ? 3 : 2;
+        }
+    }
     public sealed class Counter
     {
         public int Value;
