@@ -34,6 +34,10 @@ pub enum Op {
     BitOr,
     BitXor,
     BitNot,
+    ShiftLeft,
+    ShiftRight {
+        unsigned: bool,
+    },
     Divide {
         unsigned: bool,
     },
@@ -207,6 +211,9 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
             0x5f => Op::BitAnd,
             0x60 => Op::BitOr,
             0x61 => Op::BitXor,
+            0x62 => Op::ShiftLeft,
+            0x63 => Op::ShiftRight { unsigned: false },
+            0x64 => Op::ShiftRight { unsigned: true },
             0x66 => Op::BitNot,
             0x69 | 0x6d => Op::ConvertI32,
             0x6a => Op::ConvertI64,

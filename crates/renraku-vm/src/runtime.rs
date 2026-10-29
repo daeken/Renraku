@@ -500,6 +500,13 @@ impl<'a> Vm<'a> {
                 };
                 frame.evaluation_stack.push(result);
             }
+            Op::ShiftLeft | Op::ShiftRight { .. } => {
+                let count = pop(&mut frame)?;
+                let value = pop(&mut frame)?;
+                frame
+                    .evaluation_stack
+                    .push(shift(value, count, &instruction.op)?);
+            }
             Op::Branch(target) => frame.continuation = Continuation::Execute { next: target },
             Op::BranchIf { target, when_true } => {
                 if truth(pop(&mut frame)?) == when_true {
@@ -884,6 +891,35 @@ fn truth(value: Value) -> bool {
         Value::Reference(_) => true,
     }
 }
+fn shift(value: Value, count: Value, op: &Op) -> Result<Value> {
+    let Value::I32(count) = count else {
+        return Err(Error("shift count must be I32".into()));
+    };
+    // Explicit portable policy, including counts outside ECMA's specified range:
+    // use the low 5/6 count bits, independent of Rust overflow checks or host CPU.
+    Ok(match value {
+        Value::I32(value) => {
+            let count = (count as u32) & 31;
+            Value::I32(match op {
+                Op::ShiftLeft => ((value as u32) << count) as i32,
+                Op::ShiftRight { unsigned: false } => value >> count,
+                Op::ShiftRight { unsigned: true } => ((value as u32) >> count) as i32,
+                _ => unreachable!(),
+            })
+        }
+        Value::I64(value) => {
+            let count = (count as u32) & 63;
+            Value::I64(match op {
+                Op::ShiftLeft => ((value as u64) << count) as i64,
+                Op::ShiftRight { unsigned: false } => value >> count,
+                Op::ShiftRight { unsigned: true } => ((value as u64) >> count) as i64,
+                _ => unreachable!(),
+            })
+        }
+        _ => return Err(Error("shift value must be I32 or I64".into())),
+    })
+}
+
 fn bitwise(left: Value, right: Value, op: &Op) -> Result<Value> {
     Ok(match (left, right) {
         (Value::I32(a), Value::I32(b)) => Value::I32(match op {

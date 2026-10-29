@@ -73,7 +73,8 @@ and APIs across installed modules while preserving their existing identities.
 The separate [unsigned decimal module](docs/unsigned-text.md) formats and parses
 the full UInt32/UInt64 range in ordinary resumable CIL, alongside the signed API.
 Fixed-width bitwise AND/OR/XOR/NOT also run in CIL with portable operand stacks
-and durable invocation replay; shifts remain outside the current profile.
+and durable invocation replay. Fixed-width shifts use an explicit portable count
+policy, with sign-preserving and zero-filling right shifts.
 A [live multi-module model run](docs/acceptance/live-multimodule-2026-10-29.md)
 used those libraries to update the original map once and publish/preview its own
 read-only page, retaining old HTTP responses across fresh processes.

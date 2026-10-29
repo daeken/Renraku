@@ -288,7 +288,7 @@ and do not inherit persistence.
   bounds, matching widths, every instruction cut, GC, stable identities, cyclic
   state, fault-after-mutation receipt replay after root/context replacement,
   failed terminal checkpoint recovery, and SDK-free native process resume.
-  Negative compiler/install tests now use unsupported shifts; floating/native
+  Negative compiler/install tests now use unsupported checked addition; floating/native
   arithmetic still rejects. Format 7 and every legacy fixture are unchanged.
   See [CIL profile](cil-profile.md). No live inference was needed for this step.
 - Bounded managed decimal text in the separately compiled `Renraku.Library`:
@@ -429,7 +429,7 @@ and do not inherit persistence.
   preserves its operand width. Decoder byte offsets and checkpoint abstract
   stacks retain the new operations without a checkpoint-format change. Null/
   object reference and mixed-width failures preserve original operands and
-  continuation. Shifts, native integers, checked arithmetic/conversion and EH
+  continuation. Native integers, checked arithmetic/conversion and EH
   remain unsupported; there is no new host capability or wait.
   A separate guest/IntegerBitwise.cs test module compiles unchanged against both
   cores. Its 4,128-case real CoreCLR matrix covers all 16 direct signed/unsigned
@@ -442,10 +442,34 @@ and do not inherit persistence.
   Five SDK-free native resumes cover pending bitwise operands/compound work and
   stable execution/results on replay. The CLI still reports the observed current
   checkpoint generation, which may advance when fencing a retry. Unsupported
-  XOR rejection fixtures now use left shifts in loader/compiler/install tests.
+  XOR rejection fixtures now use checked addition in loader/compiler/install tests.
   Model guidance and [CIL profile](cil-profile.md) describe only implemented
   behavior. CoreLib, all managed libraries, original fixtures and both idle demos
   remain unchanged. No live inference was needed.
+
+- Portable fixed-width shl/shr/shr.un now accept I32/I64 values and I32 counts,
+  preserving the value width. Raw count bits are explicitly masked with 31/63,
+  including negative/high counts; left shift discards high bits, shr preserves
+  sign and shr.un inserts zeros. This is Renraku's portable policy for ECMA's
+  unspecified count range, separate from C#'s own emitted count masks. Native
+  values, I64 counts, checked arithmetic/conversions and EH remain unsupported.
+  Runtime/type rejection and checkpoint abstract stacks preserve failing operands,
+  continuations and byte offsets. No new capability, host wait or checkpoint field.
+  guest/IntegerShifts.cs compiles unchanged against both cores; 5,570 boundary/
+  seeded cases compare actual C# and raw opcode execution, plus 231 rotate/XOR
+  mix cases against a host BCL rotate oracle. A test-only raw PE fixture replaces
+  only Roslyn's three mask bytes with NOPs, retaining offsets/metadata. Independent
+  host DynamicMethods record raw CoreCLR results; only specified counts must agree
+  on every host, while out-of-range VM results obey the pinned Renraku policy.
+  All recorded raw results match on this host. Eighty raw cases recover each
+  instruction with GC and original logical IDs/stacks. A nested durable mix
+  changes the original Counter 19 to 612, then another request reaches 19481;
+  replay returns the original 612 without changing the later value/Mutations=2.
+  Six fresh SDK-free native processes resume raw counts before the shift and keep
+  execution/results on retry. Negative loader/compiler/install fixtures now use
+  unsupported checked addition. See [CIL profile](cil-profile.md). CoreLib,
+  libraries, format 7/all original fixtures and both demos remain unchanged.
+  Model guidance describes the implemented shifts; no live inference was needed.
 
 
 ## Validation
@@ -454,7 +478,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 248 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 253 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -723,26 +747,27 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next define and implement portable fixed-width shifts: shl/shr/shr.un.**
-Consult primary ECMA-335 for value/count/result stack rules and the unspecified
-out-of-range count boundary. Choose and document an explicit portable Renraku
-policy for raw counts (including negative/high counts) rather than inheriting
-Rust panics or host CPU masking. Distinguish the raw CIL contract from C#'s emitted
-count masks. Start with I32/I64 values and I32 counts only; native integers remain
-unsupported. Verify actual emitted signed/unsigned C# against CoreCLR, raw opcode
-boundaries, high/negative counts under the chosen policy, type rejection with
-intact failing frames, checkpoint abstract stacks, instruction-cut GC/recovery and
-stable IDs. Demonstrate a small ordinary CIL flag/hash workload and durable
-invoke-once replay after mutation without repeating it. Keep pure work ordinary;
-no new host formatter, collection, effect or checkpoint fields are needed. Move
-current left-shift rejection fixtures to a still unsupported operation (for
-example checked addition) so loader/compiler/install rejection stays meaningful.
-Preserve the bitwise/conversion/unsigned/signed/map support, old module bodies,
-source/install/invoke receipts, frozen references, managed history, capabilities,
-demo universes and all legacy readers/fixtures. Checked arithmetic/conversions,
-EH, floating/native values, broad BCL compatibility, body replacement and
-same-universe concurrency remain future work. No live model demonstration is
-needed for pure runtime shifts.
+**Next add bounded managed hexadecimal integer text.** Use the new ordinary
+CIL bitwise/shift foundation in a separate append-only Renraku.HexText module,
+with a small static API such as Renraku.Text.HexIntegerText FormatUInt32/64 and
+ParseUInt32/64. Canonical output should be lowercase without a prefix, at most
+8/16 units. Define the strict culture-independent input syntax explicitly:
+ASCII hex digits, optional 0x/0X prefix, no signs/whitespace, leading zeros and
+64-unit input cap including prefix. Preserve exact UTF-16, precise first-error
+positions and pre-shift overflow guards, including full unsigned maxima. Reuse
+the existing UInt32ParseResult/UInt64ParseResult declarations from Renraku.UnsignedText
+rather than recreating foreign types; retain its module/type/method IDs. Compile
+through its frozen reference closure, and export HexText's foreign-result
+reference set for subsequent callers. Never use an implementation reference as
+a production shortcut or replace saved decimal/CoreLib bodies. Compare actual
+C# with CoreCLR and an independent BigInteger radix-prefix oracle, test invalid
+UTF-16 and boundaries, and cut formatting/parsing/foreign result constructors
+at every instruction with GC/recovery. Demonstrate external compilation/use
+against existing saved state, retained source/receipts and SDK-free replay
+without a second mutation. Keep arrays, generics, byrefs, culture, arbitrary
+radices and native formatting outside this narrow milestone. Preserve all old
+library/page semantics, capabilities, demos, managed transcripts and legacy
+fixtures; no live model demonstration is needed for this pure library work.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

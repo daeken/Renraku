@@ -64,7 +64,7 @@ DLL paths directly; use the core copy inside the bundle. The workbench's
 `install-once` captures and validates the manifest and every declared file, then
 retains that build with its installation receipt. `Program::load` checks metadata, bindings, and supported
 instruction profile. Roslyn can emit CIL that Renraku explicitly rejects, such
-as shifts or generics; successful compilation alone does not imply execution
+as checked arithmetic or generics; successful compilation alone does not imply execution
 support. See [the current CIL profile](cil-profile.md).
 
 ## Persistence after loading

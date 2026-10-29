@@ -466,18 +466,18 @@ fn pure_compiler_recovery_does_not_imply_guest_cil_acceptance() {
         &program,
         universe,
         toolchain(),
-        "Generated.Shift".into(),
+        "Generated.Checked".into(),
         vec![(
-            "Shift.cs".into(),
-            b"public static class Generated { public static int Left(int a,int b) { return a<<b; } }"
+            "Checked.cs".into(),
+            b"public static class Generated { public static int Add(int a,int b) { return checked(a+b); } }"
                 .to_vec(),
         )],
         vec![],
     )
     .unwrap();
     let mut store = directory.ledger();
-    store.prepare("shift", &request).unwrap();
-    let compiled = store.drive(universe, "shift", toolchain()).unwrap();
+    store.prepare("checked", &request).unwrap();
+    let compiled = store.drive(universe, "checked", toolchain()).unwrap();
     assert!(compiled.artifact.is_some());
     assert!(
         install_once(

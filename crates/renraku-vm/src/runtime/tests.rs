@@ -167,13 +167,128 @@ fn bitwise_operands_reject_references_and_mixed_widths_without_consuming_the_sta
         assert_eq!(vm.instructions_executed(), 2);
         assert!(vm.heap().object(id).is_ok());
     }
-    for opcode in [0x62, 0x63, 0x64] {
+    for opcode in [0x65, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb] {
         assert!(
             decode(&[opcode])
                 .unwrap_err()
                 .0
                 .contains("unsupported CIL opcode")
         );
+    }
+}
+
+#[test]
+fn shifts_use_an_explicit_raw_count_mask_and_reject_invalid_types_without_consuming_operands() {
+    for (opcode, input, count, expected, slot) in [
+        (0x62, Value::I32(1), -1, Value::I32(i32::MIN), SlotType::I32),
+        (0x62, Value::I32(1), 32, Value::I32(1), SlotType::I32),
+        (0x62, Value::I64(1), -1, Value::I64(i64::MIN), SlotType::I64),
+        (0x62, Value::I64(1), 64, Value::I64(1), SlotType::I64),
+        (
+            0x63,
+            Value::I32(i32::MIN),
+            -1,
+            Value::I32(-1),
+            SlotType::I32,
+        ),
+        (0x64, Value::I32(i32::MIN), -1, Value::I32(1), SlotType::I32),
+        (
+            0x63,
+            Value::I64(i64::MIN),
+            63,
+            Value::I64(-1),
+            SlotType::I64,
+        ),
+        (0x64, Value::I64(i64::MIN), 63, Value::I64(1), SlotType::I64),
+        (
+            0x63,
+            Value::I64(i64::MIN),
+            i32::MIN,
+            Value::I64(i64::MIN),
+            SlotType::I64,
+        ),
+    ] {
+        assert_eq!(
+            eval(
+                &[2, 3, opcode, 0x2a],
+                vec![input, Value::I32(count)],
+                vec![],
+                slot
+            )
+            .unwrap(),
+            RunOutcome::Completed(Some(expected))
+        );
+    }
+    for opcode in [0x62, 0x63, 0x64] {
+        for args in [
+            vec![Value::I32(1), Value::I64(1)],
+            vec![Value::I64(1), Value::I64(1)],
+        ] {
+            let parameters = args
+                .iter()
+                .map(|v| {
+                    if matches!(v, Value::I32(_)) {
+                        SlotType::I32
+                    } else {
+                        SlotType::I64
+                    }
+                })
+                .collect();
+            let (program, method) = program(
+                &[2, 3, opcode, 0x2a],
+                parameters,
+                vec![],
+                Some(SlotType::I32),
+            );
+            let mut vm = Vm::new(&program);
+            vm.start(method, args).unwrap();
+            vm.run(2).unwrap();
+            let before = vm.context().clone();
+            assert!(vm.run(1).unwrap_err().0.contains("shift count must be I32"));
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 2);
+        }
+        for operands in [
+            vec![Value::Null, Value::I32(1)],
+            vec![Value::I32(1), Value::Null],
+            vec![Value::Null, Value::Null],
+        ] {
+            let (program, method) =
+                program(&[0, 0, opcode, 0x2a], vec![], vec![], Some(SlotType::I32));
+            let mut vm = Vm::new(&program);
+            vm.start(method, vec![]).unwrap();
+            vm.run(2).unwrap();
+            vm.context.frames[0].evaluation_stack = operands;
+            let before = vm.context().clone();
+            assert!(vm.run(1).unwrap_err().0.contains("shift"));
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 2);
+        }
+        for reference_count in [false, true] {
+            let (program, method) =
+                program(&[0, 0, opcode, 0x2a], vec![], vec![], Some(SlotType::I32));
+            let mut vm = Vm::new(&program);
+            vm.start(method, vec![]).unwrap();
+            vm.run(2).unwrap();
+            let id = ObjectId::fresh();
+            vm.heap
+                .allocate(
+                    id,
+                    program.method(method).unwrap().owner,
+                    1,
+                    crate::heap::AllocationDomain::Managed,
+                )
+                .unwrap();
+            vm.context.frames[0].evaluation_stack = if reference_count {
+                vec![Value::I64(1), Value::Reference(id)]
+            } else {
+                vec![Value::Reference(id), Value::I32(1)]
+            };
+            let before = vm.context().clone();
+            assert!(vm.run(1).unwrap_err().0.contains("shift"));
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 2);
+        }
     }
 }
 

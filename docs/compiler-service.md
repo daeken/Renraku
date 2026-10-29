@@ -84,7 +84,7 @@ emits the metadata reference images from the pinned views; those image bytes are
 captured in the terminal artifact. C# errors and deterministic input rejections
 publish `rejected` results with diagnostics or an input-error report. Success
 publishes `compiled`; successful C# compilation still does not imply acceptance
-of its CIL by Renraku. Unsupported left shift, for example, compiles but fails
+of its CIL by Renraku. Unsupported checked addition, for example, compiles but fails
 installation without changing the universe.
 
 Reports retain the actual compiler identity and bounded diagnostics; transient
