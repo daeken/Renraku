@@ -191,6 +191,19 @@ and do not inherit persistence.
   reusing the same caller with -3 to reach 23. The second goal used two model
   turns and no compiler/installation. Repeated pending and completed input IDs
   preserved one append/execution. See the [live follow-up report](acceptance/live-followup-2026-10-29.md).
+- Persistent localhost website with `WebHost`, `WebServer`, and `web-serve` CLI.
+  Static four-string CIL handlers own routing/state/immutable HTML responses;
+  host sockets and a bounded HTTP profile stay outside snapshots. Invocation
+  receipts form a durable inbox with pinned code and exact method/target/body.
+  Intent commits before instructions; terminal response/state commits before
+  socket writes. Conflicting IDs reject, pending calls exclude new executions,
+  and older completed responses remain immutable across later requests and GC.
+- A browser bootstrap retains one pending request ID in sessionStorage and uses
+  the CIL visit demo. Manual browser verification recorded a visit, restarted the
+  host on the same port, and reloaded the same visit ID. The current demo is at
+  http://127.0.0.1:56903/ with database `target/web-demo-20261029.db`; its host may
+  need manual restart after this session. See [website guide](website.md).
+  Checkpoint format remains 7; handlers receive no implicit model capability.
 
 ## Validation
 
@@ -198,7 +211,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 182 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 190 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -295,6 +308,13 @@ and completes the original pre-input-schema agent under a local provider. A seco
 goal reuses installed source/code without an SDK and preserves the first mutation
 receipt. The HTTP fixture sends both complete histories plus the new user message
 and reaches Counter 33 using only three new model requests and one installation.
+Eight website tests cover actual TCP/CLI serving, SDK-free CLI delivery, exact
+old-response replay after newer mutations and handler selection, all handler
+instruction cuts with GC/recovery, paused-call exclusion, denied model authority,
+fault/null/surrogate/oversized terminal responses, malformed framing and bounds,
+failed response checkpoints, and fragmented UTF-8/NUL data. Actual SIGKILL tests
+stop before execution, after a partial mutation, and after response commit before
+socket delivery; the same port rebinds and retry retains one original execution.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -334,12 +354,11 @@ existing types remain future work. Keep
 the original architecture's self-hosting/non-arbitrary-.NET limits; do not turn
 running Roslyn inside Renraku into a prerequisite for runtime compilation.
 
-For website work, use a host HTTP edge with managed handlers/state and a durable
-request inbox, bounded parsing, and local binding first. Persist accepted work
-before executing it and response/state before sending. A crashed socket is not
-recoverable, so define client request IDs/retry deduplication explicitly. The
-first proof should retain page state and avoid duplicate mutations across
-request recovery. HTTP guest APIs are not implemented yet; see the
+The first website proof now uses a host HTTP edge with managed handlers/state and
+a durable invocation inbox, bounded parsing, and local binding. Accepted work is
+saved before executing it and response/state before sending. A crashed socket is
+not recoverable; client IDs and receipt replay prevent duplicate mutations.
+General guest networking APIs remain future work; see the
 [workload direction](compilation.md#website-workload).
 
 The user raised async-by-default as an early replacement-BCL direction.
@@ -400,16 +419,21 @@ Follow-up input now works across goals in one universe, with durable IDs, linked
 managed history, monotonic turns/receipts, local recovery tests, and a live reuse
 demonstration. Keep the current limits and explicit legacy-schema boundary.
 
-**Next implement the first persistent localhost website milestone.** Use a host
-HTTP edge with persistent CIL handlers/state and a durable request inbox. Start
-with bounded parsing and one accepted request at a time, with an explicit client
-request ID bound to exact request data and a pinned handler. Save accepted work
-before executing; commit response and state before writing to the socket. A
-recovered retry must resume or return its receipt without repeating mutations.
-Demonstrate retained page/counter state and request deduplication across process
-recovery using local HTTP fixtures. Keep sockets outside the universe and preserve
-the one-context limit. The existing invocation/input protocols provide useful
-patterns; do not treat raw implementation DLLs or native futures as guest state.
+The first persistent localhost website milestone is implemented and verified.
+Its supported HTTP-v1 profile fixes successful status/content type and returns an
+immutable managed string. Keep these receipt semantics stable; richer response
+envelopes and general network APIs require explicit contracts.
+
+**Next connect external compilation/installation to durable website handler
+publication.** Introduce a saved route/handler binding for new request IDs while
+older accepted requests retain their pinned method/code and response. Use the
+existing compiler and append-only installation seams. Keep compilation distinct
+from installation/publication, avoid replacing existing method bodies, and give
+publication a durable request identity so a lost reply cannot overwrite a newer
+route on replay. Demonstrate a new handler on new requests while an old paused
+request recovers under its original code, preserving shared persistent state.
+Use local HTTP fixtures; keep sockets outside checkpoints and the one-context
+limit explicit. Prefer a narrow publication contract over broader HTTP features.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

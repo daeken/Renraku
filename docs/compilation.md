@@ -189,11 +189,11 @@ describe the compilation boundary for ordinary C# partial declarations.
 
 ## Website workload
 
-A small website is a useful next integration workload after asynchronous host
-delivery and scheduler work. The host owns HTTP sockets and bounded parsing;
-managed CIL handlers own routes, application state, and response values. The
-initial service should bind locally. No ASP.NET compatibility is required for
-that proof, and HTTP APIs are not implemented yet.
+The first [persistent localhost website](website.md) is implemented. The host owns
+HTTP sockets and bounded parsing; managed CIL handlers own application routing,
+state, and immutable response strings. The prototype uses a dedicated serial host
+and the existing invocation inbox, preserving the one-context limit. General
+guest networking APIs and ASP.NET compatibility remain future work.
 
 Ingress needs its own durable inbox: request identity and accepted work must
 commit before handler execution, and application updates plus response data

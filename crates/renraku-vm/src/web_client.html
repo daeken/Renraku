@@ -1,0 +1,26 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Renraku persistent website</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{font:18px system-ui;max-width:750px;margin:4rem auto;padding:0 1rem;background:#101825;color:#ecf0f8}button{font:inherit;padding:.6rem 1rem;border:0;border-radius:8px;background:#8bd7c8;color:#101825;cursor:pointer}li{font:14px monospace;line-height:1.8}#status{color:#b6c5dc}h1{font-weight:600}</style>
+<main id="app">Loading the saved page…</main><p id="status"></p><button id="retry" hidden>Retry saved request</button>
+<script>
+const key='renraku-web-v1-@UNIVERSE@', app=document.getElementById('app'), status=document.getElementById('status'), retry=document.getElementById('retry');
+let busy=false;
+function request(method,target){return {id:crypto.randomUUID(),method,target,body:''}}
+async function send(r){
+  if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);
+  sessionStorage.setItem(key,JSON.stringify(r)); retry.hidden=true; status.textContent='Waiting for the saved response…';
+  try {
+    const response=await fetch(r.target,{method:r.method,headers:{'X-Renraku-Request-Id':r.id},...(r.method==='POST'?{body:r.body}:{} )});
+    const body=await response.text(), state=response.headers.get('X-Renraku-State');
+    if(['completed','faulted','invalid_response'].includes(state))sessionStorage.removeItem(key);
+    if(response.status!==200)throw new Error(body);
+    app.innerHTML=body;status.textContent='Response saved. Restart the host and this page will recover its managed state.';
+    const visit=document.getElementById('visit'), refresh=document.getElementById('refresh');
+    if(visit)visit.onclick=()=>send(request('POST','/visit'));
+    if(refresh)refresh.onclick=()=>send(request('GET','/page'));
+  } catch(error){status.textContent=String(error);retry.hidden=!sessionStorage.getItem(key)}
+  finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=b!==retry&&!!sessionStorage.getItem(key))}
+}
+retry.onclick=()=>send(JSON.parse(sessionStorage.getItem(key)));
+const pending=sessionStorage.getItem(key);send(pending?JSON.parse(pending):request('GET','/page'));
+</script></html>

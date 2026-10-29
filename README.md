@@ -43,6 +43,10 @@ remain to be implemented. Subscription-backed model inference is available.
 The [CIL profile](docs/cil-profile.md)
 and [checkpoint contract](docs/checkpoints.md) specify the current limits.
 
+A [persistent localhost website](docs/website.md) is also working: CIL handlers
+own page content and visit state, while the host owns sockets. Stable request IDs
+resume or replay saved responses after a crash without repeating mutations.
+
 ## Run the demonstration
 
 Install Rust 1.89 or later and the .NET 10 SDK. From the repository root:

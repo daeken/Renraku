@@ -32,6 +32,7 @@ fn execute() -> Result<()> {
         "       renraku-vm inspect-checkpoint <universe.db>\n",
         "       renraku-vm agent-inspect <universe.db>\n",
         "       renraku-vm agent-input <universe.db> <input-ID> <goal> [instruction-budget]\n",
+        "       renraku-vm web-serve <universe.db> <handler-method> <loopback-address:port> [instruction-budget] [connection-limit]\n",
         "       renraku-vm search <universe.db> <query> [limit]\n",
         "       renraku-vm read-code <universe.db> <method-or-code-ID>\n",
         "       renraku-vm export-reference <universe.db> <type-name-or-ID> [type ...]\n",
@@ -65,6 +66,27 @@ fn execute() -> Result<()> {
         return Err(Error(USAGE.into()));
     }
     match args.first().map(String::as_str) {
+        Some("web-serve") if (4..=6).contains(&args.len()) => {
+            use renraku_vm::web::{WebHost, WebServer};
+            let address = args[3]
+                .parse()
+                .map_err(|_| Error("invalid listener address".into()))?;
+            let budget = number(args.get(4), 10_000)?;
+            let limit = number(args.get(5), u64::MAX)?;
+            let host = WebHost::open(&args[1], &args[2])?;
+            let universe = host.universe();
+            let server = WebServer::bind(host, address, budget)?;
+            println!(
+                "{}",
+                serde_json::json!({"format":1,"listening":server.address()?.to_string(),"universe":universe.to_string()})
+            );
+            for _ in 0..limit {
+                if let Err(error) = server.serve_one() {
+                    eprintln!("website connection: {error}");
+                }
+            }
+            return Ok(());
+        }
         Some("agent-input") if (4..=5).contains(&args.len()) => {
             let budget = number(args.get(4), 1000)?;
             if !std::path::Path::new(&args[1]).is_file() {

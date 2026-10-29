@@ -28,3 +28,8 @@ test = false
 name = "renraku-effect-probe"
 path = "tests/support/effect_probe.rs"
 test = false
+
+[[bin]]
+name = "renraku-web-probe"
+path = "tests/support/web_probe.rs"
+test = false

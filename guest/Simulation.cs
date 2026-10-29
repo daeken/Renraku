@@ -1,5 +1,35 @@
 namespace Renraku.Guest
 {
+    public static class Website
+    {
+        public static int Visits;
+        public static string History;
+        public static void Initialize() { Visits = 0; History = ""; }
+        public static string Handle(string id, string method, string target, string body)
+        {
+            if (History == null) History = "";
+            if (method == "POST" && target == "/visit" && body == "")
+            {
+                if (Visits >= 64) return "<h1>Visit limit reached</h1><p>The demo retains at most 64 visits.</p><button id='refresh'>Refresh</button>";
+                Visits = Visits + 1;
+                History = string.Concat(string.Concat("<li>", id), string.Concat("</li>", History));
+            }
+            else if (method != "GET" || (target != "/" && target != "/page") || body != "")
+                return "<h1>Unsupported route</h1><p>Use GET /page or an empty POST /visit.</p><button id='refresh'>Refresh</button>";
+            return string.Concat(string.Concat("<h1>Persistent visits</h1><p>This page and its visit log come from a CIL handler.</p><button id='visit'>Record a visit</button> <button id='refresh'>Refresh</button><ol>", History), "</ol>");
+        }
+        public static string Alternate(string id, string method, string target, string body) { return "alternate handler"; }
+        public static string Echo(string id, string method, string target, string body) { return body; }
+        public static string Denied(string id, string method, string target, string body) { return Renraku.Model.Complete(id); }
+        public static string NullResponse(string id, string method, string target, string body) { return null; }
+        public static string SurrogateResponse(string id, string method, string target, string body) { return "\uD800"; }
+        public static string LargeResponse(string id, string method, string target, string body)
+        {
+            string text = "xx";
+            for (int i = 0; i < 15; i++) text = text + text;
+            return text;
+        }
+    }
     // The tool protocol is host interpreted, while transcript, turns, and pending
     // inputs/results are ordinary managed objects in the same durable universe.
     public sealed class AgentArgument
