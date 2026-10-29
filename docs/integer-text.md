@@ -6,6 +6,9 @@ append-only in an existing universe. Its formatting and parsing use CIL calls,
 loops, arithmetic, immutable strings, and ordinary result objects. No new native
 intrinsics, interpreter opcodes, capabilities, or checkpoint fields are involved.
 The original CoreLib and existing object/code identities remain in place.
+Unsigned decimal text is available in the separate append-only
+[Renraku.UnsignedText module](unsigned-text.md); it does not replace these signed
+methods or their original installation.
 
 ## API and bounds
 

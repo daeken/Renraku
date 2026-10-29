@@ -455,8 +455,18 @@ fn stack_shapes(program: &Program, method: &Method) -> Result<BTreeMap<u32, Vec<
                 let ty = pair(&mut stack, true)?;
                 stack.push(ty);
             }
-            Op::ConvertI64 => {
-                require(!reference(pop(&mut stack)?), "invalid conv.i8 operand")?;
+            Op::ConvertI32 => {
+                require(
+                    !reference(pop(&mut stack)?),
+                    "invalid conv.i4/conv.u4 operand",
+                )?;
+                stack.push(Kind::I32);
+            }
+            Op::ConvertI64 | Op::ConvertU64 => {
+                require(
+                    !reference(pop(&mut stack)?),
+                    "invalid conv.i8/conv.u8 operand",
+                )?;
                 stack.push(Kind::I64);
             }
             Op::Branch(target) => targets = vec![target],

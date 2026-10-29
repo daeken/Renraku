@@ -36,7 +36,9 @@ pub enum Op {
     Remainder {
         unsigned: bool,
     },
+    ConvertI32,
     ConvertI64,
+    ConvertU64,
     Branch(u32),
     BranchIf {
         target: u32,
@@ -198,7 +200,9 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
             0x5c => Op::Divide { unsigned: true },
             0x5d => Op::Remainder { unsigned: false },
             0x5e => Op::Remainder { unsigned: true },
+            0x69 | 0x6d => Op::ConvertI32,
             0x6a => Op::ConvertI64,
+            0x6e => Op::ConvertU64,
             0x72 => Op::LoadString(reader.u32()?),
             0x73 => Op::NewObject(reader.u32()?),
             0x7b | 0x7e => Op::LoadField {

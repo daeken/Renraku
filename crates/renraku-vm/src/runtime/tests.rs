@@ -259,6 +259,66 @@ fn stack_manipulation_and_wrapping_integer_arithmetic_execute() {
 }
 
 #[test]
+fn fixed_width_conversions_use_only_storage_width_and_opcode_signedness() {
+    for (opcode, input, expected, slot) in [
+        (
+            0x69,
+            Value::I64(0x12345678_ffffffff),
+            Value::I32(-1),
+            SlotType::I32,
+        ),
+        (
+            0x6d,
+            Value::I64(0x12345678_80000000),
+            Value::I32(i32::MIN),
+            SlotType::I32,
+        ),
+        (
+            0x69,
+            Value::I32(i32::MIN),
+            Value::I32(i32::MIN),
+            SlotType::I32,
+        ),
+        (0x6d, Value::I32(-1), Value::I32(-1), SlotType::I32),
+        (0x6a, Value::I32(-1), Value::I64(-1), SlotType::I64),
+        (0x6e, Value::I32(-1), Value::I64(4294967295), SlotType::I64),
+        (
+            0x6e,
+            Value::I32(i32::MIN),
+            Value::I64(2147483648),
+            SlotType::I64,
+        ),
+        (
+            0x6a,
+            Value::I64(i64::MIN),
+            Value::I64(i64::MIN),
+            SlotType::I64,
+        ),
+        (
+            0x6e,
+            Value::I64(i64::MIN),
+            Value::I64(i64::MIN),
+            SlotType::I64,
+        ),
+    ] {
+        assert_eq!(
+            eval(&[2, opcode, 0x2a], vec![input], vec![], slot).unwrap(),
+            RunOutcome::Completed(Some(expected))
+        );
+    }
+    for opcode in [0x69, 0x6d, 0x6a, 0x6e] {
+        let (program, method) = program(&[0x14, opcode, 0x2a], vec![], vec![], Some(SlotType::I64));
+        let mut vm = Vm::new(&program);
+        vm.start(method, vec![]).unwrap();
+        assert_eq!(vm.run(1).unwrap(), RunOutcome::Paused);
+        let before = vm.context().frames.clone();
+        assert!(vm.run(1).unwrap_err().0.contains("requires an integer"));
+        assert_eq!(vm.context().frames, before);
+        assert_eq!(vm.instructions_executed(), 1);
+    }
+}
+
+#[test]
 fn every_short_and_long_integer_comparison_branch_executes() {
     let negative = [0, 0, 0, 1, 1, 1, 1, 1, 0, 0];
     let equal = [1, 1, 0, 1, 0, 0, 1, 0, 1, 0];

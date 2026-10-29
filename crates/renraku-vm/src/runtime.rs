@@ -451,11 +451,31 @@ impl<'a> Vm<'a> {
             Op::Pop => {
                 pop(&mut frame)?;
             }
-            Op::ConvertI64 => {
+            Op::ConvertI32 => {
                 let value = match pop(&mut frame)? {
-                    Value::I32(value) => Value::I64(value as i64),
+                    Value::I32(value) => Value::I32(value),
+                    Value::I64(value) => Value::I32(value as i32),
+                    _ => return Err(Error("conv.i4/conv.u4 requires an integer".into())),
+                };
+                frame.evaluation_stack.push(value);
+            }
+            Op::ConvertI64 | Op::ConvertU64 => {
+                let value = match pop(&mut frame)? {
+                    Value::I32(value) if matches!(instruction.op, Op::ConvertU64) => {
+                        Value::I64(i64::from(value as u32))
+                    }
+                    Value::I32(value) => Value::I64(i64::from(value)),
                     Value::I64(value) => Value::I64(value),
-                    _ => return Err(Error("conv.i8 requires an integer".into())),
+                    _ => {
+                        return Err(Error(
+                            if matches!(instruction.op, Op::ConvertU64) {
+                                "conv.u8 requires an integer"
+                            } else {
+                                "conv.i8 requires an integer"
+                            }
+                            .into(),
+                        ));
+                    }
                 };
                 frame.evaluation_stack.push(value);
             }

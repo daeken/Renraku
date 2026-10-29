@@ -168,6 +168,275 @@ impl Directory {
 }
 
 #[test]
+fn unsigned_library_installs_append_only_and_frozen_callers_replay_without_sdk() {
+    let directory = Directory::new();
+    // Start with the original signed library, heap and saved counter already present.
+    let program = Program::load(&[
+        &fixtures().core,
+        &fixtures().guest,
+        &fs::read(fixtures().output.join("Renraku.Library.dll")).unwrap(),
+    ])
+    .unwrap();
+    let counter_type = program.find_type("Renraku.Guest.Counter").unwrap();
+    let value_field = program
+        .fields()
+        .find(|f| f.owner == counter_type && f.name == "Value")
+        .unwrap()
+        .id;
+    let root = program
+        .fields()
+        .find(|f| {
+            f.owner == program.find_type("Renraku.Guest.Simulation").unwrap() && f.name == "Saved"
+        })
+        .unwrap()
+        .id;
+    let database = directory.0.join("unsigned.db");
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let mut vm = Vm::new(&program);
+    vm.start(common::entry(&program, "SaveObject"), vec![])
+        .unwrap();
+    assert_eq!(
+        vm.run(1000).unwrap(),
+        RunOutcome::Completed(Some(Value::I32(19)))
+    );
+    let counter = vm.static_fields()[&root];
+    store.save(&vm).unwrap();
+    let source = directory.source(
+        "UnsignedIntegerText.cs",
+        include_str!("../../../guest/UnsignedIntegerText.cs"),
+    );
+    let (output, report) = directory.compile_named(
+        std::slice::from_ref(&source),
+        "unsigned-library",
+        &[],
+        "Renraku.UnsignedText",
+    );
+    assert_success(&output, &report);
+    let library = BuildArtifact::from_bundle(directory.0.join("unsigned-library")).unwrap();
+    let installed = install_once(&mut store, "unsigned/install", &library).unwrap();
+    assert_eq!(
+        install_once(&mut store, "unsigned/install", &library).unwrap(),
+        installed
+    );
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    for method in program.methods() {
+        assert_eq!(
+            registry.method(method.binding.method).unwrap().binding,
+            method.binding
+        );
+    }
+    for before in program.types() {
+        let after = registry.types().find(|t| t.id == before.id).unwrap();
+        assert_eq!(
+            (&after.name, after.base, &after.fields),
+            (&before.name, before.base, &before.fields)
+        );
+    }
+    for before in program.fields() {
+        let after = registry.fields().find(|f| f.id == before.id).unwrap();
+        assert_eq!(
+            (&after.name, after.owner, after.value_type),
+            (&before.name, before.owner, before.value_type)
+        );
+    }
+    let set = registry
+        .reference_set(&[
+            registry
+                .find_type("Renraku.Text.UnsignedIntegerText")
+                .unwrap(),
+            registry.find_type("Renraku.Text.IntegerText").unwrap(),
+            counter_type,
+        ])
+        .unwrap();
+    assert_eq!(set.views.len(), 3);
+    let view = directory.0.join("unsigned-set.json");
+    fs::write(&view, set.to_json().unwrap()).unwrap();
+    let caller = directory.source(
+        "UnsignedCaller.cs",
+        r#"
+using Renraku.Text;
+public static class UnsignedCaller {
+ public static int Calls;
+ public static UInt64ParseResult Last;
+ public static string Run(Renraku.Guest.Counter counter, string text) {
+  UInt64ParseResult parsed = UnsignedIntegerText.ParseUInt64(text);
+  Last = parsed;
+  if (!parsed.Success) return parsed.Error;
+  Calls = Calls + 1;
+  counter.Add(1);
+  return string.Concat(UnsignedIntegerText.FormatUInt64(parsed.Value),
+    string.Concat("/", IntegerText.FormatInt32(counter.Value)));
+ }
+}"#,
+    );
+    let (output, report) = directory.compile_with_views(
+        std::slice::from_ref(&caller),
+        "unsigned-caller",
+        std::slice::from_ref(&view),
+    );
+    assert_success(&output, &report);
+    let artifact = BuildArtifact::from_bundle(directory.0.join("unsigned-caller")).unwrap();
+    assert_eq!(
+        manifest(&directory.0.join("unsigned-caller"))["references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    install_once(&mut store, "unsigned-caller/install", &artifact).unwrap();
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let method = registry.entry("UnsignedCaller::Run").unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.static_fields()[&root], counter);
+    let text = vm
+        .new_string("+00018446744073709551615".encode_utf16().collect())
+        .unwrap();
+    let args = vec![counter, Value::Reference(text)];
+    let intent = vm
+        .invoke_once(
+            &mut store,
+            "unsigned-caller/invoke",
+            method,
+            args.clone(),
+            0,
+            7,
+        )
+        .unwrap();
+    assert_eq!(
+        intent.state,
+        renraku_vm::invocation::InvocationState::Running
+    );
+    // Pause in a foreign parser frame with typed arguments.
+    let pending = vm
+        .invoke_once(&mut store, "unsigned-caller/invoke", method, args, 7, 7)
+        .unwrap();
+    assert_eq!(pending.execution, intent.execution);
+    assert!(vm.context().frames.len() > 1);
+    vm.collect_garbage().unwrap();
+    assert!(vm.heap().object(text).is_ok());
+    store.save(&vm).unwrap();
+    drop(store);
+    let caller_source = fs::read_to_string(&caller).unwrap();
+    for path in ["unsigned-library", "unsigned-caller"] {
+        fs::remove_dir_all(directory.0.join(path)).unwrap();
+    }
+    for path in [source, caller, view] {
+        fs::remove_file(path).unwrap();
+    }
+    let object_arg = format!("object:{}", counter.referenced_object().unwrap());
+    let text_arg = format!("object:{text}");
+    let native = |args: &[&str]| -> Json {
+        let output = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+            .args(args)
+            .env("PATH", "/no-unsigned-compiler-or-sdk")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let first = native(&[
+        "invoke-once",
+        database.to_str().unwrap(),
+        "unsigned-caller/invoke",
+        &method.to_string(),
+        "10000",
+        &object_arg,
+        &text_arg,
+    ]);
+    assert_eq!(first["state"], "completed");
+    assert_eq!(first["execution"], intent.execution.to_string());
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    let receipt = vm.invocation("unsigned-caller/invoke").unwrap().clone();
+    let renraku_vm::invocation::InvocationState::Completed {
+        result: Some(value),
+    } = receipt.state
+    else {
+        panic!()
+    };
+    assert_eq!(
+        String::from_utf16(
+            vm.heap()
+                .object(value.referenced_object().unwrap())
+                .unwrap()
+                .string_units()
+                .unwrap()
+        )
+        .unwrap(),
+        "18446744073709551615/20"
+    );
+    let calls = registry
+        .fields()
+        .find(|f| f.owner == registry.find_type("UnsignedCaller").unwrap() && f.name == "Calls")
+        .unwrap()
+        .id;
+    let last = registry
+        .fields()
+        .find(|f| f.owner == registry.find_type("UnsignedCaller").unwrap() && f.name == "Last")
+        .unwrap()
+        .id;
+    let result = vm
+        .heap()
+        .object(vm.static_fields()[&last].referenced_object().unwrap())
+        .unwrap();
+    let result_value = registry
+        .fields()
+        .find(|f| f.owner == result.type_id() && f.name == "Value")
+        .unwrap()
+        .id;
+    assert_eq!(result.fields()[&result_value], Value::I64(-1));
+    assert_eq!(vm.static_fields()[&calls], Value::I32(1));
+    assert_eq!(
+        vm.heap()
+            .object(counter.referenced_object().unwrap())
+            .unwrap()
+            .fields()[&value_field],
+        Value::I32(20)
+    );
+    vm.start(common::entry(registry, "Arithmetic"), vec![])
+        .unwrap();
+    vm.run(1000).unwrap();
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    drop(store);
+    let replay = native(&[
+        "invoke-once",
+        database.to_str().unwrap(),
+        "unsigned-caller/invoke",
+        &method.to_string(),
+        "10000",
+        &object_arg,
+        &text_arg,
+    ]);
+    assert_eq!(replay["execution"], first["execution"]);
+    assert_eq!(replay["result"], first["result"]);
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.static_fields()[&root], counter);
+    assert_eq!(vm.static_fields()[&calls], Value::I32(1));
+    assert_eq!(
+        vm.heap()
+            .object(counter.referenced_object().unwrap())
+            .unwrap()
+            .fields()[&value_field],
+        Value::I32(20)
+    );
+    assert_eq!(vm.invocation("unsigned-caller/invoke").unwrap(), &receipt);
+    let source = vm.read_code(&method.to_string()).unwrap();
+    assert_eq!(source["sourceAvailable"], true);
+    assert_eq!(source["sources"][0]["text"], caller_source);
+}
+
+#[test]
 fn runtime_reference_view_links_callers_to_existing_objects_and_installs_with_live_frames() {
     let directory = Directory::new();
     let program = common::program();

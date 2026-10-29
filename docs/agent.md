@@ -406,6 +406,14 @@ frozen type view. `FormatInt32`/`FormatInt64` return canonical decimal strings;
 accepts an optional ASCII sign and digits within 64 UTF-16 units. Old universes
 keep their saved core and do not automatically gain this separate module.
 
+The separate [unsigned decimal module](unsigned-text.md) similarly exposes
+`Renraku.Text.UnsignedIntegerText` with FormatUInt32/64 and ParseUInt32/64.
+Its 64-unit input syntax allows an optional ASCII plus and digits; all minus
+signs reject, including `-0`. Select its own frozen type root after installation.
+Raw invoke/inspection I32/I64 values keep their storage bits; unsigned decimal
+meaning comes from the managed API, including a stored I64 -1 for UInt64 maximum.
+Existing signed-library and CoreLib bodies are unchanged.
+
 The separately installed [StringMap module](string-map.md) exposes bounded
 ordinal UTF-16 string Get/Set/Remove/Count with data results. Search/describe
 `Renraku.Collections.StringMap` and select its frozen view before compiling calls.

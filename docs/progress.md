@@ -396,13 +396,41 @@ and do not inherit persistence.
   target/live-multimodule-20261029-01/. The bounded edge exited; both older demos
   remain unchanged. This evidence is separate from scripted HTTP fault fixtures.
 
+- Fixed-width unchecked conversions now support conv.i4/conv.u4 (low 32 bits),
+  conv.u8 (zero extension from I32), and the existing conv.i8 sign extension;
+  both widening instructions preserve I64 bits. Decoder, execution and checkpoint
+  abstract stacks agree on widths. Reference operands retain their failing stack
+  and continuation. Native/floating/small-width/checked conversions remain
+  unsupported. A 1,764-case actual emitted C#/CoreCLR matrix and per-instruction
+  GC/recovery cover high bits, narrowing/extension sequences and original bindings.
+- The separate append-only Renraku.UnsignedText module from
+  guest/UnsignedIntegerText.cs supplies FormatUInt32/64 and ParseUInt32/64.
+  Canonical outputs use 10/20 units; parsing accepts optional ASCII plus/digits
+  within 64 units, leading zeros, and both full unsigned ranges. All minus signs
+  including -0 reject. Readonly results retain Success/Value/Error/Position;
+  null/empty/too_long/invalid_digit/overflow are explicit data with zero failure
+  Value and first-error offsets, guarded before arithmetic could wrap. Pure CIL
+  owns computation; no new native formatter, capability or checkpoint field.
+  The signed library and CoreLib are unchanged. See [unsigned text](unsigned-text.md).
+  Tests compare 278 formats/1,182 parses with CoreCLR and an independent BigInteger
+  prefix oracle. Six operations restore every instruction with GC and exact units/
+  logical identities; native processes finish paused work without SDK/tools.
+  A compiler test installs the module into an existing signed-library/Counter
+  universe, exports three frozen module views, installs a caller and pauses in a
+  foreign parser. After deleting sources/views/bundles it resumes through fresh
+  native SDK-free invocation, formats UInt64 maximum and the same Counter as
+  18446744073709551615/20, and retains raw I64 -1 result storage and exact source.
+  Replay after another context/GC preserves the execution/result, Calls=1 and
+  Counter=20. Format 7, legacy fixtures and both demos remain unchanged; no live
+  inference was required.
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 236 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 243 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -671,25 +699,23 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next extend fixed-width CIL conversion and unsigned decimal library support.**
-Start with the integer conversions actually emitted for UInt32/UInt64 decimal
-formatting/parsing (for example conv.u8, conv.i4/conv.u4 where required), preserving
-raw I32/I64 storage bits. Consult the primary ECMA-335 specification for truncation,
-signed/unsigned extension and stack/result types; compare actual emitted C# and
-CoreCLR boundary results rather than assuming Rust casts match every opcode.
-Keep unsupported floating/native integers and checked conversions explicit.
-Then add bounded pure managed unsigned formatting/parsing as a new append-only
-module instead of changing Renraku.Library/CoreLib bodies. Reuse the signed text
-API's explicit lexical/bounds/result conventions where appropriate, with correct
-UInt32/UInt64 minima/maxima/high bits and overflow guards. No host formatter or
-new generic/native collection is needed. Test every new opcode with exact storage
-bits, per-instruction/GC/recovery, stable IDs and old readers; compare the actual
-library against CoreCLR under its declared syntax. Demonstrate compilation and
-use through frozen reference sets and SDK-free replay. Preserve default authority
-denial, all receipts/transcripts, demo universes and sourceOnly projection bounds.
-Do not repeat completed live model runs without a new acceptance question. Shifts,
-bitwise operations, general formatting/culture, broad BCL compatibility, cyclic
-facades, replacement bodies and same-universe concurrency remain future work.
+**Next implement fixed-width integer bitwise AND/OR/XOR/NOT.** These ordinary
+CIL operations are a useful foundation for flags and managed hashing. Follow
+primary ECMA-335 semantics for I32/I64 stacks, preserve exact raw bits and byte
+offsets, and reject mismatched widths/reference operands with intact failing
+frames. Update checkpoint abstract stacks and test actual emitted C# against
+CoreCLR over high-bit/boundary/seeded cases. Include individual instruction cuts,
+GC/recovery and a durable invoke-once mutation using a bitwise result, preserving
+original object/code IDs and replay without another mutation. Keep ordinary pure
+computation in CIL; add no host formatter, collection or effect. Existing XOR
+negative fixtures must switch to a still unsupported opcode so rejection tests
+retain their purpose. Shifts need their own explicit shift-count contract and
+remain unsupported for this milestone, alongside floating/native integers,
+checked arithmetic/conversions and EH. Preserve the newly implemented unsigned
+module, all source/install/invoke receipts, old libraries/CoreLib, reference sets,
+managed transcripts, capability defaults, demos and legacy format readers. Update
+model guidance only after implementation. No live model demonstration is needed
+for this pure runtime change.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

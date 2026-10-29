@@ -77,6 +77,8 @@ IL byte offsets remain byte offsets after decoding.
 | `add`, `sub`, `mul` | Wrapping arithmetic on matching integer stack types |
 | `div`, `div.un`, `rem`, `rem.un` | Signed or unsigned division/remainder on matching Int32 or Int64 stack types |
 | `conv.i8` | Sign extend Int32 or preserve Int64 |
+| `conv.u8` | Zero extend Int32 or preserve Int64 bits |
+| `conv.i4`, `conv.u4` | Preserve Int32 or truncate Int64 to its low 32 bits, producing Int32 storage |
 | `br`, `br.s` | Branch to an instruction boundary |
 | `brfalse`, `brfalse.s`, `brtrue`, `brtrue.s` | Branch on an integer or reference |
 | `beq`, `bne.un`, and their short forms | Compare matching integers or references and branch |
@@ -115,6 +117,23 @@ not execute the call again or repeat a preceding mutation. Pure arithmetic uses
 ordinary instruction safe points and does not suspend for host work. Floating
 point, native integers, checked arithmetic opcodes, bitwise operators, and
 exception handling remain unsupported.
+
+Fixed-width conversions consume one I32/I64 stack value and produce the target
+width. No signedness tag is stored: `conv.i4` and `conv.u4` produce identical low
+32 bits. `conv.i8` sign-extends an I32; `conv.u8` interprets those 32 bits as
+unsigned before widening. Both preserve all bits of an I64. For example, I32 -1
+widens to I64 -1 with `conv.i8` and to 4294967295 with `conv.u8`. These are
+unchecked, pure guest instructions; narrowing does not fault on lost high bits.
+C# chooses the appropriate emitted sequence for its source cast: an unchecked
+negative `int` to `ulong` uses `conv.i8`, while `uint` to `ulong` uses `conv.u8`.
+Reference operands fault with their original stack/continuation intact. Native,
+floating, small-width and checked conversions remain unsupported. See ECMA-335
+III.3.27 and Table 8 in the
+[primary conversion specification](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=378).
+`guest/IntegerConversions.cs` and 1,764 real CoreCLR comparisons cover narrowing,
+both extensions, high bits and conversion sequences. Checkpoint stack validation
+tracks the converted width; recovery tests cut every instruction with GC and
+retain the original method/code/execution identities.
 
 `guest/IntegerArithmetic.cs` compiles unchanged against both CoreLibs. Its
 2,312-case CoreCLR matrix covers all four operators at both widths, signed
@@ -159,6 +178,9 @@ it adds no InternalCall or instruction. Existing core images remain unchanged.
 The separate [managed string map](string-map.md) likewise uses ordinary classes,
 calls, and fields. Its bounded mutators can pause with partial updates; method
 boundaries, one-context exclusion, and durable receipts retain their distinct roles.
+The separate [unsigned decimal module](unsigned-text.md) builds UInt32/UInt64
+text from fixed-width conversion and unsigned division/remainder, with explicit
+overflow results and no native formatter.
 
 Strings are immutable heap objects with ordinary object identities and exact
 UTF-16 payloads. Length and indexing count UTF-16 units, following

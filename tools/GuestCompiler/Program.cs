@@ -33,10 +33,16 @@ byte[] Compile(string name, string source, IEnumerable<MetadataReference> refere
 try
 {
     string integerText = File.ReadAllText(Path.Combine(root, "guest/IntegerText.cs"));
+    string unsignedText = File.ReadAllText(Path.Combine(root, "guest/UnsignedIntegerText.cs"));
+    string conversions = File.ReadAllText(Path.Combine(root, "guest/IntegerConversions.cs"));
     byte[] core = Compile("Renraku.CoreLib", File.ReadAllText(Path.Combine(root, "guest/CoreLib.cs")),
         Array.Empty<MetadataReference>());
     byte[] library = Compile("Renraku.Library", integerText, new[] { MetadataReference.CreateFromImage(core) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.Library.dll"), library);
+    File.WriteAllBytes(Path.Combine(output, "Renraku.UnsignedText.dll"),
+        Compile("Renraku.UnsignedText", unsignedText, new[] { MetadataReference.CreateFromImage(core) }));
+    File.WriteAllBytes(Path.Combine(output, "Renraku.ConversionTests.dll"),
+        Compile("Renraku.ConversionTests", conversions, new[] { MetadataReference.CreateFromImage(core) }));
     string collections = File.ReadAllText(Path.Combine(root, "guest/StringMap.cs"));
     byte[] collectionLibrary = Compile("Renraku.Collections", collections, new[] { MetadataReference.CreateFromImage(core) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.Collections.dll"), collectionLibrary);
@@ -67,7 +73,7 @@ try
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", collections + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
+    byte[] reference = Compile("Renraku.Reference", collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
@@ -122,6 +128,8 @@ try
     File.WriteAllText(Path.Combine(output, "arithmetic-workload-reference.txt"),
         arithmetic.GetMethod("PersistentArithmetic")!.Invoke(null, null)!.ToString());
     IntegerTextReference.Write(assembly, output);
+    UnsignedTextReference.Write(assembly, output);
+    ConversionReference.Write(assembly, output);
     StringMapReference.Write(assembly, output);
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))
         File.WriteAllBytes(Path.Combine(output, Path.GetFileNameWithoutExtension(path) + ".dll"),
