@@ -53,6 +53,7 @@ pub enum Op {
     ConvertI64,
     ConvertU64,
     Branch(u32),
+    Switch(Vec<u32>),
     BranchIf {
         target: u32,
         when_true: bool,
@@ -150,6 +151,39 @@ fn branch_target(reader: &mut Reader<'_>, short: bool) -> Result<u32> {
         .map_err(|_| Error("branch target outside method".into()))
 }
 
+// Tables are immutable code metadata, never guest arrays. Check the complete
+// encoded size before reserving memory; each delta shares the table-end base.
+pub const MAX_SWITCH_TARGETS: usize = 4096;
+fn switch_targets(reader: &mut Reader<'_>) -> Result<Vec<u32>> {
+    let count = reader.u32()? as usize;
+    require(
+        count <= (reader.data.len() - reader.position) / 4,
+        "truncated switch table",
+    )?;
+    require(
+        count <= MAX_SWITCH_TARGETS,
+        "switch table exceeds 4096 targets",
+    )?;
+    let base = reader
+        .position
+        .checked_add(
+            count
+                .checked_mul(4)
+                .ok_or_else(|| Error("switch table size overflow".into()))?,
+        )
+        .ok_or_else(|| Error("switch table size overflow".into()))?;
+    let mut targets = Vec::with_capacity(count);
+    for _ in 0..count {
+        let delta = reader.u32()? as i32;
+        let target = (base as i64)
+            .checked_add(i64::from(delta))
+            .and_then(|target| u32::try_from(target).ok())
+            .ok_or_else(|| Error("switch target outside method".into()))?;
+        targets.push(target);
+    }
+    Ok(targets)
+}
+
 pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
     require(bytes.len() <= u32::MAX as usize, "method body too large")?;
     let mut reader = Reader::new(bytes);
@@ -206,6 +240,7 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
                     unsigned: index >= 5,
                 }
             }
+            0x45 => Op::Switch(switch_targets(&mut reader)?),
             0x58 => Op::Add,
             0x59 => Op::Subtract,
             0x5a => Op::Multiply,
@@ -290,6 +325,14 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
                 "branch target is not an instruction boundary",
             )?;
         }
+        if let Op::Switch(targets) = &instruction.op {
+            for target in targets {
+                require(
+                    instructions.contains_key(target),
+                    "switch target is not an instruction boundary",
+                )?;
+            }
+        }
         if !matches!(instruction.op, Op::Return | Op::Branch(_)) {
             require(
                 instructions.contains_key(&instruction.next),
@@ -298,4 +341,79 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
         }
     }
     Ok(instructions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table(deltas: &[i32]) -> Vec<u8> {
+        let mut body = vec![0x45];
+        body.extend_from_slice(&(deltas.len() as u32).to_le_bytes());
+        for delta in deltas {
+            body.extend_from_slice(&delta.to_le_bytes());
+        }
+        body
+    }
+    #[test]
+    fn switch_tables_use_one_end_base_and_allow_zero_duplicate_and_backward_targets() {
+        let mut body = vec![0];
+        body.extend(table(&[-18, 0, 0])); // table ends at 18, targets 0/18/18
+        body.extend([0x16, 0x2a]);
+        let decoded = decode(&body).unwrap();
+        assert_eq!(decoded[&1].next, 18);
+        let Op::Switch(targets) = &decoded[&1].op else {
+            panic!("not a switch")
+        };
+        assert_eq!(targets, &[0, 18, 18]);
+        let mut empty = table(&[]);
+        empty.extend([0x16, 0x2a]);
+        assert!(matches!(&decode(&empty).unwrap()[&0].op, Op::Switch(t) if t.is_empty()));
+    }
+    #[test]
+    fn switch_rejects_truncated_counts_tables_and_noninstruction_or_outside_targets() {
+        for body in [
+            vec![0x45],
+            vec![0x45, 0, 0, 0],
+            vec![0x45, 255, 255, 255, 255],
+            vec![0x45, 1, 0, 0, 0, 0, 0, 0],
+            table(&[]), // fallthrough is mandatory even for a table with no entries
+            {
+                let mut b = table(&[i32::MIN]);
+                b.extend([0x16, 0x2a]);
+                b
+            },
+            {
+                let mut b = table(&[i32::MAX]);
+                b.extend([0x16, 0x2a]);
+                b
+            },
+            {
+                let mut b = table(&[-1]);
+                b.extend([0x16, 0x2a]);
+                b
+            }, // inside delta
+            {
+                let mut b = table(&[2]);
+                b.extend([0x16, 0x2a]);
+                b
+            }, // exactly body end
+            {
+                let mut b = table(&[1]);
+                b.extend([0x20, 0, 0, 0, 0, 0x2a]);
+                b
+            }, // constant operand
+        ] {
+            assert!(decode(&body).is_err(), "accepted {body:?}");
+        }
+    }
+    #[test]
+    fn switch_table_limit_is_explicit_and_checked_before_reserving_targets() {
+        let mut maximum = table(&vec![0; MAX_SWITCH_TARGETS]);
+        maximum.extend([0x16, 0x2a]);
+        assert!(decode(&maximum).is_ok());
+        let mut excessive = table(&vec![0; MAX_SWITCH_TARGETS + 1]);
+        excessive.extend([0x16, 0x2a]);
+        assert!(decode(&excessive).unwrap_err().0.contains("4096"));
+    }
 }

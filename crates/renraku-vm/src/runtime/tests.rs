@@ -759,3 +759,61 @@ fn stack_faults_leave_the_failing_instruction_unmodified() {
     assert!(vm.run(1).unwrap_err().0.contains("maxstack"));
     assert_eq!(vm.context.frames, before);
 }
+
+#[test]
+fn switch_consumes_only_i32_and_preserves_invalid_index_frames() {
+    // A zero-entry table still consumes its index, leaving the lower stack alone.
+    for index in [i32::MIN, -1, 0, 1, i32::MAX] {
+        assert_eq!(
+            eval(
+                &[0x1f, 42, 2, 0x45, 0, 0, 0, 0, 0x2a],
+                vec![Value::I32(index)],
+                vec![],
+                SlotType::I32
+            )
+            .unwrap(),
+            completed(42)
+        );
+    }
+    for invalid in [Value::I64(0), Value::Null] {
+        let (program, method) = program(
+            &[0, 0x45, 0, 0, 0, 0, 0x16, 0x2a],
+            vec![],
+            vec![],
+            Some(SlotType::I32),
+        );
+        let mut vm = Vm::new(&program);
+        vm.start(method, vec![]).unwrap();
+        vm.run(1).unwrap();
+        vm.context.frames[0].evaluation_stack = vec![Value::I32(42), invalid];
+        let before = vm.context().clone();
+        let error = vm.run(1).unwrap_err();
+        assert!(error.0.contains("switch requires an I32 index"));
+        assert!(error.0.contains("IL_0001"));
+        assert_eq!(vm.context().frames, before.frames);
+        assert_eq!(vm.instructions_executed(), 1);
+    }
+    let (program, method) = program(
+        &[0, 0x45, 0, 0, 0, 0, 0x16, 0x2a],
+        vec![],
+        vec![],
+        Some(SlotType::I32),
+    );
+    let mut vm = Vm::new(&program);
+    vm.start(method, vec![]).unwrap();
+    vm.run(1).unwrap();
+    let owner = program.method(method).unwrap().owner;
+    let object = ObjectId::fresh();
+    vm.heap
+        .allocate(object, owner, 1, crate::heap::AllocationDomain::Managed)
+        .unwrap();
+    vm.context.frames[0].evaluation_stack = vec![Value::Reference(object)];
+    let before = vm.context().clone();
+    assert!(
+        vm.run(1)
+            .unwrap_err()
+            .0
+            .contains("switch requires an I32 index")
+    );
+    assert_eq!(vm.context().frames, before.frames);
+}

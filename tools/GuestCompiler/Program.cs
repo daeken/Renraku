@@ -92,10 +92,16 @@ try
     File.WriteAllBytes(Path.Combine(output, "Renraku.SmallConversionTests.dll"), Compile("Renraku.SmallConversionTests", smallConversions,
         new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(guest) }));
 
+    string switches = File.ReadAllText(Path.Combine(root, "guest/IntegerSwitch.cs"));
+    byte[] switchTests = Compile("Renraku.SwitchTests", switches,
+        new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(guest) });
+    File.WriteAllBytes(Path.Combine(output, "Renraku.SwitchTests.dll"), switchTests);
+    SwitchReference.WriteRawFixture(switchTests, Path.Combine(output, "Renraku.RawSwitchTests.dll"));
+
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", ordinalText + Environment.NewLine + smallConversions + Environment.NewLine + negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
+    byte[] reference = Compile("Renraku.Reference", switches + Environment.NewLine + ordinalText + Environment.NewLine + smallConversions + Environment.NewLine + negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
@@ -158,6 +164,7 @@ try
     ShiftReference.Write(assembly, output);
     NegationReference.Write(assembly, output);
     SmallConversionReference.Write(assembly, output);
+    SwitchReference.Write(assembly, output);
     StringMapReference.Write(assembly, output);
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))
         File.WriteAllBytes(Path.Combine(output, Path.GetFileNameWithoutExtension(path) + ".dll"),

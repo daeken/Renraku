@@ -500,6 +500,10 @@ fn stack_shapes(program: &Program, method: &Method) -> Result<BTreeMap<u32, Vec<
                 stack.push(Kind::I64);
             }
             Op::Branch(target) => targets = vec![target],
+            Op::Switch(ref branches) => {
+                require(pop(&mut stack)? == Kind::I32, "invalid switch index type")?;
+                targets.extend(branches);
+            }
             Op::BranchIf { target, .. } => {
                 pop(&mut stack)?;
                 targets.push(target);
@@ -612,4 +616,68 @@ fn join(program: &Program, left: Kind, right: Kind) -> Result<Kind> {
     Err(Error(
         "inconsistent stack types at control flow merge".into(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        cil::decode,
+        execution::MethodVersion,
+        identity::{AssemblyId, CodeVersionId, MethodId},
+        program::Signature,
+    };
+    fn method(body: &[u8]) -> Method {
+        Method {
+            binding: MethodVersion {
+                method: MethodId::fresh(),
+                code: CodeVersionId::fresh(),
+            },
+            owner: TypeId::fresh(),
+            name: "Switch".into(),
+            assembly: AssemblyId::fresh(),
+            signature: Signature {
+                instance: false,
+                parameters: vec![],
+                result: Some(SlotType::I32),
+            },
+            locals: vec![],
+            initialize_locals: false,
+            max_stack: 4,
+            intrinsic: None,
+            instructions: decode(body).unwrap(),
+        }
+    }
+    #[test]
+    fn switch_abstract_validation_visits_all_targets_and_fallthrough_with_the_index_removed() {
+        // Both paths must see an empty stack after selection, and then return I32.
+        let valid = [0x16, 0x45, 1, 0, 0, 0, 2, 0, 0, 0, 0x16, 0x2a, 0x17, 0x2a];
+        let program = Program::default();
+        let shapes = stack_shapes(&program, &method(&valid)).unwrap();
+        assert!(shapes[&10].is_empty() && shapes[&12].is_empty());
+        for bad in [10, 12] {
+            let mut body = valid.to_vec();
+            body[bad] = 0x14; // bad return only on one successor
+            assert!(stack_shapes(&program, &method(&body)).is_err());
+        }
+        let mut wide = vec![0x21];
+        wide.extend(0i64.to_le_bytes());
+        wide.extend([0x45, 0, 0, 0, 0, 0x16, 0x2a]);
+        assert!(
+            stack_shapes(&program, &method(&wide))
+                .unwrap_err()
+                .0
+                .contains("switch index")
+        );
+        let invalid = [0x14, 0x45, 0, 0, 0, 0, 0x16, 0x2a];
+        assert!(
+            stack_shapes(&program, &method(&invalid))
+                .unwrap_err()
+                .0
+                .contains("switch index")
+        );
+        // A branch and fallthrough merge with incompatible stack heights.
+        let merge = [0x16, 0x45, 1, 0, 0, 0, 1, 0, 0, 0, 0x17, 0x16, 0x2a];
+        assert!(stack_shapes(&program, &method(&merge)).is_err());
+    }
 }

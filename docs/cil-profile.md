@@ -86,6 +86,7 @@ IL byte offsets remain byte offsets after decoding.
 | `conv.i1`, `conv.i2` | Keep low 8/16 bits and sign-extend to I32 |
 | `conv.u1`, `conv.u2` | Keep low 8/16 bits and zero-extend to I32 |
 | `br`, `br.s` | Branch to an instruction boundary |
+| `switch` | Consume an I32 index and select a validated jump-table target, or fall through |
 | `brfalse`, `brfalse.s`, `brtrue`, `brtrue.s` | Branch on an integer or reference |
 | `beq`, `bne.un`, and their short forms | Compare matching integers or references and branch |
 | `bge`, `bgt`, `ble`, `blt`, their unsigned forms, and all short forms | Compare matching integers and branch |
@@ -97,6 +98,35 @@ IL byte offsets remain byte offsets after decoding.
 | `ldfld`, `stfld` | Read or replace an instance field after receiver and type checks |
 | `ldsfld`, `stsfld` | Read or replace a static field |
 | `ret` | Complete a call and produce its result |
+
+Integer `switch` consumes one I32 index, compares its raw unsigned value with
+the table length, and selects that zero-based entry. Negative values and indices
+at/above the length fall through to the next instruction. A zero-entry table
+still consumes the index and falls through. Each signed 32-bit target delta is
+relative to the end of the complete encoded table, rather than its own entry.
+Duplicate targets and backward jumps are supported. Targets must be instruction
+boundaries inside the same method, and fallthrough must exist. See
+[ECMA-335 III.3.66](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=418).
+
+Renraku bounds each table to 4,096 entries. The decoder checks the declared count
+against remaining method bytes before allocation, uses checked relative-offset
+arithmetic, and rejects truncated/oversized tables and invalid targets. The table
+is immutable code metadata reconstructed from the saved assembly; it adds no
+guest array, value tag or checkpoint field. Execution requires an I32 index;
+I64/null/object values fault with their original frame/stack intact. Checkpoint
+validation removes the index and follows every target and fallthrough, including
+stack merges. Dispatch is one ordinary pure CIL step, not a host wait.
+
+`guest/IntegerSwitch.cs` compiles unchanged against both cores. A 1,432-case
+CoreCLR comparison covers dense signed/unsigned/offset/enum dispatch, I64 return
+values, seeded/boundary indices, plus independent DynamicMethods for naked
+zero-entry/duplicate/backward tables. A test-only PE variant replaces the reserved
+raw-method bodies, retaining metadata and method-body lengths. Thirty-two cases restore
+every instruction with GC and original bindings; a nested dispatch mutates the
+same Counter 19 to 30, then 7, while the first receipt keeps 30 without repeating
+a mutation. Seven fresh SDK-free native resumes retain saved switch indices and
+receipt identities/results, including the original Counter mutation. String-switch
+lowering and general pattern matching have no supported contract in this milestone.
 
 Two non-null references have no exposed ordering; ordering comparisons between
 them are rejected. The supported `callvirt` behavior handles calls Roslyn emits

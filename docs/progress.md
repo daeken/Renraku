@@ -556,13 +556,34 @@ and do not inherit persistence.
   unchanged. See [ordinal search](ordinal-text.md); no inference was needed.
 
 
+- Bounded CIL switch dispatch now consumes I32 indices and selects targets using
+  unsigned range checks, falling through for negative/oversized values. Every
+  target delta uses the full table-end base. Empty/duplicate/backward tables work;
+  tables are immutable code metadata with a 4,096-entry limit, checked encoded
+  lengths/relative arithmetic and strict target/fallthrough boundaries. I64/null/
+  object indices retain failing operands/continuations. Checkpoint abstract stacks
+  visit every target and fallthrough with the index removed, validating merges.
+  No guest array, value tag, host effect/wait or checkpoint field was added.
+  A 1,432-case actual CoreCLR matrix covers dense integer/unsigned/offset/enum
+  dispatch, wide returns and raw DynamicMethod zero/duplicate/backward tables.
+  Decoder/runtime/abstract-stack unit tests cover malformed lengths, limits,
+  offsets, targets and invalid indices. Thirty-two operations restore every
+  instruction with GC/pinned identities. A nested switch mutates Counter 19 to
+  30, then 7; replay of the first receipt returns 30 without another mutation or
+  changing Mutations=2. Seven SDK-free native resumes preserve saved indices,
+  executions/results and a single original-Counter mutation. Checked-addition
+  negative fixtures keep their purpose. CoreLib, old libraries, format 7/every
+  original fixture and both idle demos remain unchanged. See [CIL profile](cil-profile.md);
+  no inference was needed.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 271 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 280 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -831,22 +852,21 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next implement bounded integer CIL switch dispatch.** Consult primary
-ECMA-335 III.3.66 for the I32 index, unsigned selection/fallthrough semantics,
-relative target base and stack transition. Add no guest array/value kind: a
-branch table belongs to immutable method metadata. Bound the table count against
-remaining body bytes before allocation, use checked offset arithmetic, and reject
-truncated tables/invalid or non-instruction targets explicitly. Validate all
-branch/fallthrough stack paths and preserve a failing non-I32 operand. Compare
-actual emitted dense C# integer/enum switches with CoreCLR, plus raw zero-entry,
-duplicate-target, negative/out-of-range and relative-offset edge cases. Test
-instruction-cut GC/recovery, pinned IDs, a durable switch-selected mutation and
-SDK-free replay without repeating it. Keep string-switch patterns unsupported
-unless separately verified against the existing profile; do not infer new arrays,
-generics, EH or body replacement. Preserve all old code/library/foreign-type/
-receipt/provenance/transcript/reference-set/capability/demo/legacy contracts and
-update model guidance only for implemented dispatch. No live inference is needed
-for this core runtime milestone.
+**Next implement checked fixed-width integer arithmetic.** Follow primary
+ECMA-335 for add.ovf/add.ovf.un, sub.ovf/sub.ovf.un and mul.ovf/mul.ovf.un on
+matching I32/I64 stacks. Signed and unsigned variants must test their declared
+ranges before producing raw same-width bits; never inherit Rust panic/release
+behavior. Overflow uses the current terminal durable VM fault contract with
+original operands/continuations and prior mutations retained, not guest EH or
+rollback. Compare actual emitted C# with CoreCLR over boundaries/high bits/seeded
+cases, then instruction-cut/GC/recovery and terminal invoke-once overflow after
+an earlier mutation. Verify receipt replay, failed terminal saves, stable IDs and
+SDK-free native recovery. Move checked-addition rejection fixtures to a still
+unsupported checked conversion so opcode rejection remains meaningful. Keep
+native/floating/checked conversions, EH and small-width storage unsupported.
+Preserve all switch/arithmetic/library/foreign-type/reference-set/receipt/
+provenance/transcript/capability/demo/legacy contracts and update guidance only
+for implemented operations. No live inference is needed for this narrow step.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

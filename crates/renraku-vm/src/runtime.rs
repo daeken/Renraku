@@ -540,6 +540,14 @@ impl<'a> Vm<'a> {
                     .push(shift(value, count, &instruction.op)?);
             }
             Op::Branch(target) => frame.continuation = Continuation::Execute { next: target },
+            Op::Switch(ref targets) => {
+                let Value::I32(index) = pop(&mut frame)? else {
+                    return Err(Error("switch requires an I32 index".into()));
+                };
+                if let Some(&target) = targets.get(index as u32 as usize) {
+                    frame.continuation = Continuation::Execute { next: target };
+                }
+            }
             Op::BranchIf { target, when_true } => {
                 if truth(pop(&mut frame)?) == when_true {
                     frame.continuation = Continuation::Execute { next: target };
