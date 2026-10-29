@@ -126,6 +126,21 @@ discovery. Keep subscription access as the intended path, with no API-key billin
 fallback. Do not start login or more real inference in an unattended heartbeat.
 Existing local fixtures allow independent progress.
 
+The user raised async-by-default as an early replacement-BCL direction.
+[Suspension by default](suspension.md) now records the proposed contract and
+implementation order: ordinary CIL calls can park logical contexts, explicit
+managed futures/scopes express concurrency, suspension points remain observable,
+and no-suspend is separate from transaction isolation. Cancellation never proves
+remote non-acceptance. This is design direction, not newly implemented scheduling,
+Task<T>, C# async/await, or cancellation support.
+
+Prioritize asynchronous host delivery as the next runtime milestone: the current
+provider trait and reqwest transport still block the caller despite guest-frame
+suspension. Demonstrate independent progress while a local provider waits,
+retain generation fencing and receipt/wakeup crash tests, and keep native futures
+outside snapshots. Multi-context scheduling requires atomically checkpointing
+every context, wait relationship, heap, and code together, plus old-format readers.
+
 The next useful milestone is a persistent interactive conversation CLI: append
 ordinary linked guest messages, submit the complete captured history, and resume
 the same universe between turns. Keep conversation work in CIL and treat host

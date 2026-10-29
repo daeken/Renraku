@@ -194,6 +194,21 @@ rules require loader and interpreter tests. External capabilities are initially
 unavailable during type initialization. Thread-local statics and concurrent type
 initialization are deferred.
 
+## Suspension and the replacement BCL
+
+Operations that may wait should suspend the logical guest context by default.
+Ordinary CIL callers retain their portable frames; explicit managed tasks/futures
+express concurrent work and composition. Keep one canonical operation behind
+conventional and compatibility Async APIs. Pure computation remains ordinary CIL.
+May-suspend behavior must be observable; verified no-suspend regions must reject
+waits before effects are published. No-suspend does not supply transaction isolation.
+Cancellation and deadlines must not erase uncertainty about external acceptance.
+
+This is the direction for BCL expansion, rather than a claim that multi-context
+scheduling, managed futures, C# async/await, or cancellation are implemented.
+The current model call already parks guest frames, while native provider delivery
+still blocks its calling host. See the [design and implementation sequence](suspension.md).
+
 ## LLM harness and external effects
 
 The first harness should retain a conversation, a sequence of requests, completed
