@@ -84,8 +84,14 @@ cargo run -p renraku-vm -- run target/compiled-hello/Renraku.CoreLib.dll target/
 The result is **36**. The bundle captures exact sources, reference bytes, compiler
 identities/hashes, options, and emitted CIL. Compilation and runtime acceptance
 remain separate; unsupported CIL is rejected. Saved universes retain code and
-resume after the original compiler, source, and DLL files are gone. Loading new
-code into an already running universe remains future work.
+resume after the original compiler, source, and DLL files are gone.
+
+The [runtime workbench](docs/workbench.md) can search saved symbols, inspect exact
+CIL implementations, export compiler reference views, and install new callers
+while preserving existing objects and paused frames. Its acceptance fixture
+compiles a durable model response and executes it against the same persistent
+Counter across restarts. Existing-body replacement and native model tool calling
+remain future work.
 
 ## Save and resume a universe
 
@@ -255,8 +261,8 @@ delivery. Structured model requests and saved provider bindings are implemented.
 The selected first real provider is the OpenAI Responses API using the user's
 ChatGPT subscription through OAuth. Sign-in, account-specific discovery, streamed
 inference, and local receipt recovery are implemented. Interactive conversation,
-tools, broader introspection, and live code evolution remain
-on the architecture roadmap.
+model tool calling and existing-body replacement remain on the architecture
+roadmap. Read-only symbol/code tools and append-only code installation now work.
 
 The replacement BCL's direction is [suspension by default](docs/suspension.md):
 waiting operations park portable guest contexts, with explicit concurrency and

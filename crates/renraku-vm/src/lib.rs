@@ -17,3 +17,4 @@ pub mod model;
 pub mod program;
 pub mod runtime;
 pub mod value;
+pub mod workbench;

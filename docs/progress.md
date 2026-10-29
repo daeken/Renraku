@@ -84,6 +84,20 @@ and do not inherit persistence.
   on a current-thread executor with at most four blocking workers. Request,
   catalog, transport-diagnostic, SSE, and receipt policies are shared with the
   blocking compatibility adapter. Checkpoint format and ledger schema are unchanged.
+- Runtime workbench: bounded JSON symbol search, exact saved CIL inspection by
+  logical method/code ID, frozen compiler views with schema/core hashes and
+  symbol-to-ID bindings, and external Roslyn metadata reference generation.
+  The first export subset preserves primitive signedness, named parameters,
+  visibility, and readonly fields; unsupported declaration shapes fail explicitly.
+- Append-only `Program::link_modules` and atomic `Vm::install_program`, preserving
+  existing heap/type/field/method/code identities, paused frames, and effects.
+  Native CLI search/read-code/export-reference/install/invoke tools work against
+  a saved universe. Compiler reference images are explicitly rejected as code.
+- Deterministic code-generation acceptance fixture: a CIL model call receives
+  search/CIL output, returns source, and its saved response compiles against a
+  runtime view. Installed code mutates the same Counter 19 -> 26 -> 33 across
+  native CLI processes after deleting the build bundle. This tests the pipeline,
+  not autonomous model tool selection or live inference. See [workbench](workbench.md).
 
 ## Validation
 
@@ -91,7 +105,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 129 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 134 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -129,6 +143,11 @@ frame checkpoint resumes after deleting its source/bundle, retains static state
 on a second execution, and reopens with the native CLI under an empty PATH.
 The external Hello example returned 36 in 11 instructions; its CLI checkpoint
 paused at instruction 10 and resumed to the same result.
+Five further compiler/workbench tests verify identity-preserving installation
+with live frames, the scripted model/source/compiler/CLI acceptance path,
+rollback and stale installation rejection, exact code selection/search bounds,
+and compiler-visible metadata fidelity. Unsigned/named/readonly contracts work;
+properties, attributes, constants, and default parameters reject explicitly.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -159,9 +178,9 @@ Existing local fixtures allow independent progress.
 
 The latest user direction includes website hosting and runtime compilation, with
 Roslyn explicitly allowed to remain external and return a DLL. The reusable host
-compiler seam is implemented; it does not add a guest Compile intrinsic, durable
-compiler requests, or installation into an already running Program. Those need
-separate versioned code-registry transactions and active-frame retention. Keep
+compiler seam and append-only installation are implemented. Guest Compile,
+durable compilation requests, and replacement bodies on existing types remain
+future work. Keep
 the original architecture's self-hosting/non-arbitrary-.NET limits; do not turn
 running Roslyn inside Renraku into a prerequisite for runtime compilation.
 
@@ -192,16 +211,33 @@ of independent universes with concurrency inside one universe.
 The latest user clarification is runtime-generated metadata reference DLLs for
 Roslyn when live classes are not defined by conventional implementation DLLs.
 The [reference-assembly contract](compilation.md#reference-assemblies-for-live-runtime-types)
-is recorded. A local /refonly counter facade successfully compiled a caller
-using its field/method against only our core, but no live-registry exporter or
-ID-aware installer exists yet. Make the runtime schema authoritative; export
+is recorded, and the first exporter/reference compiler/append-only installer now
+work. Make the runtime schema authoritative; export
 deterministic per-logical-module views and pin their hashes plus symbol-to-ID
 bindings. Separate metadata/API revisions from heap generations and method-body
 versions. Facade tokens must never allocate replacement runtime type identities.
 Compiling a member body on an existing type needs explicit owning-type context
 and generated-definition-to-ID mappings; ordinary partial classes cannot extend
-a referenced compiled type. Current compiler inputs remain one core plus source
-files; additional reference inputs and durable schema authoring are next work.
+a referenced compiled type. Compiler inputs now accept up to 16 frozen reference
+views. Today schema is still derived from retained implementation metadata;
+independent durable schema authoring and broader reference shapes are future work.
+
+**The next acceptance target, selected by the user, is an LLM discovering APIs,
+reading existing code, writing C#, pulling it in, and executing it.** The
+[workbench](workbench.md) supplies the host tools and a complete deterministic
+fixture. Next connect a bounded model-selected tool loop, retain its transcript
+and source provenance, and prove recovery across compile/install/invoke actions.
+Use read-only search/code tools first. Existing subscription Responses transport
+accepts only final text, so native function calls need an explicit wire/result
+representation and receipt upgrade; do not silently treat function calls as text.
+A host-orchestrated structured-text tool protocol is another explicit prototype
+choice, but must validate every action and retain it before mutation. Give each
+mutation a durable request/execution identity so a lost reply resumes rather than
+reruns it. Do not claim the deterministic provider fixture is an actual model's
+autonomous acceptance. No new live inference ran in this milestone.
+Current `read-code` returns authoritative saved CIL with resolved logical targets;
+it explicitly reports no original source attached. Bundles retain exact C# source,
+but checkpointed source maps/provenance and decompilation remain future work.
 
 The next useful milestone is a persistent interactive conversation CLI: append
 ordinary linked guest messages, submit the complete captured history, and resume

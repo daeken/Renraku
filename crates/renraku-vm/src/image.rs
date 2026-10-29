@@ -104,6 +104,49 @@ fn word(bytes: &[u8], offset: usize) -> Result<u32> {
 }
 
 impl<'a> Image<'a> {
+    pub fn is_reference_assembly(&self) -> Result<bool> {
+        for attribute in self.rows(12) {
+            if attribute[0] & 31 != 14 {
+                continue;
+            } // HasCustomAttribute: Assembly
+            let constructor = attribute[1];
+            let type_row = match constructor & 7 {
+                2 => {
+                    let rid = constructor >> 3;
+                    let mut owner = None;
+                    for (index, row) in self.rows(2).iter().enumerate() {
+                        let end = self
+                            .rows(2)
+                            .get(index + 1)
+                            .map_or(self.rows(6).len() as u32 + 1, |r| r[5]);
+                        if (row[5]..end).contains(&rid) {
+                            owner = Some(row.as_slice());
+                            break;
+                        }
+                    }
+                    owner
+                }
+                3 => {
+                    let member = self.row(10, constructor >> 3)?;
+                    match member[0] & 7 {
+                        0 => Some(self.row(2, member[0] >> 3)?),
+                        1 => Some(self.row(1, member[0] >> 3)?),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(row) = type_row {
+                // TypeDef/TypeRef both store their name/namespace at columns 1/2.
+                if self.string(row[1])? == "ReferenceAssemblyAttribute"
+                    && self.string(row[2])? == "System.Runtime.CompilerServices"
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
     pub fn parse(bytes: &'a [u8]) -> Result<Self> {
         require(at(bytes, 0, 2)? == b"MZ", "missing DOS header")?;
         let pe = word(bytes, 0x3c)? as usize;

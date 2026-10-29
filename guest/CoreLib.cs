@@ -58,6 +58,10 @@ namespace System
 }
 namespace System.Runtime.CompilerServices
 {
+    public sealed class ReferenceAssemblyAttribute : System.Attribute
+    {
+        public ReferenceAssemblyAttribute() { }
+    }
     public enum MethodImplOptions { InternalCall = 4096 }
     public sealed class MethodImplAttribute : System.Attribute
     {

@@ -6,6 +6,7 @@ use renraku_vm::{
     program::Program,
     runtime::{RunOutcome, Vm},
     value::Value,
+    workbench::ReferenceView,
 };
 
 fn main() {
@@ -26,6 +27,11 @@ fn execute() -> Result<()> {
         "       renraku-vm run-persistent <universe.db> <CoreLib.dll> <guest.dll> <Type::Method> [budget] [checkpoint-interval]\n",
         "       renraku-vm resume <universe.db> [budget] [checkpoint-interval]\n",
         "       renraku-vm inspect-checkpoint <universe.db>\n",
+        "       renraku-vm search <universe.db> <query> [limit]\n",
+        "       renraku-vm read-code <universe.db> <method-or-code-ID>\n",
+        "       renraku-vm export-reference <universe.db> <type-name-or-ID> [type ...]\n",
+        "       renraku-vm install <universe.db> <implementation.dll> [reference-view.json ...]\n",
+        "       renraku-vm invoke <universe.db> <Type::Method> <instruction-budget> [i32:N|i64:N|object:ID|static:Type::Field|null ...]\n",
         "       renraku-vm queue-model <universe.db> <prompt>\n",
         "       renraku-vm dispatch-model <universe.db> <provider.db>\n",
         "       renraku-vm reconcile-model <universe.db> <provider.db>\n",
@@ -45,6 +51,122 @@ fn execute() -> Result<()> {
         return Err(Error(USAGE.into()));
     }
     match args.first().map(String::as_str) {
+        Some("search" | "read-code" | "export-reference" | "install" | "invoke") => {
+            let command = args[0].as_str();
+            let valid = match command {
+                "search" => (3..=4).contains(&args.len()),
+                "read-code" => args.len() == 3,
+                "export-reference" => (3..=34).contains(&args.len()),
+                "install" => (3..=19).contains(&args.len()),
+                "invoke" => (4..=132).contains(&args.len()),
+                _ => false,
+            };
+            if !valid {
+                return Err(Error(USAGE.into()));
+            }
+            if !std::path::Path::new(&args[1]).is_file() {
+                return Err(Error("checkpoint does not exist".into()));
+            }
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let program = &saved.snapshot.program;
+            match command {
+                "search" => print_json(
+                    &program.search_symbols(
+                        &args[2],
+                        usize::try_from(number(args.get(3), 20)?)
+                            .map_err(|_| Error("invalid search limit".into()))?,
+                    )?,
+                )?,
+                "read-code" => print_json(&program.read_code(&args[2])?)?,
+                "export-reference" => {
+                    let roots = args[2..]
+                        .iter()
+                        .map(|name| program.find_type(name))
+                        .collect::<Result<Vec<_>>>()?;
+                    println!(
+                        "{}",
+                        String::from_utf8(program.reference_view(&roots)?.to_json()?).unwrap()
+                    );
+                }
+                "install" => {
+                    let image = bounded_read(&args[2], 16 * 1024 * 1024)?;
+                    let views = args[3..]
+                        .iter()
+                        .map(|path| ReferenceView::from_json(&bounded_read(path, 4 * 1024 * 1024)?))
+                        .collect::<Result<Vec<_>>>()?;
+                    let linked = program.link_modules(&[&image], &views)?;
+                    let vm = saved
+                        .snapshot
+                        .restore()?
+                        .install_program(&mut store, &linked)?;
+                    print_json(
+                        &serde_json::json!({"installed":true,"universe":vm.universe_id().to_string(),"checkpoint":store.generation()}),
+                    )?;
+                }
+                "invoke" => {
+                    let mut vm = saved.snapshot.restore()?;
+                    let values = args[4..]
+                        .iter()
+                        .map(|arg| {
+                            if arg == "null" {
+                                return Ok(Value::Null);
+                            }
+                            let (kind, value) = arg
+                                .split_once(':')
+                                .ok_or_else(|| Error("invalid invocation argument".into()))?;
+                            match kind {
+                                "i32" => Ok(Value::I32(
+                                    value
+                                        .parse()
+                                        .map_err(|_| Error("invalid i32 argument".into()))?,
+                                )),
+                                "i64" => Ok(Value::I64(
+                                    value
+                                        .parse()
+                                        .map_err(|_| Error("invalid i64 argument".into()))?,
+                                )),
+                                "object" => vm
+                                    .heap()
+                                    .objects()
+                                    .find(|object| object.id().to_string() == value)
+                                    .map(|object| Value::Reference(object.id()))
+                                    .ok_or_else(|| Error("unknown object argument".into())),
+                                "static" => {
+                                    let fields: Vec<_> = program
+                                        .fields()
+                                        .filter(|field| {
+                                            let owner = program
+                                                .types()
+                                                .find(|ty| ty.id == field.owner)
+                                                .unwrap();
+                                            field.is_static
+                                                && format!("{}::{}", owner.name, field.name)
+                                                    == value
+                                        })
+                                        .collect();
+                                    if fields.len() != 1 {
+                                        return Err(Error(
+                                            "static argument is missing or ambiguous".into(),
+                                        ));
+                                    }
+                                    vm.static_fields().get(&fields[0].id).cloned().ok_or_else(
+                                        || Error("static argument has no storage".into()),
+                                    )
+                                }
+                                _ => Err(Error("unknown invocation argument kind".into())),
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    vm.start(program.entry(&args[2])?, values)?;
+                    let outcome =
+                        vm.run_checkpointed(&mut store, number(args.get(3), 100_000)?, 100)?;
+                    persistent_report(&vm, &store, outcome);
+                }
+                _ => unreachable!(),
+            }
+            return Ok(());
+        }
         Some("drive-local") if (5..=6).contains(&args.len()) => {
             if !allow_model {
                 return Err(Error("drive-local requires --allow-model-calls".into()));
@@ -319,6 +441,24 @@ fn execute() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_json(value: &serde_json::Value) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).map_err(|e| Error(e.to_string()))?
+    );
+    Ok(())
+}
+fn bounded_read(path: &str, limit: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(Error("input exceeds its size limit".into()));
+    }
+    Ok(bytes)
 }
 
 fn number(argument: Option<&String>, default: u64) -> Result<u64> {

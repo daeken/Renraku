@@ -95,8 +95,9 @@ reopens the checkpoint using the standalone native CLI with an empty PATH.
 ## Runtime compilation and installation
 
 The tool supplies the external compiler seam. It is not yet a managed
-`Compile` intrinsic, a durable compiler request, or code installation into a
-running universe. Current loading creates a fresh Program and logical bindings.
+`Compile` intrinsic or a durable compiler request. The
+[runtime workbench](workbench.md) now supports reference views and append-only
+code installation into an existing universe, preserving its logical bindings.
 
 The next compilation capability should capture source bytes, exact reference
 images, compiler identity/options, and a stable request ID, then return a
@@ -129,9 +130,12 @@ artifact + pinned bindings -> validated runtime installation
 Preserve logical module/assembly scope so identically named types from different
 modules remain distinct. Each exported symbol must map back to its existing
 TypeId, FieldId, or MethodId. Emitted metadata tokens are image-local locators,
-not logical identities. The installer resolves a compiled TypeRef/MemberRef
-through the exact reference image and symbol signature to those IDs. It must
-not import the facade's TypeDefs as newly allocated runtime classes.
+not logical identities. The initial installer verifies the view against the
+current registry and resolves compiled TypeRef/MemberRef scopes and supported
+signatures through that registry's existing bindings. The native host supplies
+the view alongside the implementation; a durable compile/artifact protocol must
+also bind those exact reference bytes to its request. The installer must not
+import the facade's TypeDefs as newly allocated runtime classes.
 
 The durable schema must retain compiler-facing metadata as well as execution
 tables: accessibility, properties/indexers and their accessors, constants,
@@ -163,8 +167,9 @@ silently create duplicate types or replace unrelated members.
 
 Today the registry is reconstructed from saved implementation images/bindings.
 Live type authoring will also require durable schema definitions independent of
-those original images. The exporter, additional compiler reference inputs, and
-ID-aware installation are not implemented by the current host compiler tool.
+those original images. The initial exporter, compiler view inputs, and append-only
+installer are implemented for a deliberately bounded declaration subset; see the
+[workbench guide](workbench.md) for commands and exact limits.
 
 A local SDK experiment emitted a /refonly Live.Counter contract and compiled a
 consumer that accesses its field and method, referencing only that facade and

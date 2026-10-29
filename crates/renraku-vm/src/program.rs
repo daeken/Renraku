@@ -242,6 +242,56 @@ fn member_range(start: u32, end: u32, count: usize) -> Result<std::ops::Range<u3
 }
 
 impl Program {
+    /// Append implementation modules to a preview registry. Existing code and
+    /// logical bindings remain immutable; reference facades are not inputs here.
+    pub fn link_modules(
+        &self,
+        additions: &[&[u8]],
+        views: &[crate::workbench::ReferenceView],
+    ) -> Result<Self> {
+        require(
+            !additions.is_empty() && additions.len() <= 16,
+            "link between 1 and 16 implementation modules",
+        )?;
+        for view in views {
+            view.validate(self)?;
+        }
+        let mut names = BTreeSet::new();
+        for bytes in additions {
+            require(
+                bytes.len() <= 16 * 1024 * 1024,
+                "implementation module exceeds its size limit",
+            )?;
+            let image = Image::parse(bytes)?;
+            require(
+                names.insert(image.string(image.row(32, 1)?[7])?.to_owned()),
+                "duplicate added module",
+            )?;
+        }
+        let mut old = self.bindings();
+        let mut bytes: Vec<_> = old.iter().map(|b| b.bytes.as_slice()).collect();
+        bytes.extend_from_slice(additions);
+        let fresh = Self::load(&bytes)?;
+        let mut added = Vec::new();
+        for binding in fresh.bindings() {
+            let image = Image::parse(&binding.bytes)?;
+            if names.contains(image.string(image.row(32, 1)?[7])?) {
+                added.push(binding);
+            }
+        }
+        old.extend(added);
+        Self::from_bindings(&old)
+    }
+    pub(crate) fn extends(&self, prior: &Self) -> Result<()> {
+        let current: BTreeMap<_, _> = self.bindings().into_iter().map(|b| (b.id, b)).collect();
+        require(
+            prior
+                .bindings()
+                .iter()
+                .all(|b| current.get(&b.id) == Some(b)),
+            "installation must retain all existing implementation images and logical bindings",
+        )
+    }
     pub fn load(assembly_bytes: &[&[u8]]) -> Result<Self> {
         Self::load_inner(assembly_bytes, None)
     }
@@ -293,6 +343,10 @@ impl Program {
         let mut assembly_names = BTreeSet::new();
         let mut modules = Vec::new();
         for (image_index, image) in images.iter().enumerate() {
+            require(
+                !image.is_reference_assembly()?,
+                "reference assemblies are compiler inputs, not executable implementations",
+            )?;
             let saved = bindings.map(|bindings| &bindings[image_index]);
             require(
                 image.rows(32).len() == 1,

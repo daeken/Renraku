@@ -76,6 +76,41 @@ enum Transition {
 }
 
 impl<'a> Vm<'a> {
+    /// Atomically checkpoint an append-only registry with the existing heap and
+    /// frames. On error reload the prior checkpoint; no partial registry is saved.
+    pub fn install_program<'b>(
+        self,
+        store: &mut crate::checkpoint::CheckpointStore,
+        program: &'b Program,
+    ) -> Result<Vm<'b>> {
+        program.extends(self.program)?;
+        let mut statics = self.statics;
+        for field in program
+            .fields
+            .values()
+            .filter(|f| f.is_static && !f.literal)
+        {
+            statics
+                .entry(field.id)
+                .or_insert_with(|| field.value_type.default_value());
+        }
+        let vm = Vm {
+            program,
+            statics,
+            heap: self.heap,
+            context: self.context,
+            instructions_executed: self.instructions_executed,
+            max_frames: self.max_frames,
+            universe: self.universe,
+            entry: self.entry,
+            checkpoint_generation: self.checkpoint_generation,
+            interned_strings: self.interned_strings,
+            effects: self.effects,
+            model_calls_enabled: self.model_calls_enabled,
+        };
+        store.save(&vm)?;
+        Ok(vm)
+    }
     pub fn new(program: &'a Program) -> Self {
         let statics = program
             .fields

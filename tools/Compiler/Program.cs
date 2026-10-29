@@ -21,7 +21,7 @@ static class Compiler
     {
         if (args.Length == 0 || args is ["--help"] or ["-h"])
         {
-            Console.WriteLine("Usage: Renraku.Compiler --core <Renraku.CoreLib.dll> --output <new-directory> --name <assembly-name> <source.cs> [source.cs ...]");
+            Console.WriteLine("Usage: Renraku.Compiler --core <Renraku.CoreLib.dll> --output <new-directory> --name <assembly-name> [--reference-view <view.json> ...] <source.cs> [source.cs ...]");
             return args.Length == 0 ? 2 : 0;
         }
         string? staging = null;
@@ -56,9 +56,37 @@ static class Compiler
             var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
                 optimizationLevel: OptimizationLevel.Release, deterministic: true,
                 concurrentBuild: false, checkOverflow: false, allowUnsafe: false);
+            var referenceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Renraku.CoreLib", request.Name };
+            var views = request.Views.Select(path =>
+            {
+                byte[] bytes = ReadBounded(path, MaxSources);
+                using var envelope = JsonDocument.Parse(bytes);
+                var root = envelope.RootElement;
+                string schema = root.GetProperty("schemaJson").GetString() ?? throw new ArgumentException("missing schemaJson");
+                string schemaHash = root.GetProperty("schemaHash").GetString() ?? throw new ArgumentException("missing schemaHash");
+                if (root.GetProperty("format").GetInt32() != 1 || Hash(Encoding.UTF8.GetBytes(schema)) != schemaHash
+                    || root.GetProperty("coreSha256").GetString() != Hash(core))
+                    throw new ArgumentException("reference view hash, core, or format mismatch");
+                using var metadata = JsonDocument.Parse(schema);
+                string name = metadata.RootElement.GetProperty("moduleName").GetString() ?? throw new ArgumentException("missing moduleName");
+                ValidateName(name);
+                if (!referenceNames.Add(name)) throw new ArgumentException("duplicate reference module name");
+                string declaration = "[assembly: global::System.Runtime.CompilerServices.ReferenceAssembly]\n" +
+                    (metadata.RootElement.GetProperty("declaration").GetString() ?? throw new ArgumentException("missing declaration"));
+                var facade = CSharpCompilation.Create(name,
+                    new[] { CSharpSyntaxTree.ParseText(declaration, parse, "reference.cs", Encoding.UTF8) },
+                    new[] { MetadataReference.CreateFromImage(core) }, options);
+                using var buffer = new BoundedImage(MaxAssembly);
+                var emitted = facade.Emit(buffer, options: new Microsoft.CodeAnalysis.Emit.EmitOptions(
+                    metadataOnly: true, includePrivateMembers: false, runtimeMetadataVersion: "v4.0.30319"));
+                if (!emitted.Success) throw new ArgumentException("invalid reference declaration: " +
+                    string.Join("; ", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Take(8)
+                        .Select(d => Limit(d.GetMessage(CultureInfo.InvariantCulture), 256))));
+                return new ReferenceInput(name, bytes, buffer.ToArray(), schemaHash);
+            }).ToArray();
             var compilation = CSharpCompilation.Create(request.Name,
                 inputs.Select(input => CSharpSyntaxTree.ParseText(input.Text, parse, input.Name, Encoding.UTF8)),
-                new[] { MetadataReference.CreateFromImage(core) }, options);
+                new[] { MetadataReference.CreateFromImage(core) }.Concat(views.Select(view => MetadataReference.CreateFromImage(view.Image))), options);
             using var image = new BoundedImage(MaxAssembly);
             var result = compilation.Emit(image, options:
                 new Microsoft.CodeAnalysis.Emit.EmitOptions(runtimeMetadataVersion: "v4.0.30319"));
@@ -82,7 +110,7 @@ static class Compiler
             byte[] assembly = image.ToArray();
             var manifest = new
             {
-                format = 1,
+                format = views.Length == 0 ? 1 : 2,
                 compiler = new { csharp = CompilerRecord(typeof(CSharpCompilation).Assembly),
                     common = CompilerRecord(typeof(Compilation).Assembly),
                     driver = CompilerRecord(typeof(Compiler).Assembly) },
@@ -92,7 +120,10 @@ static class Compiler
                     allowUnsafe = false, runtimeMetadataVersion = "v4.0.30319" },
                 core = FileRecord("Renraku.CoreLib.dll", core),
                 assembly = FileRecord(request.Name + ".dll", assembly),
-                sources = inputs.Select(input => FileRecord("sources/" + input.Name, input.Bytes)).ToArray()
+                sources = inputs.Select(input => FileRecord("sources/" + input.Name, input.Bytes)).ToArray(),
+                references = views.Select(view => new { schemaHash = view.SchemaHash,
+                    image = FileRecord("references/" + view.Name + ".dll", view.Image),
+                    view = FileRecord("references/" + view.Name + ".view.json", view.View) }).ToArray()
             };
             // Capture all inputs before publishing. The caller loads the exact
             // copied core reference, never a later edit to the original path.
@@ -105,6 +136,12 @@ static class Compiler
             Save(Path.Combine(staging, "Renraku.CoreLib.dll"), core);
             Save(Path.Combine(staging, request.Name + ".dll"), assembly);
             foreach (var input in inputs) Save(Path.Combine(staging, "sources", input.Name), input.Bytes);
+            if (views.Length != 0) Directory.CreateDirectory(Path.Combine(staging, "references"));
+            foreach (var view in views)
+            {
+                Save(Path.Combine(staging, "references", view.Name + ".dll"), view.Image);
+                Save(Path.Combine(staging, "references", view.Name + ".view.json"), view.View);
+            }
             Save(Path.Combine(staging, "renraku-build.json"), JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions));
             Directory.Move(staging, request.Output); // Never replaces an existing bundle.
             staging = null;
@@ -112,7 +149,7 @@ static class Compiler
                 diagnostics = report, diagnosticsTruncated = diagnostics.Length > 128 });
             return 0;
         }
-        catch (Exception error) when (error is ArgumentException or IOException or UnauthorizedAccessException or BadImageFormatException or InvalidOperationException)
+        catch (Exception error) when (error is ArgumentException or IOException or UnauthorizedAccessException or BadImageFormatException or InvalidOperationException or JsonException or KeyNotFoundException or FormatException)
         {
             Report(new { success = false, error = Limit(error.Message, 2048) });
             return 2;
@@ -130,23 +167,32 @@ static class Compiler
     static Request Parse(string[] args)
     {
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
+        var views = new List<string>();
         int index = 0;
         while (index < args.Length && args[index].StartsWith("--", StringComparison.Ordinal))
         {
             string option = args[index++];
+            if (option == "--reference-view" && index < args.Length && views.Count < 16)
+            { views.Add(Path.GetFullPath(args[index++])); continue; }
             if (option is not ("--core" or "--output" or "--name") || index == args.Length || !options.TryAdd(option, args[index++]))
                 throw new ArgumentException("expected each of --core, --output, and --name once, followed by source files");
         }
         if (options.Count != 3 || args.Length - index is < 1 or > 32)
             throw new ArgumentException("provide --core, --output, --name, and between 1 and 32 source files");
         string name = options["--name"];
-        if (name.Length is < 1 or > 80 || name.Equals("Renraku.CoreLib", StringComparison.OrdinalIgnoreCase)
-            || name.Split('.').Any(part => part.Length == 0 || !(char.IsAsciiLetter(part[0]) || part[0] == '_')
-                || part.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')))
-            throw new ArgumentException("assembly name must contain dot-separated ASCII identifiers and cannot be Renraku.CoreLib");
+        ValidateName(name);
+        if (name.Equals("Renraku.CoreLib", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("assembly name cannot be Renraku.CoreLib");
         string output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(options["--output"]));
         if (Path.GetDirectoryName(output) is null) throw new ArgumentException("output cannot be a filesystem root");
-        return new Request(Path.GetFullPath(options["--core"]), output, name, args[index..]);
+        return new Request(Path.GetFullPath(options["--core"]), output, name, args[index..], views.ToArray());
+    }
+    static void ValidateName(string name)
+    {
+        if (name.Length is < 1 or > 80
+            || name.Split('.').Any(part => part.Length == 0 || !(char.IsAsciiLetter(part[0]) || part[0] == '_')
+                || part.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')))
+            throw new ArgumentException("assembly name must contain dot-separated ASCII identifiers");
     }
     static byte[] ReadBounded(string path, int limit)
     {
@@ -164,7 +210,8 @@ static class Compiler
         catch (DirectoryNotFoundException) { return false; }
     }
     static object FileRecord(string file, byte[] bytes) => new { file, bytes = bytes.Length,
-        sha256 = Convert.ToHexStringLower(SHA256.HashData(bytes)) };
+        sha256 = Hash(bytes) };
+    static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
     static object CompilerRecord(System.Reflection.Assembly assembly)
     {
         using var file = File.OpenRead(assembly.Location);
@@ -178,7 +225,8 @@ static class Compiler
     }
     static string Limit(string value, int limit) => value.Length <= limit ? value : value[..limit];
     static void Report(object value) => Console.WriteLine(JsonSerializer.Serialize(value, JsonOptions));
-    sealed record Request(string Core, string Output, string Name, string[] Sources);
+    sealed record Request(string Core, string Output, string Name, string[] Sources, string[] Views);
+    sealed record ReferenceInput(string Name, byte[] View, byte[] Image, string SchemaHash);
     sealed record Input(string Name, byte[] Bytes, string Text);
     sealed class BoundedImage(int limit) : MemoryStream
     {
