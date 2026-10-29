@@ -400,7 +400,7 @@ and do not inherit persistence.
   conv.u8 (zero extension from I32), and the existing conv.i8 sign extension;
   both widening instructions preserve I64 bits. Decoder, execution and checkpoint
   abstract stacks agree on widths. Reference operands retain their failing stack
-  and continuation. Native/floating/small-width/checked conversions remain
+  and continuation. Native/floating and small-width checked conversions remain
   unsupported. A 1,764-case actual emitted C#/CoreCLR matrix and per-instruction
   GC/recovery cover high bits, narrowing/extension sequences and original bindings.
 - The separate append-only Renraku.UnsignedText module from
@@ -429,7 +429,7 @@ and do not inherit persistence.
   preserves its operand width. Decoder byte offsets and checkpoint abstract
   stacks retain the new operations without a checkpoint-format change. Null/
   object reference and mixed-width failures preserve original operands and
-  continuation. Native integers, checked conversions and EH
+  continuation. Native integers, small-width checked conversions and EH
   remain unsupported; there is no new host capability or wait.
   A separate guest/IntegerBitwise.cs test module compiles unchanged against both
   cores. Its 4,128-case real CoreCLR matrix covers all 16 direct signed/unsigned
@@ -452,7 +452,7 @@ and do not inherit persistence.
   including negative/high counts; left shift discards high bits, shr preserves
   sign and shr.un inserts zeros. This is Renraku's portable policy for ECMA's
   unspecified count range, separate from C#'s own emitted count masks. Native
-  values, I64 counts, checked conversions and EH remain unsupported.
+  values, I64 counts, small-width checked conversions and EH remain unsupported.
   Runtime/type rejection and checkpoint abstract stacks preserve failing operands,
   continuations and byte offsets. No new capability, host wait or checkpoint field.
   guest/IntegerShifts.cs compiles unchanged against both cores; 5,570 boundary/
@@ -528,7 +528,7 @@ and do not inherit persistence.
   retains d800, later stores dfff, and replays the original d800 receipt without
   changing dfff, Mutations=2 or Counter=21. Six fresh SDK-free native resumes
   retain all four conversion results and exact high/low surrogate units. No new
-  tag, capability, host wait or checkpoint format; checked/native/floating and EH
+  tag, capability, host wait or checkpoint format; small-width checked/native/floating and EH
   remain unsupported. See [CIL profile](cil-profile.md); no inference was needed.
 
 - Bounded ordinal string search is implemented in the separate append-only
@@ -585,7 +585,7 @@ and do not inherit persistence.
   the original frame/stack/continuation; terminal durable VM fault receipts do
   not roll back earlier instructions. Checkpoint abstract stacks track the same
   widths. No host capability/wait, value tag, CoreLib change or checkpoint field
-  was added. Checked/native/floating conversions, native/floating arithmetic,
+  was added. Small-width checked and native/floating conversions, native/floating arithmetic,
   arbitrary small-width storage and EH remain unsupported.
   guest/CheckedIntegerArithmetic.cs compiles unchanged against both cores. A
   4,608-case CoreCLR matrix independently verifies exact BigInteger ranges and
@@ -602,13 +602,39 @@ and do not inherit persistence.
   See [CIL profile](cil-profile.md); no inference was needed.
 
 
+- Checked fixed-width conversions conv.ovf.i4/u4/i8/u8 and all four .un forms
+  now accept I32/I64 input. Source interpretation is independent of target range:
+  plain forms read signed values and .un reads raw unsigned values, then checks
+  the target range before producing I32/I64 bits. For example I32 -1 becomes -1
+  with checked signed I64 conversion and 4294967295 with .un. Overflow/invalid
+  references retain original operands/continuations; existing durable faults
+  retain prior mutations without rollback/EH. Abstract stacks track target width.
+  No host capability/wait, value tag, CoreLib change or checkpoint field was added.
+  guest/CheckedIntegerConversions.cs compiles unchanged against both cores. A
+  5,024-case CoreCLR/BigInteger matrix covers sixteen actual C# cast shapes and
+  sixteen raw opcode/input-width combinations. Test-only PE variants and host
+  DynamicMethods cover checks Roslyn legitimately omits for safe casts. Eighty-two
+  success/fault operations restore each instruction with GC/original identities.
+  Nested casts update the original Counter 19 to 22, then 26; old receipt replay
+  returns 22 without changing 26 or Mutations=2. Eighteen mutating fault paths
+  retain original arguments through static/context replacement and GC. Six
+  injected terminal-save failures recover committed operands without repeating
+  mutation; twenty-five SDK-free native resumes/replays cover every raw conversion
+  and its possible overflow. Loader/compiler/install negative fixtures now reject
+  boxing instead of newly supported conv.ovf.i4. Small-width checked conversions,
+  native/floating inputs/targets, arbitrary small-width storage and EH remain
+  unsupported. Old core/library bodies, format 7/every legacy fixture and both
+  idle demos remain unchanged. See [CIL profile](cil-profile.md); no inference
+  was needed.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 287 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 294 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -877,22 +903,21 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next implement checked fixed-width integer conversions.** Consult primary
-ECMA-335 III.3.28–29/Table 8 for conv.ovf.i4/u4/i8/u8 and each .un form, taking
-I32/I64 values only. Distinguish source interpretation (.un means raw unsigned
-input) from target range/extension; the result remains I32/I64 storage. Validate
-ranges before narrowing or extending, retain failing operands/continuations,
-and use the current durable overflow fault contract without guest EH/rollback.
-Compare actual emitted C# with CoreCLR plus independent mathematical range
-oracles, including signed minima, high unsigned bits and every source/target
-width. Recover every instruction with GC, pinned IDs, prior-mutation fault
-receipts, failed terminal saves and SDK-free native replay. Move conv.ovf.i4
-negative fixtures to another still unsupported opcode such as boxing, preserving
-compiler/installation rejection coverage. Keep small-width checked conversions,
-native/floating inputs, arbitrary small-width storage and EH unsupported. Preserve
-all arithmetic/switch/library/foreign-result/reference-set/receipt/provenance/
-transcript/capability/demo/legacy contracts and update guidance after implementation.
-No live inference is needed for this narrow runtime milestone.
+**Next implement small-width checked integer conversions.** Consult primary
+ECMA-335 III.3.28–29/Table 8 for conv.ovf.i1/u1/i2/u2 and each .un form on
+I32/I64 input. Check signed/unsigned source interpretation against the independent
+8/16-bit target range before sign/zero-extending into I32; do not truncate on
+overflow. This enables checked casts within supported I32/I64 signatures and
+existing Char storage, not Byte/SByte/Int16/UInt16 fields/locals/signatures.
+Compare actual C# with CoreCLR and mathematical range oracles at min/max and
+near boundaries, high bits and exact Char surrogate units. Cover raw forms that
+Roslyn omits, reference failures with intact frames, abstract stacks, per-instruction
+GC/recovery, prior-mutation terminal fault receipts, failed saves and SDK-free
+replay. Keep current boxing rejection fixtures useful and CoreLib unchanged.
+Preserve all wide conversion/arithmetic/switch/library/foreign-result/reference-set/
+receipt/provenance/transcript/capability/demo/legacy contracts. Native/floating
+values, arbitrary small-width storage, EH and body replacement stay unsupported.
+Update guidance after implementation; no live inference is needed for this step.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

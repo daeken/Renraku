@@ -469,7 +469,7 @@ fn pure_compiler_recovery_does_not_imply_guest_cil_acceptance() {
         "Generated.Checked".into(),
         vec![(
             "Checked.cs".into(),
-            b"public static class Generated { public static int Convert(long value) { return checked((int)value); } }"
+            b"public static class Generated { public static object Box(int value) { return value; } }"
                 .to_vec(),
         )],
         vec![],

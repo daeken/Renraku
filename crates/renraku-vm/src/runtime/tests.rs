@@ -167,7 +167,9 @@ fn bitwise_operands_reject_references_and_mixed_widths_without_consuming_the_sta
         assert_eq!(vm.instructions_executed(), 2);
         assert!(vm.heap().object(id).is_ok());
     }
-    for opcode in 0xb3..=0xba {
+    for opcode in [
+        0xb3, 0xb4, 0xb5, 0xb6, 0x82, 0x83, 0x86, 0x87, 0xd4, 0xd5, 0x8a, 0x8b,
+    ] {
         assert!(
             decode(&[opcode])
                 .unwrap_err()
@@ -879,6 +881,53 @@ fn checked_arithmetic_rejects_mixed_widths_null_and_objects_without_consuming_op
             );
             assert_eq!(vm.context().frames, before.frames);
             assert_eq!(vm.instructions_executed(), 2);
+        }
+    }
+}
+
+#[test]
+fn checked_conversion_source_interpretation_is_separate_from_target_and_reference_failures_keep_frames()
+ {
+    for (opcode, input, expected, result) in [
+        (0xb9, Value::I32(-1), Value::I64(-1), SlotType::I64),
+        (0x85, Value::I32(-1), Value::I64(4294967295), SlotType::I64),
+        (0x89, Value::I32(-1), Value::I64(4294967295), SlotType::I64),
+        (0x89, Value::I64(-1), Value::I64(-1), SlotType::I64),
+        (0xb7, Value::I32(-1), Value::I32(-1), SlotType::I32),
+        (0x88, Value::I32(-1), Value::I32(-1), SlotType::I32),
+    ] {
+        assert_eq!(
+            eval(&[2, opcode, 0x2a], vec![input], vec![], result).unwrap(),
+            RunOutcome::Completed(Some(expected))
+        );
+    }
+    for opcode in [0x84, 0x85, 0x88, 0x89, 0xb7, 0xb8, 0xb9, 0xba] {
+        for object in [false, true] {
+            let (program, method) =
+                program(&[0x14, opcode, 0x2a], vec![], vec![], Some(SlotType::I32));
+            let mut vm = Vm::new(&program);
+            vm.start(method, vec![]).unwrap();
+            vm.run(1).unwrap();
+            if object {
+                let id = ObjectId::fresh();
+                vm.heap
+                    .allocate(
+                        id,
+                        program.method(method).unwrap().owner,
+                        1,
+                        crate::heap::AllocationDomain::Managed,
+                    )
+                    .unwrap();
+                vm.context.frames[0].evaluation_stack[0] = Value::Reference(id);
+            }
+            let before = vm.context().clone();
+            let error = vm.run(1).unwrap_err();
+            assert!(
+                error.0.contains("checked conversion requires an integer")
+                    && error.0.contains("IL_0001")
+            );
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 1);
         }
     }
 }

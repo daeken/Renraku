@@ -495,6 +495,13 @@ fn stack_shapes(program: &Program, method: &Method) -> Result<BTreeMap<u32, Vec<
                 )?;
                 stack.push(Kind::I32);
             }
+            Op::ConvertChecked { wide, .. } => {
+                require(
+                    !reference(pop(&mut stack)?),
+                    "invalid checked conversion operand",
+                )?;
+                stack.push(if wide { Kind::I64 } else { Kind::I32 });
+            }
             Op::ConvertI64 | Op::ConvertU64 => {
                 require(
                     !reference(pop(&mut stack)?),

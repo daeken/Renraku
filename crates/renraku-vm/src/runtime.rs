@@ -483,6 +483,19 @@ impl<'a> Vm<'a> {
                 };
                 frame.evaluation_stack.push(value);
             }
+            Op::ConvertChecked {
+                wide,
+                unsigned,
+                source_unsigned,
+            } => {
+                let value = pop(&mut frame)?;
+                frame.evaluation_stack.push(checked_conversion(
+                    value,
+                    wide,
+                    unsigned,
+                    source_unsigned,
+                )?);
+            }
             Op::ConvertI64 | Op::ConvertU64 => {
                 let value = match pop(&mut frame)? {
                     Value::I32(value) if matches!(instruction.op, Op::ConvertU64) => {
@@ -986,6 +999,37 @@ fn bitwise(left: Value, right: Value, op: &Op) -> Result<Value> {
                 "bitwise operations require matching integer stack types".into(),
             ));
         }
+    })
+}
+
+fn checked_conversion(
+    value: Value,
+    wide: bool,
+    unsigned: bool,
+    source_unsigned: bool,
+) -> Result<Value> {
+    // i128 represents every supported signed/unsigned source value exactly.
+    // Validate the target range before converting to its raw storage bits.
+    let number = match (value, source_unsigned) {
+        (Value::I32(n), false) => i128::from(n),
+        (Value::I32(n), true) => i128::from(n as u32),
+        (Value::I64(n), false) => i128::from(n),
+        (Value::I64(n), true) => i128::from(n as u64),
+        _ => return Err(Error("checked conversion requires an integer".into())),
+    };
+    let result = match (wide, unsigned) {
+        (false, false) => i32::try_from(number).map(Value::I32),
+        (false, true) => u32::try_from(number).map(|n| Value::I32(n as i32)),
+        (true, false) => i64::try_from(number).map(Value::I64),
+        (true, true) => u64::try_from(number).map(|n| Value::I64(n as i64)),
+    };
+    result.map_err(|_| {
+        Error(format!(
+            "conv.ovf.{}{}{} overflow",
+            if unsigned { "u" } else { "i" },
+            if wide { "8" } else { "4" },
+            if source_unsigned { ".un" } else { "" }
+        ))
     })
 }
 

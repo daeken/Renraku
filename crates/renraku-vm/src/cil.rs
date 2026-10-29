@@ -61,6 +61,11 @@ pub enum Op {
     ConvertI32,
     ConvertI64,
     ConvertU64,
+    ConvertChecked {
+        wide: bool,
+        unsigned: bool,
+        source_unsigned: bool,
+    },
     Branch(u32),
     Switch(Vec<u32>),
     BranchIf {
@@ -272,6 +277,11 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
             0x6e => Op::ConvertU64,
             0xd1 => Op::ConvertU16,
             0xd2 => Op::ConvertU8,
+            0xb7..=0xba | 0x84 | 0x85 | 0x88 | 0x89 => Op::ConvertChecked {
+                wide: matches!(opcode, 0xb9 | 0xba | 0x85 | 0x89),
+                unsigned: matches!(opcode, 0xb8 | 0xba | 0x88 | 0x89),
+                source_unsigned: opcode < 0xb7,
+            },
             0xd6 => Op::AddChecked { unsigned: false },
             0xd7 => Op::AddChecked { unsigned: true },
             0xd8 => Op::MultiplyChecked { unsigned: false },
