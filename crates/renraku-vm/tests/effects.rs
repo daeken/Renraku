@@ -413,7 +413,7 @@ fn format_three_outbox_and_active_frames_restore_and_upgrade_together() {
         .unwrap()
         .query_row("SELECT format FROM checkpoint", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(format, 5);
+    assert_eq!(format, 6);
 }
 
 #[test]

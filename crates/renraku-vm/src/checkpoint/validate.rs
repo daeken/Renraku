@@ -52,6 +52,7 @@ fn fields(program: &Program, id: TypeId) -> Result<BTreeSet<FieldId>> {
     Ok(fields)
 }
 pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
+    vm.validate_invocations()?;
     let retained = vm.retained_objects()?;
     let program = vm.program;
     for id in retained {

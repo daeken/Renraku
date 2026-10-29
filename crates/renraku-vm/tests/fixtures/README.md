@@ -22,6 +22,12 @@ receipt ledger, captured after provider acceptance and before the response was
 committed to the universe. Upgrading both must reconcile the first response
 without another submission, then complete the old guest with result 417.
 
+`checkpoint-v5.bin` was captured from commit 3ef5207's format 5 writer before
+invocation receipts were added. It contains ChatHarnessScore waiting at
+instruction 54 with a prepared structured model request. Local delivery and
+resumption must return 11, retaining its identities and captured history. Its
+SHA-256 is `ef1d346a345b2799ea79fa7b016876abdd0aa740815ed61e42f8ac8e6530871f`.
+
 All fixtures must stay unchanged. They test reading earlier formats and
 upgrading on the next successful commit; regenerating them with the current
 writer would lose that coverage.

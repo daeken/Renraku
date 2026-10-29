@@ -34,6 +34,7 @@ pub struct Vm<'a> {
     pub(crate) checkpoint_generation: Cell<u64>,
     pub(crate) interned_strings: BTreeMap<Vec<u16>, ObjectId>,
     pub(crate) effects: BTreeMap<crate::identity::EffectId, EffectRecord>,
+    pub(crate) invocations: BTreeMap<String, crate::invocation::InvocationRecord>,
     // Host authorization is deliberately not persisted by guest checkpoints.
     pub(crate) model_calls_enabled: bool,
 }
@@ -106,6 +107,7 @@ impl<'a> Vm<'a> {
             checkpoint_generation: self.checkpoint_generation,
             interned_strings: self.interned_strings,
             effects: self.effects,
+            invocations: self.invocations,
             model_calls_enabled: self.model_calls_enabled,
         };
         store.save(&vm)?;
@@ -122,6 +124,7 @@ impl<'a> Vm<'a> {
             program,
             interned_strings: BTreeMap::new(),
             effects: BTreeMap::new(),
+            invocations: BTreeMap::new(),
             model_calls_enabled: false,
             universe: UniverseId::fresh(),
             entry: None,
@@ -173,7 +176,12 @@ impl<'a> Vm<'a> {
                 .references()
                 .chain(self.statics.values().filter_map(Value::referenced_object))
                 .chain(self.interned_strings.values().copied())
-                .chain(self.effects.values().flat_map(EffectRecord::references)),
+                .chain(self.effects.values().flat_map(EffectRecord::references))
+                .chain(
+                    self.invocations
+                        .values()
+                        .flat_map(crate::invocation::InvocationRecord::references),
+                ),
         )?)
     }
     pub fn set_frame_limit(&mut self, limit: usize) -> Result<()> {
@@ -220,10 +228,12 @@ impl<'a> Vm<'a> {
                 self.context.status = ExecutionStatus::Faulted {
                     message: error.to_string(),
                 };
+                self.finish_invocation();
                 return Err(error);
             }
             self.instructions_executed = self.instructions_executed.saturating_add(1);
             if let ExecutionStatus::Completed { result } = self.context.status {
+                self.finish_invocation();
                 return Ok(RunOutcome::Completed(result));
             }
             if let ExecutionStatus::Waiting { effect } = self.context.status {

@@ -457,7 +457,7 @@ fn legacy_waiting_checkpoint_and_receipt_upgrade_and_reconcile_without_resubmiss
         connection
             .query_row("SELECT format FROM checkpoint", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
 }
 

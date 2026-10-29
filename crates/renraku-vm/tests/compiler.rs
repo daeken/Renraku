@@ -134,8 +134,20 @@ fn runtime_reference_view_links_callers_to_existing_objects_and_installs_with_li
     );
     let saved = program.fields().find(|f| f.name == "Saved").unwrap().id;
     let object = vm.static_fields()[&saved];
-    vm.start(common::entry(&program, "Run"), vec![]).unwrap();
-    assert_eq!(vm.run(6).unwrap(), RunOutcome::Paused);
+    let invocation = vm
+        .invoke_once(
+            &mut store,
+            "running-original",
+            common::entry(&program, "Run"),
+            vec![],
+            6,
+            6,
+        )
+        .unwrap();
+    assert_eq!(
+        invocation.state,
+        renraku_vm::invocation::InvocationState::Running
+    );
     let frames = vm.context().frames.clone();
     let execution = vm.context().id;
     let mut vm = vm.install_program(&mut store, &linked).unwrap();
@@ -145,6 +157,12 @@ fn runtime_reference_view_links_callers_to_existing_objects_and_installs_with_li
     assert_eq!(
         vm.run_checkpointed(&mut store, 1000, 7).unwrap(),
         RunOutcome::Completed(Some(Value::I32(48)))
+    );
+    assert_eq!(
+        vm.invocation("running-original").unwrap().state,
+        renraku_vm::invocation::InvocationState::Completed {
+            result: Some(Value::I32(48))
+        }
     );
     vm.start(linked.entry("Generated.Entry::Run").unwrap(), vec![object])
         .unwrap();
@@ -306,31 +324,42 @@ fn scripted_codegen_receipt_compiles_installs_and_executes_through_the_tool_cli(
     fs::remove_dir_all(bundle).unwrap();
     fs::remove_file(view_file).unwrap();
     let output = cli_ok(&[
-        "invoke",
+        "invoke-once",
         database,
+        "model-turn-1/invoke",
         "Generated.Entry::Run",
         "1000",
         "static:Renraku.Guest.Simulation::Saved",
     ]);
-    assert!(
-        String::from_utf8(output)
-            .unwrap()
-            .lines()
-            .any(|line| line == "result: 26")
-    );
-    let output = cli_ok(&[
-        "invoke",
+    let first: Json = serde_json::from_slice(&output).unwrap();
+    assert_eq!(first["state"], "completed");
+    assert_eq!(first["result"]["value"], 26);
+    let replay: Json = serde_json::from_slice(&cli_ok(&[
+        "invoke-once",
         database,
+        "model-turn-1/invoke",
+        first["methodId"].as_str().unwrap(),
+        "1000",
+        "static:Renraku.Guest.Simulation::Saved",
+    ]))
+    .unwrap();
+    assert_eq!(replay["execution"], first["execution"]);
+    assert_eq!(replay["result"]["value"], 26);
+    let receipt: Json =
+        serde_json::from_slice(&cli_ok(&["invocation", database, "model-turn-1/invoke"])).unwrap();
+    assert_eq!(receipt["execution"], first["execution"]);
+    assert_eq!(receipt["state"], "completed");
+    let second: Json = serde_json::from_slice(&cli_ok(&[
+        "invoke-once",
+        database,
+        "model-turn-2/invoke",
         "Generated.Entry::Run",
         "1000",
         "static:Renraku.Guest.Simulation::Saved",
-    ]);
-    assert!(
-        String::from_utf8(output)
-            .unwrap()
-            .lines()
-            .any(|line| line == "result: 33")
-    );
+    ]))
+    .unwrap();
+    assert_eq!(second["result"]["value"], 33);
+    assert_ne!(second["execution"], first["execution"]);
     let code: Json =
         serde_json::from_slice(&cli_ok(&["read-code", database, "Generated.Entry::Run"])).unwrap();
     assert_eq!(code["sourceAvailable"], false);

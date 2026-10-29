@@ -10,6 +10,7 @@ restart logic.
 `CheckpointStore::save` runs at a complete instruction boundary. It traverses
 named roots, static storage, active frames, pending constructor results,
 retained completion results, interned literals, and effect requests and responses.
+Invocation receipt arguments and returned references are roots too.
 Unreachable objects are omitted. Transient or
 dangling references cause an error before the transaction starts.
 
@@ -43,7 +44,7 @@ row contains a generation, universe ID, payload format version, SHA-256 checksum
 and binary payload. The checksum detects damaged payloads; it is not an
 authentication mechanism.
 
-The writer emits payload format version 5 and still reads versions 1 through 4. All start
+The writer emits payload format version 6 and still reads versions 1 through 5. All start
 with the eight bytes `RENRAKU\0` followed by a
 32-bit little endian version number and a 16-byte universe ID. It then records:
 
@@ -54,9 +55,10 @@ with the eight bytes `RENRAKU\0` followed by a
 4. Named roots and static fields.
 5. Interned literal string identities.
 6. Durable effect records.
-7. Execution identity, status, optional result, and original entry method version.
-8. The cumulative instruction count and configured frame limit.
-9. Frames with pinned method versions, continuations, arguments, locals, and
+7. Durable invocation request/receipt records.
+8. Execution identity, status, optional result, and original entry method version.
+9. The cumulative instruction count and configured frame limit.
+10. Frames with pinned method versions, continuations, arguments, locals, and
    evaluation stacks.
 
 IDs are opaque 16-byte values. Counts, byte lengths, IL offsets, schema versions,
@@ -91,11 +93,22 @@ and must contain 1–128 messages ending with a user message. Identifiers and th
 aggregate UTF-16 content limit are validated on save and restore. Formats 3 and 4
 restore with model echo-v1 and one user message referencing their existing request.
 
-The next successful commit writes version 5. Unmodified fixtures captured from
+Version 6 adds invocation records between the effect registry and the execution
+identity. Each record contains a length-prefixed UTF-8 request ID, method/code
+IDs, execution ID, a counted argument value sequence, and a state byte. State 0
+is running; state 1 is completed followed by an optional-result flag and value;
+state 2 is faulted followed by a length-prefixed UTF-8 diagnostic. There are at
+most 10,000 records. Earlier formats restore with an empty invocation registry.
+Receipts retain referenced arguments/results and are saved atomically with the
+heap, code, and frames. See [durable invocations](workbench.md#durable-invocation-requests).
+
+The next successful commit writes version 6. Unmodified fixtures captured from
 the earlier writers verify active version 1 frames, exact version 2 strings,
 and a version 3 completed effect alongside active frames. A format 4 waiting call
 has a matching original schema 1 provider receipt, proving upgrade and
-reconciliation without resubmission. All upgrade without
+reconciliation without resubmission. A format 5 fixture contains a structured
+ChatHarnessScore wait at instruction 54 and upgrades to result 11 with the local
+provider. All upgrade without
 changing their identities. Host authorization for future model calls is never
 serialized; it defaults to disabled after restoration.
 
@@ -146,6 +159,12 @@ default binding and single user message. Its next offset must follow that call,
 and its stack must match the call position after removing the arguments.
 Completion status requires an empty stack of frames and a result matching the
 entry signature.
+
+Invocation records must use valid unique request IDs and distinct execution
+IDs. Their exact method/code binding, argument count/types, and completed result
+must match the retained code. A running record must own the current execution;
+any record for that execution must agree with its entry and terminal status.
+Malformed or conflicting receipts are rejected even with a repaired checksum.
 
 This validator covers the supported profile and its checkpoint states. It is not
 a complete static CLI verifier or an isolation boundary for hostile code.

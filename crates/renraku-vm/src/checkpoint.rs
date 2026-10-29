@@ -13,6 +13,7 @@ use crate::{
         AssemblyId, CodeVersionId, EffectId, ExecutionId, FieldId, MethodId, ObjectId, TypeId,
         UniverseId,
     },
+    invocation::{InvocationRecord, InvocationState, MAX_INVOCATIONS},
     model::{DEFAULT_MODEL, MAX_MESSAGES, MessageReference, MessageRole},
     program::{AssemblyBindings, Program},
     runtime::{RunOutcome, Vm},
@@ -23,7 +24,7 @@ use sha2::{Digest, Sha256};
 use std::{cell::Cell, collections::BTreeMap, path::Path, time::Duration};
 
 const MAGIC: &[u8; 8] = b"RENRAKU\0";
-const FORMAT: u32 = 5;
+const FORMAT: u32 = 6;
 const APPLICATION_ID: i64 = 0x52454e52;
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_ITEMS: usize = 1_000_000;
@@ -36,6 +37,7 @@ struct State {
     statics: BTreeMap<FieldId, Value>,
     interned_strings: BTreeMap<Vec<u16>, ObjectId>,
     effects: BTreeMap<EffectId, EffectRecord>,
+    invocations: BTreeMap<String, InvocationRecord>,
     context: ExecutionContext,
     entry: Option<MethodVersion>,
     instructions: u64,
@@ -68,6 +70,7 @@ impl Snapshot {
             statics: state.statics,
             interned_strings: state.interned_strings,
             effects,
+            invocations: state.invocations,
             model_calls_enabled: false,
             context: state.context,
             universe: state.universe,
@@ -235,7 +238,7 @@ impl CheckpointStore {
             payload,
         } = row.ok_or_else(|| Error("no committed checkpoint".into()))?;
         require(
-            generation > 0 && matches!(format, 1..=5),
+            generation > 0 && matches!(format, 1..=6),
             "unsupported checkpoint format or generation",
         )?;
         require(
@@ -420,6 +423,27 @@ fn encode(vm: &Vm<'_>) -> Result<Vec<u8>> {
             w.id(message.content.as_bytes());
         }
     }
+    w.count(vm.invocations.len())?;
+    for (request, record) in &vm.invocations {
+        w.bytes(request.as_bytes())?;
+        w.method(record.method);
+        w.id(record.execution.as_bytes());
+        w.values(&record.arguments)?;
+        match &record.state {
+            InvocationState::Running => w.byte(0),
+            InvocationState::Completed { result } => {
+                w.byte(1);
+                w.byte(u8::from(result.is_some()));
+                if let Some(value) = result {
+                    w.value(*value);
+                }
+            }
+            InvocationState::Faulted { message } => {
+                w.byte(2);
+                w.bytes(message.as_bytes())?;
+            }
+        }
+    }
     w.id(vm.context.id.as_bytes());
     match &vm.context.status {
         ExecutionStatus::Runnable => w.byte(0),
@@ -570,7 +594,7 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
     require(r.take(8)? == MAGIC, "unsupported checkpoint payload format")?;
     let format = r.u32()?;
     require(
-        matches!(format, 1..=5),
+        matches!(format, 1..=6),
         "unsupported checkpoint payload format",
     )?;
     let universe = UniverseId::from_bytes(id(&mut r)?);
@@ -732,6 +756,52 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
             )?;
         }
     }
+    let mut invocations = BTreeMap::new();
+    if format >= 6 {
+        let length = count(&mut r, 58)?;
+        require(
+            length <= MAX_INVOCATIONS,
+            "invocation receipt limit reached",
+        )?;
+        for _ in 0..length {
+            let request = std::str::from_utf8(bytes(&mut r)?)
+                .map_err(|_| Error("invalid invocation request UTF-8".into()))?
+                .to_owned();
+            let method = method(&mut r)?;
+            let execution = ExecutionId::from_bytes(id(&mut r)?);
+            let arguments = values(&mut r)?;
+            let state = match r.u8()? {
+                0 => InvocationState::Running,
+                1 => InvocationState::Completed {
+                    result: if flag(&mut r)? {
+                        Some(value(&mut r)?)
+                    } else {
+                        None
+                    },
+                },
+                2 => InvocationState::Faulted {
+                    message: std::str::from_utf8(bytes(&mut r)?)
+                        .map_err(|_| Error("invalid invocation diagnostic UTF-8".into()))?
+                        .into(),
+                },
+                _ => return Err(Error("invalid invocation state".into())),
+            };
+            require(
+                invocations
+                    .insert(
+                        request,
+                        InvocationRecord {
+                            method,
+                            execution,
+                            arguments,
+                            state,
+                        },
+                    )
+                    .is_none(),
+                "duplicate invocation request ID",
+            )?;
+        }
+    }
     let execution = ExecutionId::from_bytes(id(&mut r)?);
     let status = match r.u8()? {
         0 => ExecutionStatus::Runnable,
@@ -816,6 +886,7 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
             statics,
             interned_strings,
             effects,
+            invocations,
             context: ExecutionContext {
                 id: execution,
                 status,

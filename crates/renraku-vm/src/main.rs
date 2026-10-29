@@ -3,6 +3,7 @@ use renraku_vm::{
     driver::{DriverLimits, DriverStop},
     effects::{EffectState, LocalModelProvider},
     error::{Error, Result},
+    invocation::{InvocationRecord, InvocationState},
     program::Program,
     runtime::{RunOutcome, Vm},
     value::Value,
@@ -32,6 +33,8 @@ fn execute() -> Result<()> {
         "       renraku-vm export-reference <universe.db> <type-name-or-ID> [type ...]\n",
         "       renraku-vm install <universe.db> <implementation.dll> [reference-view.json ...]\n",
         "       renraku-vm invoke <universe.db> <Type::Method> <instruction-budget> [i32:N|i64:N|object:ID|static:Type::Field|null ...]\n",
+        "       renraku-vm invoke-once <universe.db> <request-ID> <Type::Method> <instruction-budget> [arguments ...]\n",
+        "       renraku-vm invocation <universe.db> <request-ID>\n",
         "       renraku-vm queue-model <universe.db> <prompt>\n",
         "       renraku-vm dispatch-model <universe.db> <provider.db>\n",
         "       renraku-vm reconcile-model <universe.db> <provider.db>\n",
@@ -51,7 +54,10 @@ fn execute() -> Result<()> {
         return Err(Error(USAGE.into()));
     }
     match args.first().map(String::as_str) {
-        Some("search" | "read-code" | "export-reference" | "install" | "invoke") => {
+        Some(
+            "search" | "read-code" | "export-reference" | "install" | "invoke" | "invoke-once"
+            | "invocation",
+        ) => {
             let command = args[0].as_str();
             let valid = match command {
                 "search" => (3..=4).contains(&args.len()),
@@ -59,6 +65,8 @@ fn execute() -> Result<()> {
                 "export-reference" => (3..=34).contains(&args.len()),
                 "install" => (3..=19).contains(&args.len()),
                 "invoke" => (4..=132).contains(&args.len()),
+                "invoke-once" => (5..=133).contains(&args.len()),
+                "invocation" => args.len() == 3,
                 _ => false,
             };
             if !valid {
@@ -104,9 +112,17 @@ fn execute() -> Result<()> {
                         &serde_json::json!({"installed":true,"universe":vm.universe_id().to_string(),"checkpoint":store.generation()}),
                     )?;
                 }
-                "invoke" => {
+                "invocation" => {
+                    let vm = saved.snapshot.restore()?;
+                    let record = vm
+                        .invocation(&args[2])
+                        .ok_or_else(|| Error("invocation request ID is not recorded".into()))?;
+                    print_json(&invocation_json(&args[2], record, &vm, store.generation()))?;
+                }
+                "invoke" | "invoke-once" => {
                     let mut vm = saved.snapshot.restore()?;
-                    let values = args[4..]
+                    let method_index = if command == "invoke-once" { 3 } else { 2 };
+                    let values = args[method_index + 2..]
                         .iter()
                         .map(|arg| {
                             if arg == "null" {
@@ -158,10 +174,17 @@ fn execute() -> Result<()> {
                             }
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    vm.start(program.entry(&args[2])?, values)?;
-                    let outcome =
-                        vm.run_checkpointed(&mut store, number(args.get(3), 100_000)?, 100)?;
-                    persistent_report(&vm, &store, outcome);
+                    let method = program.entry(&args[method_index])?;
+                    let budget = number(args.get(method_index + 1), 100_000)?;
+                    if command == "invoke-once" {
+                        let record =
+                            vm.invoke_once(&mut store, &args[2], method, values, budget, 100)?;
+                        print_json(&invocation_json(&args[2], &record, &vm, store.generation()))?;
+                    } else {
+                        vm.start(method, values)?;
+                        let outcome = vm.run_checkpointed(&mut store, budget, 100)?;
+                        persistent_report(&vm, &store, outcome);
+                    }
                 }
                 _ => unreachable!(),
             }
@@ -268,6 +291,9 @@ fn execute() -> Result<()> {
             println!("statics: {:?}", vm.static_fields());
             for effect in vm.effects() {
                 println!("effect: {effect:?}");
+            }
+            for (request, record) in vm.invocations() {
+                println!("invocation {request}: {record:?}");
             }
             return Ok(());
         }
@@ -441,6 +467,37 @@ fn execute() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn invocation_json(
+    request: &str,
+    record: &InvocationRecord,
+    vm: &Vm<'_>,
+    generation: u64,
+) -> serde_json::Value {
+    use serde_json::json;
+    let value = |v: Value| match v {
+        Value::Null => json!({"kind":"null"}),
+        Value::I32(v) => json!({"kind":"i32","value":v}),
+        Value::I64(v) => json!({"kind":"i64","value":v.to_string()}),
+        Value::Reference(id) => json!({"kind":"object","id":id.to_string()}),
+    };
+    let (state, result, message) = match &record.state {
+        InvocationState::Running => ("running", None, None),
+        InvocationState::Completed { result } => ("completed", result.map(value), None),
+        InvocationState::Faulted { message } => ("faulted", None, Some(message)),
+    };
+    let waiting = if vm.context().id == record.execution {
+        match vm.context().status {
+            renraku_vm::execution::ExecutionStatus::Waiting { effect } => Some(effect.to_string()),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    json!({"format":1,"requestId":request,"execution":record.execution.to_string(),"checkpoint":generation,
+        "methodId":record.method.method.to_string(),"codeVersion":record.method.code.to_string(),
+        "state":state,"result":result,"diagnostic":message,"waitingEffect":waiting})
 }
 
 fn print_json(value: &serde_json::Value) -> Result<()> {

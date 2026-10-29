@@ -16,6 +16,38 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("invoke") if args.len() == 4 => {
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let mut vm = saved.snapshot.restore()?;
+            vm.invoke_once(
+                &mut store,
+                &args[2],
+                saved
+                    .snapshot
+                    .program
+                    .entry("Renraku.Guest.Simulation::StaticRoundTrip")?,
+                vec![],
+                0,
+                1,
+            )?;
+            vm.run(1000)?;
+            let stop = match args[3].as_str() {
+                "prepared" => CommitStage::Prepared,
+                "written" => CommitStage::Written,
+                "committed" => CommitStage::Committed,
+                _ => return Err(Error("invalid invocation crash stage".into())),
+            };
+            store.save_with_observer(&vm, |stage| {
+                if stage == stop {
+                    println!("READY {stage:?}");
+                    std::io::stdout().flush()?;
+                    std::io::stdin().read_exact(&mut [0u8; 1])?;
+                }
+                Ok(())
+            })?;
+            Ok(())
+        }
         Some("prepare") if matches!(args.len(), 6 | 7) => {
             let core = std::fs::read(&args[2])?;
             let guest = std::fs::read(&args[3])?;

@@ -40,7 +40,7 @@ and do not inherit persistence.
 - Provider model support is checked before external calls. Local echo-v1 receipts
   bind the entire versioned request body. Ledger schema 2 migrates schema 1
   receipts in place, retaining their original bytes and submission counts.
-- Payload format 5 with backward reading of formats 1 through 4. Preserve all
+- Payload format 6 with backward reading of formats 1 through 5. Preserve all
   checked-in legacy fixtures; they were captured from the earlier writers.
 - Separate host-only `renraku-openai` crate and CLI: subscription OAuth login,
   profile metadata and selection, refresh, and logout. Uses production discovery,
@@ -98,6 +98,12 @@ and do not inherit persistence.
   runtime view. Installed code mutates the same Counter 19 -> 26 -> 33 across
   native CLI processes after deleting the build bundle. This tests the pipeline,
   not autonomous model tool selection or live inference. See [workbench](workbench.md).
+- Durable `Vm::invoke_once` / CLI `invoke-once` binds a request ID to a pinned
+  method, exact arguments, and one execution. Intent commits before instructions;
+  completion/fault receipts commit with heap and frames. Retry resumes or returns
+  the saved result without a second mutation. Read receipts with `invocation`.
+  Receipt arguments/object results remain GC roots across unrelated executions.
+  Requests are generation-fenced and capped at 10,000, with no automatic eviction.
 
 ## Validation
 
@@ -105,7 +111,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 134 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 143 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -148,6 +154,14 @@ with live frames, the scripted model/source/compiler/CLI acceptance path,
 rollback and stale installation rejection, exact code selection/search bounds,
 and compiler-visible metadata fidelity. Unsigned/named/readonly contracts work;
 properties, attributes, constants, and default parameters reject explicitly.
+Nine invocation tests cover per-instruction replay, cached completion/fault
+receipts, retained object results/arguments after GC and unrelated calls,
+conflicting IDs, stale callers, failed intent/completion saves, model waits and
+driver completion, checksum-repaired corruption, and actual SIGKILL around commit.
+An original format 5 structured-chat snapshot, captured before the writer change,
+upgrades with an empty invocation registry and finishes with result 11.
+The compiler/CLI acceptance fixture now retries the same generated call and
+receives 26 again with the same execution ID, then uses a new ID to reach 33.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -227,6 +241,14 @@ reading existing code, writing C#, pulling it in, and executing it.** The
 [workbench](workbench.md) supplies the host tools and a complete deterministic
 fixture. Next connect a bounded model-selected tool loop, retain its transcript
 and source provenance, and prove recovery across compile/install/invoke actions.
+`invoke-once` now supplies the invocation identity/replay boundary; compile and
+install still need their own durable action/receipt protocol and source/artifact
+provenance. Keep the next milestones independently demonstrable: first make a
+compiled artifact/installation recoverable without replaying code installation,
+then connect a bounded model-selected loop using these host tools. Keep the
+model's actual transcript/source and tool result ownership durable. Tool loop
+state must not be an ephemeral Rust conversation vector. The existing linked
+managed conversation provides an initial source of truth.
 Use read-only search/code tools first. Existing subscription Responses transport
 accepts only final text, so native function calls need an explicit wire/result
 representation and receipt upgrade; do not silently treat function calls as text.
@@ -234,7 +256,7 @@ A host-orchestrated structured-text tool protocol is another explicit prototype
 choice, but must validate every action and retain it before mutation. Give each
 mutation a durable request/execution identity so a lost reply resumes rather than
 reruns it. Do not claim the deterministic provider fixture is an actual model's
-autonomous acceptance. No new live inference ran in this milestone.
+autonomous acceptance. No new live inference ran in these milestones.
 Current `read-code` returns authoritative saved CIL with resolved logical targets;
 it explicitly reports no original source attached. Bundles retain exact C# source,
 but checkpointed source maps/provenance and decompilation remain future work.
@@ -267,7 +289,7 @@ overrides are private to unit tests. Profile-bound capabilities are
 `openai.chatgpt.<profile-uuid>`. A ledger also binds issuer, subject, issued
 client, model, and canonical full request bytes. The new receipt ledger has
 application ID 0x52454f41 / schema 1; the old local.echo ledger remains schema 2.
-Keep both backends and all original format 1–4 fixtures intact.
+Keep both backends and all original format 1–5 fixtures intact.
 
 Public metadata contains no tokens. Preserve the pending-refresh marker,
 private Unix storage, profile registration/identity mapping, and lock invariants.

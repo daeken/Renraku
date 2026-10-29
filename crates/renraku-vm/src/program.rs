@@ -772,7 +772,10 @@ impl Program {
         let matches: Vec<_> = self
             .methods
             .values()
-            .filter(|method| format!("{}::{}", self.types[&method.owner].name, method.name) == name)
+            .filter(|method| {
+                method.binding.method.to_string() == name
+                    || format!("{}::{}", self.types[&method.owner].name, method.name) == name
+            })
             .collect();
         require(matches.len() == 1, "entry method is missing or overloaded")?;
         Ok(matches[0].binding.method)
