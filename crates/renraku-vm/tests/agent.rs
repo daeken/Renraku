@@ -2,7 +2,7 @@
 mod common;
 use common::{entry, fixtures, program};
 use renraku_vm::{
-    agent::{AgentHost, AgentLimits, AgentStage, AgentStop},
+    agent::{AgentEventKind, AgentHost, AgentLimits, AgentStage, AgentStop},
     checkpoint::CheckpointStore,
     effects::AsyncModelProvider,
     error::{Error, Result},
@@ -583,15 +583,33 @@ async fn guest_turn_updates_restore_from_small_instruction_budgets() {
     let test = Test::new();
     let mut provider = test.provider();
     let mut finished = false;
+    let mut delivered = std::collections::BTreeSet::new();
     for _ in 0..1000 {
         let report = test
             .host
-            .drive(
+            .drive_with_progress(
                 &mut provider,
                 AgentLimits {
                     instructions: 7,
                     provider_operations: 1,
                     tool_actions: 1,
+                },
+                |event| {
+                    let mut store = CheckpointStore::open(&test.host.universe)?;
+                    let saved = store.load()?;
+                    let vm = saved.snapshot.restore()?;
+                    let status = vm.agent_status()?;
+                    assert_eq!(status["turn"], event.turn);
+                    if event.kind == AgentEventKind::ResultSaved {
+                        assert!(status["result"].as_str().is_some());
+                        assert!(matches!(
+                            vm.context().status,
+                            renraku_vm::execution::ExecutionStatus::Completed { .. }
+                                | renraku_vm::execution::ExecutionStatus::Waiting { .. }
+                        ));
+                    }
+                    delivered.insert(event.id);
+                    Ok(())
                 },
             )
             .await
@@ -608,6 +626,50 @@ async fn guest_turn_updates_restore_from_small_instruction_budgets() {
         finished,
         "agent did not resume its partially updated guest turns"
     );
+    assert_eq!(provider.receipts(), 6);
+    assert_eq!(delivered.len(), 12);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn losing_committed_progress_output_replays_its_id_without_repeating_the_invocation() {
+    let test = Test::new();
+    let mut provider = test.provider();
+    let mut lost = None;
+    let error = test
+        .host
+        .drive_with_progress(&mut provider, limits(), |event| {
+            if event.turn == 5 && event.kind == AgentEventKind::ResultSaved {
+                lost = Some(event.id);
+                return Err(Error("lost console output".into()));
+            }
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+    assert!(error.0.contains("lost console output"));
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let (id, original) = vm.invocations().next().unwrap();
+    let id = id.to_owned();
+    let original = original.clone();
+    assert_eq!(vm.agent_status().unwrap()["phase"], 2);
+    let mut replayed = false;
+    let report = test
+        .host
+        .drive_with_progress(&mut provider, limits(), |event| {
+            if Some(&event.id) == lost.as_ref() {
+                replayed = true;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)) && replayed);
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.invocation(&id), Some(&original));
     assert_eq!(provider.receipts(), 6);
 }
 

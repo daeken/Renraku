@@ -165,6 +165,16 @@ and do not inherit persistence.
   [live report](acceptance/live-agent-2026-10-29.md). Corrected the agent guide's
   receipt path to a private directory outside Git after a pre-inference rejection.
   The user explicitly permits bounded live inference in future development.
+- Bounded `drive_with_progress` events project saved managed actions/results,
+  with stable universe/turn/event IDs and observed checkpoint generations. Partial
+  helper frames finish before result publication; waiting model calls can show
+  the previous saved turn. Events may replay after restart and never own actions.
+- Foreground agent progress/error summaries go to stderr; stdout remains one
+  format-1 JSON report with additive recovery guidance. Budget stops print quoted
+  resume commands preserving paths/profile/model; lifetime caps require inspection,
+  and uncertain inference permits receipt reconciliation only. Source is omitted
+  from progress, summaries cap at 512 UTF-8 bytes, and controls are escaped.
+  Finished live-session replay verified this output with zero operations.
 
 ## Validation
 
@@ -172,7 +182,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 173 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 177 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -237,7 +247,7 @@ inputs and compiler identity, failed preparation/publication, lost post-commit
 replies, foreign/corrupt ledgers, successful compilation with unsupported CIL,
 and actual SIGKILL at prepared, child-started, captured, written, and committed
 boundaries. Terminal replay is tested with an observer that fails if invoked.
-Ten coding-agent tests cover full action selection from actual saved request
+Eleven coding-agent tests cover full action selection from actual saved request
 history, lost results after all tools, SDK-free terminal replay, frozen static
 arguments, pre-invocation GC roots, uncertain inference without resubmission,
 strict inputs and all budgets, generated-code capability denial, compiler worker
@@ -252,6 +262,16 @@ recovery into a single action/mutation, and actual controller SIGKILL after the
 invocation commit but before its result append. Recovery preserves the exact
 invocation receipt and finishes with only the two remaining model POSTs. Fixtures
 select actions from received histories and do not prove real-model autonomy.
+Progress tests reopen the checkpoint from callbacks to verify result visibility
+after commit, including seven-instruction partial helper updates. Losing console
+output after the invocation result commits replays its event ID and original
+receipt without repeating the mutation. The HTTP correction/recovery fixture
+projects all 18 saved action/result events with zero-operation replay, including
+CS1503 diagnostics. Two console unit tests cover terminal-vs-budget/uncertain
+guidance and shell quoting of spaces, quotes, substitutions, and newlines. Another
+CLI integration test keeps progress on stderr and stdout parseable JSON, verifies
+bounded/control-escaped signed-out finished recovery without a new checkpoint,
+and retains error diagnostics plus frame-inspection guidance on preflight failure.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -348,12 +368,20 @@ and zero-operation recovery. Distinguish this evidence from the deterministic
 fixtures, which do not prove real-model autonomy. The user authorizes bounded
 live inference; use it when it resolves a meaningful acceptance question.
 
-**Next improve foreground feedback and recovery ergonomics for continued use.**
-The command currently reports only its final stop; expose bounded committed-turn
-progress and useful stop/recovery guidance while retaining the managed journal as
-the authority. Cover error/correction feedback and restart behavior with the local
-HTTP fixture. Keep machine-readable inspection available. Avoid another unrelated
-host-infrastructure detour. The longer-term website direction remains authorized.
+Foreground feedback and recovery guidance now work, backed by the managed journal
+and tested error/correction/restart paths. Keep machine-readable inspection/report
+output and stable replayable progress IDs; do not confuse presentation events with
+execution ownership or an exactly-once event-delivery protocol.
+
+**Next make the agent useful across follow-up goals in the same universe.**
+Add an explicit bounded user-input boundary after a finished goal, retain linked
+managed history, code, objects, and monotonic turn-derived request IDs, and give
+the input a durable identity so a lost CLI reply cannot append it twice. Begin
+with the existing lifetime limits; do not reset counters or reuse old mutation
+IDs. Prove that a second goal sees the already-mutated object and installed code
+without repeating the first goal's invocation. Use local HTTP fixtures, and live
+inference only when it answers a new acceptance question. Keep unsupported legacy
+guest schemas explicit. The longer-term website direction remains authorized.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

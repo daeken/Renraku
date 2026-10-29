@@ -111,6 +111,8 @@ retaining the conversation across process restarts. A finished restore returns
 the saved result with zero model operations. Local HTTP fixtures exercise the actual
 subscription adapter through compiler-error correction, full-history turns,
 lost results, and controller SIGKILL recovery without repeating the mutation.
+The foreground commands show bounded saved-turn progress on stderr and keep stdout
+as one JSON report with stop guidance and matching resume/inspection arguments.
 
 ## Save and resume a universe
 

@@ -164,3 +164,201 @@ fn agent_cli_requires_explicit_opt_in_and_validates_budgets_before_touching_stat
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("agent-drive"));
 }
+
+#[test]
+fn agent_console_separates_progress_from_json_and_gives_durable_resume_or_failure_guidance() {
+    use renraku_vm::{
+        driver::{DriverLimits, DriverStop},
+        effects::ModelProvider,
+        error::Result,
+        model::ModelRequest,
+        runtime::RunOutcome,
+        value::Value,
+    };
+    struct Finish(String, String);
+    impl ModelProvider for Finish {
+        fn capability(&self) -> &str {
+            &self.0
+        }
+        fn supports_model(&self, model: &str) -> bool {
+            model == "chosen-model"
+        }
+        fn submit(&mut self, _: &ModelRequest) -> Result<Vec<u16>> {
+            Ok(serde_json::json!({"op":"finish","message":self.1})
+                .to_string()
+                .encode_utf16()
+                .collect())
+        }
+        fn reconcile(&mut self, _: &ModelRequest) -> Result<Option<Vec<u16>>> {
+            unreachable!()
+        }
+    }
+    let directory = Directory::new();
+    let profile = Uuid::new_v4();
+    let auth = directory.0.join("auth");
+    fs::create_dir(&auth).unwrap();
+    let metadata = auth.join("profiles.json");
+    fs::write(&metadata, serde_json::to_vec(&serde_json::json!({"version":1,"host_id":Uuid::new_v4().urn().to_string(),"active":profile,
+        "profiles":[{"id":profile,"client_id":"offline_console_test","identity":{"issuer":"https://auth.openai.com","subject":"console-test","email":null},"session":null,"refresh_pending":false}]})).unwrap()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&auth, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&metadata, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let fixture = common::fixtures();
+    let universe = directory.0.join("world 'quoted'.db");
+    let mut args = vec![
+        "agent".into(),
+        universe.display().to_string(),
+        directory.0.join("receipts").display().to_string(),
+        directory.0.join("compiler.db").display().to_string(),
+        "/missing/compiler.dll".into(),
+        fixture
+            .output
+            .join("Renraku.CoreLib.dll")
+            .display()
+            .to_string(),
+        fixture
+            .output
+            .join("Renraku.Simulation.dll")
+            .display()
+            .to_string(),
+        profile.to_string(),
+        "chosen-model".into(),
+        "finish".into(),
+        "0".into(),
+        "0".into(),
+        "0".into(),
+        "--allow-model-calls".into(),
+    ];
+    let output = command(&directory.0, &args);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stop"], "instruction_budget");
+    assert_eq!(report["recovery"]["kind"], "resume");
+    assert_eq!(
+        report["recovery"]["resumeArgs"][4],
+        universe.display().to_string()
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Paused") && stderr.contains("Resume:") && stderr.contains("Inspect:"));
+
+    // Complete the managed finish turn locally. The CLI can then project saved
+    // progress while signed out, with no credentials or inference HTTP available.
+    let mut store = CheckpointStore::open(&universe).unwrap();
+    let saved = store.load().unwrap();
+    let program = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    vm.set_model_calls_enabled(true);
+    let message = "one\nline\u{1b}[31m🦀".to_owned() + &"x".repeat(600);
+    let mut provider = Finish(format!("openai.chatgpt.{profile}"), message.clone());
+    let model = vm
+        .drive_model(
+            &mut store,
+            &mut provider,
+            DriverLimits {
+                instructions: 1000,
+                provider_operations: 1,
+                checkpoint_interval: 100,
+            },
+        )
+        .unwrap();
+    assert!(matches!(model.stop, DriverStop::Completed(_)));
+    let input = vm
+        .new_string(
+            serde_json::json!({"op":"finish","message":message})
+                .to_string()
+                .encode_utf16()
+                .collect(),
+        )
+        .unwrap();
+    let mut freeze = vec![Value::Reference(input)];
+    freeze.resize(9, Value::Null);
+    vm.start(
+        program.entry("Renraku.Guest.AgentHarness::Freeze").unwrap(),
+        freeze,
+    )
+    .unwrap();
+    assert!(matches!(
+        vm.run_checkpointed(&mut store, 1000, 100).unwrap(),
+        RunOutcome::Completed(_)
+    ));
+    let result = vm
+        .new_string(
+            serde_json::json!({"ok":true,"message":message})
+                .to_string()
+                .encode_utf16()
+                .collect(),
+        )
+        .unwrap();
+    vm.start(
+        program.entry("Renraku.Guest.AgentHarness::Apply").unwrap(),
+        vec![Value::Reference(result), Value::I32(1)],
+    )
+    .unwrap();
+    vm.run_checkpointed(&mut store, 1000, 100).unwrap();
+    let before = store.generation();
+    assert_eq!(vm.agent_status().unwrap()["phase"], 3);
+    drop(vm);
+    drop(store);
+    let args_drive = vec![
+        "agent-drive".into(),
+        universe.display().to_string(),
+        directory.0.join("receipts").display().to_string(),
+        directory.0.join("compiler.db").display().to_string(),
+        "/missing/compiler.dll".into(),
+        profile.to_string(),
+        "chosen-model".into(),
+        "0".into(),
+        "0".into(),
+        "0".into(),
+        "--allow-model-calls".into(),
+    ];
+    let output = command(&directory.0, &args_drive);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["stop"], "finished");
+    assert_eq!(report["instructions"], 0);
+    assert_eq!(report["providerOperations"], 0);
+    assert!(report["recovery"].get("resumeArgs").is_none());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("turn 1 saved action [finish]")
+            && stderr.contains("turn 1 saved result [finish]")
+    );
+    assert!(stderr.contains("one\\nline\\u{1b}[31m🦀") && !stderr.contains('\u{1b}'));
+    for line in stderr.lines().filter(|l| l.starts_with("turn ")) {
+        assert!(line.len() < 600);
+    }
+    assert_eq!(
+        CheckpointStore::open(&universe)
+            .unwrap()
+            .load()
+            .unwrap()
+            .generation,
+        before
+    );
+
+    // A preflight error remains an error and retains its original saved world.
+    args[1] = directory.0.join("signed-out.db").display().to_string();
+    args[10] = "1000".into();
+    args[11] = "1".into();
+    args[12] = "16".into();
+    let output = command(&directory.0, &args);
+    assert!(!output.status.success() && output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("signed out")
+            && stderr.contains("Saved work is retained")
+            && stderr.contains("Frames:")
+    );
+}

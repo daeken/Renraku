@@ -11,6 +11,8 @@ use renraku_vm::{
     value::Value,
 };
 use std::{path::PathBuf, process::Command, time::Duration};
+mod agent_console;
+use agent_console::AgentConsole;
 
 fn main() {
     if let Err(error) = run() {
@@ -105,11 +107,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             drop(vm);
             drop(store);
-            runtime()?.block_on(async {
-                let mut provider =
-                    AsyncOpenAIProvider::open(&directory, receipts, profile, model).await?;
-                show_agent(host.drive(&mut provider, limits).await?)
-            })?;
+            let console = AgentConsole {
+                auth: directory.clone(),
+                universe: host.universe.clone(),
+                receipts: receipts.into(),
+                compiler_ledger: host.compiler_ledger.clone(),
+                compiler_driver: host.compiler_driver.clone(),
+                profile: profile.to_string(),
+                model: model.clone(),
+            };
+            runtime()?.block_on(run_agent(&host, &console, limits))?;
         }
         [
             command,
@@ -126,7 +133,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if !allow_model {
                 return Err("agent-drive requires --allow-model-calls".into());
             }
-            let profile = profile.parse()?;
+            let profile: uuid::Uuid = profile.parse()?;
             let limits = agent_limits(instructions, operations, actions)?;
             if !std::path::Path::new(universe).is_file() {
                 return Err("agent universe does not exist".into());
@@ -137,11 +144,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 dotnet: PathBuf::from("dotnet"),
                 compiler_driver: PathBuf::from(compiler_driver),
             };
-            runtime()?.block_on(async {
-                let mut provider =
-                    AsyncOpenAIProvider::open(&directory, receipts, profile, model).await?;
-                show_agent(host.drive(&mut provider, limits).await?)
-            })?;
+            let console = AgentConsole {
+                auth: directory.clone(),
+                universe: host.universe.clone(),
+                receipts: receipts.into(),
+                compiler_ledger: host.compiler_ledger.clone(),
+                compiler_driver: host.compiler_driver.clone(),
+                profile: profile.to_string(),
+                model: model.clone(),
+            };
+            runtime()?.block_on(run_agent(&host, &console, limits))?;
         }
         [command, id] if command == "models" => {
             for model in models(&directory, id.parse()?)? {
@@ -277,8 +289,43 @@ fn agent_limits(
     }
     Ok(limits)
 }
-fn show_agent(report: renraku_vm::agent::AgentReport) -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", serde_json::to_string_pretty(&report.summary())?);
+async fn run_agent(
+    host: &AgentHost,
+    console: &AgentConsole,
+    limits: AgentLimits,
+) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!(
+        "Opening saved coding session. Progress reflects saved managed turns; saved turns may be shown again on resume."
+    );
+    let outcome = async {
+        let mut provider = AsyncOpenAIProvider::open(
+            &console.auth,
+            &console.receipts,
+            console.profile.parse()?,
+            &console.model,
+        )
+        .await?;
+        Ok::<_, Box<dyn std::error::Error>>(
+            host.drive_with_progress(&mut provider, limits, |event| {
+                eprintln!("{}", agent_console::event_line(&event));
+                Ok(())
+            })
+            .await?,
+        )
+    }
+    .await;
+    let report = match outcome {
+        Ok(report) => report,
+        Err(error) => {
+            console.show_failure();
+            return Err(error);
+        }
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&console.report(&report, limits))?
+    );
+    console.show_guidance(&report.stop, limits);
     if let AgentStop::OutcomeUnknown(effect) = report.stop {
         return Err(
             format!("model effect {effect} remains uncertain; request was not resent").into(),

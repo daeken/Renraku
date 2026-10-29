@@ -63,6 +63,51 @@ authorized bounded live subscription inference, including recurring development.
 Local fixtures remain the regression suite; use live runs for meaningful model
 acceptance checks and retain their transcripts and receipts.
 
+## Progress and recovery output
+
+`agent` and `agent-drive` print short progress lines on stderr as managed actions
+and results become available:
+
+```text
+turn 4 saved action [compile]: compile Example (145 source bytes)
+turn 4 saved error [compile]: CS1503 Generated.cs:1: Argument 1: cannot convert from 'string' to 'int'
+turn 5 saved action [compile]: compile Example (139 source bytes)
+turn 5 saved result [compile]: compiled artifact saved
+turn 7 saved result [invoke]: returned {"kind":"i32","value":26}
+```
+
+An action line means the assistant action is saved. A result line means its
+managed tool result has committed with the linked transcript. Partial journal
+updates resume their CIL frames before publishing a result. Summaries contain at
+most 512 UTF-8 bytes, escape control characters, and omit compilation source.
+Use `agent-inspect` for full saved messages or `read-code` for installed source.
+
+Stdout remains one JSON report, with the existing format-1 result/counters and
+an additive `recovery` object. It identifies `finished`, `resume`, `inspect`, or
+`reconcile_only`, gives guidance, and includes `inspectArgs`. Budget stops also
+include `resumeArgs`, an argument array preserving the same universe, receipt
+directory, compiler ledger/driver, auth directory, profile, and model. Stderr
+prints the corresponding shell-quoted commands. Suggested resume budgets retain
+larger current values and otherwise use at least 10,000 instructions, one model
+operation, and 16 tool attempts. Running the suggested command is an explicit new
+invocation; it is never run automatically.
+
+Instruction/provider/tool budgets can be resumed. Lifetime turn/transcript caps
+require inspection and do not suggest increasing a per-run budget. An uncertain
+model outcome uses `reconcile_only`: the original completion ledger must yield a
+receipt before continuation. A missing receipt stops again without resubmission.
+Infrastructure and preflight failures still return an error and print inspection
+and saved-frame commands; a partially built journal may require the latter.
+
+Embedders can use `AgentHost::drive_with_progress` and `AgentEvent::json()` for
+structured events. IDs are `agent/<universe>/<turn>/action` or `/result`, with the
+observed checkpoint generation. Events are disposable projections of the latest
+saved turn, not a delivery ledger. They may repeat on resume; deduplicate display
+by ID if needed. They do not replace `agent-inspect`'s complete journal. A callback
+error can stop presentation after a commit; the next drive recovers from managed
+state and receipts without repeating a committed mutation. Progress adds no
+checkpoint fields or new model operations.
+
 ## Text action protocol
 
 The prototype reuses the adapter's final-text Responses transport. Each assistant
@@ -182,7 +227,7 @@ cargo test -p renraku-openai --test cli
 cargo test -p renraku-openai --lib inference::tests::agent
 ```
 
-Ten agent tests cover the selected search/read/compile/install/invoke/finish
+Eleven agent tests cover the selected search/read/compile/install/invoke/finish
 sequence, lost results around every tool, SDK-free published replay, frozen
 static arguments and pre-invocation GC roots, uncertain inference with and without
 receipts, strict inputs and budgets, generated-code capability denial, compiler

@@ -66,6 +66,9 @@ foreground `agent` / `agent-drive` command with bounded model-selected tools and
 a managed transcript. It uses one strict JSON action per final-text response;
 native Responses function calls remain unsupported. Both commands require
 explicit model opt-in. A general interactive conversation command is later work.
+Agent progress and compiler diagnostics appear on stderr after their managed
+turns commit. Stdout stays one JSON report, now including recovery guidance and
+resume/inspection arguments; see [agent output](agent.md#progress-and-recovery-output).
 
 ## Profile and transport contract
 

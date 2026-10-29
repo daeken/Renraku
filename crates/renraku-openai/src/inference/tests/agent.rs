@@ -1,12 +1,16 @@
 //! Exercise the real subscription adapter against loopback HTTP, never a live account.
 use super::*;
 use renraku_vm::{
-    agent::{AgentHost, AgentLimits, AgentStage, AgentStop},
+    agent::{AgentEvent, AgentEventKind, AgentHost, AgentLimits, AgentStage, AgentStop},
     compiler::CompilationStore,
     error::{Error as VmError, Result as VmResult},
     invocation::{InvocationRecord, InvocationState},
 };
-use std::{collections::BTreeSet, process::Command, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    process::Command,
+    sync::OnceLock,
+};
 
 const GOAL: &str = "Inspect Counter.Add; compile a caller that adds 7 to the saved counter, install and invoke it, then inspect its source. Preserve this text: \0🦀";
 const SOURCE: &str = "namespace Generated { public static class Entry { public static int Run(Renraku.Guest.Counter counter) { return counter.Add(7); } } }";
@@ -266,6 +270,7 @@ async fn http_coding_loop_corrects_compiler_errors_and_replays_lost_results_from
     initialize(&host, id);
     let server = server();
     let mut lost = BTreeSet::new();
+    let mut events = BTreeMap::<String, AgentEvent>::new();
     for _ in 0..20 {
         // Reopening both the controller and adapter on each turn simulates lost
         // host projections. Active account UI selection must not retarget calls.
@@ -280,19 +285,56 @@ async fn http_coding_loop_corrects_compiler_errors_and_replays_lost_results_from
                 Ok(())
             })
             .await;
-        match report {
+        let finished = match report {
             Err(error) => {
                 assert!(error.0.contains("lost tool reply"), "{error}");
                 // Turn 5's artifact is published. Replays and all later actions
                 // must work without the compiler; do not delete a shared fixture.
                 host.compiler_driver = directory.0.join("missing-compiler.dll");
+                false
             }
-            Ok(report) if matches!(report.stop, AgentStop::Finished(_)) => break,
-            Ok(report) => assert!(
-                matches!(report.stop, AgentStop::ProviderBudget),
-                "{report:?}"
-            ),
+            Ok(report) if matches!(report.stop, AgentStop::Finished(_)) => true,
+            Ok(report) => {
+                assert!(
+                    matches!(report.stop, AgentStop::ProviderBudget),
+                    "{report:?}"
+                );
+                false
+            }
+        };
+        // A fresh zero-operation drive projects the saved turn, or reconciles
+        // its tool receipt before publishing a committed result. It cannot POST.
+        let mut offline = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+        let replay = host
+            .drive_with_progress(&mut offline, budgets(0), |event| {
+                let mut store = CheckpointStore::open(&host.universe)?;
+                let saved = store.load()?;
+                let vm = saved.snapshot.restore()?;
+                let status = vm.agent_status()?;
+                assert_eq!(status["turn"], event.turn);
+                assert_eq!(saved.generation, event.checkpoint);
+                assert!(event.summary.len() <= 512 && !event.summary.chars().any(char::is_control));
+                assert!(event.json().to_string().len() < 2048);
+                assert!(!event.summary.contains("public static"));
+                if event.kind == AgentEventKind::ResultSaved {
+                    let result: Value =
+                        serde_json::from_str(status["result"].as_str().unwrap()).unwrap();
+                    assert_eq!(result["ok"].as_bool(), event.ok);
+                }
+                if let Some(previous) = events.get(&event.id) {
+                    assert_eq!((&previous.summary, previous.ok), (&event.summary, event.ok));
+                }
+                events.insert(event.id.clone(), event);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(replay.provider_operations, 0);
+        if finished {
+            assert!(matches!(replay.stop, AgentStop::Finished(_)));
+            break;
         }
+        assert_eq!(replay.stop, AgentStop::ProviderBudget);
         profile(&directory.0.join("auth"), "other-account", "other-token");
     }
     assert_eq!(lost, [5, 6, 7].into());
@@ -301,6 +343,18 @@ async fn http_coding_loop_corrects_compiler_errors_and_replays_lost_results_from
     assert_eq!(status["turn"], 9);
     assert_eq!(receipt_counts(&directory.0), (9, 9));
     assert_eq!(server.posts(), 9);
+    assert_eq!(events.len(), 18);
+    let compiler_error = events
+        .values()
+        .find(|e| e.turn == 4 && e.kind == AgentEventKind::ResultSaved)
+        .unwrap();
+    assert_eq!(compiler_error.ok, Some(false));
+    assert!(compiler_error.summary.contains("CS1503 Generated.cs:1"));
+    let invocation = events
+        .values()
+        .find(|e| e.turn == 7 && e.kind == AgentEventKind::ResultSaved)
+        .unwrap();
+    assert!(invocation.summary.contains("26"));
     assert_http_history(&server, &status);
     let mut store = CheckpointStore::open(&host.universe).unwrap();
     let saved = store.load().unwrap();

@@ -84,6 +84,32 @@ impl AgentReport {
         json!({"format":1,"stop":stop,"result":result,"uncertainEffect":effect,"instructions":self.instructions,"providerOperations":self.provider_operations,"toolActions":self.tool_actions})
     }
 }
+/// A bounded projection of a saved managed turn, never a host action queue.
+/// IDs may be replayed on resume; callers can deduplicate presentation by ID.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentEvent {
+    pub id: String,
+    pub session_id: String,
+    pub turn: u32,
+    pub checkpoint: u64,
+    pub kind: AgentEventKind,
+    pub action: &'static str,
+    pub ok: Option<bool>,
+    pub summary: String,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentEventKind {
+    ActionSaved,
+    ResultSaved,
+}
+impl AgentEvent {
+    pub fn json(&self) -> Json {
+        json!({"format":1,"id":self.id,"sessionId":self.session_id,"turn":self.turn,
+            "checkpoint":self.checkpoint,"kind":match self.kind {
+                AgentEventKind::ActionSaved=>"action_saved", AgentEventKind::ResultSaved=>"result_saved"},
+            "action":self.action,"ok":self.ok,"summary":self.summary})
+    }
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentStage {
     ToolStarted(u32),
@@ -365,6 +391,147 @@ fn parse_action(units: &[u16]) -> Result<Action> {
         Error("invalid action schema; return one supported JSON object with no extra fields".into())
     })
 }
+fn event_line(text: &str) -> String {
+    let mut line = String::new();
+    for c in text.chars() {
+        let escaped = if c.is_control() {
+            c.escape_default().to_string()
+        } else {
+            c.to_string()
+        };
+        if line.len() + escaped.len() > 509 {
+            line.push('…');
+            break;
+        }
+        line.push_str(&escaped);
+    }
+    line
+}
+fn action_summary(action: Option<&Action>) -> (&'static str, String) {
+    match action {
+        Some(Action::Search { query, .. }) => ("search", format!("search {query}")),
+        Some(Action::ReadCode { method }) => ("read_code", format!("read code {method}")),
+        Some(Action::Describe { type_name }) => ("describe", format!("describe {type_name}")),
+        Some(Action::Compile {
+            assembly, source, ..
+        }) => (
+            "compile",
+            format!("compile {assembly} ({} source bytes)", source.len()),
+        ),
+        Some(Action::Install { compilation_turn }) => (
+            "install",
+            format!("install compilation from turn {compilation_turn}"),
+        ),
+        Some(Action::Invoke { method, arguments }) => (
+            "invoke",
+            format!("invoke {method} ({} arguments)", arguments.len()),
+        ),
+        Some(Action::Finish { message }) => ("finish", message.clone()),
+        None => ("invalid", "invalid or unsupported action".into()),
+    }
+}
+fn result_summary(result: &Json) -> String {
+    if let Some(error) = result["error"].as_str() {
+        return error.into();
+    }
+    if result["output"]["state"] == "rejected" {
+        if let Some(diagnostic) = result["output"]["report"]["diagnostics"]
+            .as_array()
+            .and_then(|ds| {
+                ds.iter()
+                    .find(|d| d["severity"] == "error")
+                    .or_else(|| ds.first())
+            })
+        {
+            return format!(
+                "{} {}:{}: {}",
+                diagnostic["code"].as_str().unwrap_or("compiler error"),
+                diagnostic["file"].as_str().unwrap_or("source"),
+                diagnostic["line"],
+                diagnostic["message"]
+                    .as_str()
+                    .unwrap_or("compilation rejected")
+            );
+        }
+        return "compilation rejected; inspect the saved diagnostics".into();
+    }
+    if result["output"]["state"] == "compiled" {
+        return "compiled artifact saved".into();
+    }
+    if let Some(assembly) = result["assemblyId"].as_str() {
+        return format!("installed assembly {assembly}");
+    }
+    if let Some(value) = result.get("result") {
+        return format!("returned {value}");
+    }
+    if let Some(message) = result["message"].as_str() {
+        return message.into();
+    }
+    if let Some(symbols) = result["output"]["symbols"].as_array() {
+        return format!("{} symbols returned", symbols.len());
+    }
+    if let Some(instructions) = result["output"]["instructions"].as_array() {
+        return format!(
+            "{} CIL instructions; retained source {}",
+            instructions.len(),
+            if result["output"]["sourceAvailable"] == true {
+                "available"
+            } else {
+                "unavailable"
+            }
+        );
+    }
+    if result.get("schemaHash").is_some() {
+        return "compiler contract returned".into();
+    }
+    "tool result saved".into()
+}
+fn publish_progress(
+    state: &SessionView,
+    checkpoint: u64,
+    delivered: &mut BTreeSet<String>,
+    progress: &mut impl FnMut(AgentEvent) -> Result<()>,
+) -> Result<()> {
+    let Some(raw) = state.action.as_deref() else {
+        return Ok(());
+    };
+    let action = parse_action(raw).ok();
+    let (op, summary) = action_summary(action.as_ref());
+    let mut publish = |kind, ok, summary: String| -> Result<()> {
+        let suffix = if kind == AgentEventKind::ActionSaved {
+            "action"
+        } else {
+            "result"
+        };
+        let id = format!("agent/{}/{}/{suffix}", state.id, state.count);
+        if delivered.insert(id.clone()) {
+            progress(AgentEvent {
+                id,
+                session_id: state.id.clone(),
+                turn: state.count,
+                checkpoint,
+                kind,
+                action: op,
+                ok,
+                summary: event_line(&summary),
+            })?;
+        }
+        Ok(())
+    };
+    publish(AgentEventKind::ActionSaved, None, summary)?;
+    // Apply can checkpoint halfway through updating the linked transcript.
+    // The engine calls this only after owned helper frames have completed.
+    if let Some(result) = state.result.as_deref() {
+        let result: Json =
+            serde_json::from_str(result).map_err(|_| Error("invalid saved agent result".into()))?;
+        publish(
+            AgentEventKind::ResultSaved,
+            result["ok"].as_bool(),
+            result_summary(&result),
+        )?;
+    }
+    Ok(())
+}
 fn argument(vm: &Vm<'_>, arg: &Argument) -> Result<Value> {
     match arg {
         Argument::Null => Ok(Value::Null),
@@ -556,7 +723,28 @@ impl AgentHost {
         &self,
         provider: &mut P,
         limits: AgentLimits,
+        observer: impl FnMut(AgentStage) -> Result<()>,
+    ) -> Result<AgentReport> {
+        self.drive_observed(provider, limits, observer, |_| Ok(()))
+            .await
+    }
+    /// Progress is disposable presentation of the latest saved turn. It can
+    /// repeat IDs after restart and is never emitted from a partial CIL helper.
+    pub async fn drive_with_progress<P: AsyncModelProvider>(
+        &self,
+        provider: &mut P,
+        limits: AgentLimits,
+        progress: impl FnMut(AgentEvent) -> Result<()>,
+    ) -> Result<AgentReport> {
+        self.drive_observed(provider, limits, |_| Ok(()), progress)
+            .await
+    }
+    async fn drive_observed<P: AsyncModelProvider>(
+        &self,
+        provider: &mut P,
+        limits: AgentLimits,
         mut observer: impl FnMut(AgentStage) -> Result<()>,
+        mut progress: impl FnMut(AgentEvent) -> Result<()>,
     ) -> Result<AgentReport> {
         require(
             limits.tool_actions <= 32 && limits.instructions <= 1_000_000,
@@ -565,6 +753,7 @@ impl AgentHost {
         let mut instructions = 0;
         let mut operations = 0;
         let mut actions = 0;
+        let mut delivered = BTreeSet::new();
         macro_rules! stop {
             ($stop:expr) => {
                 return Ok(AgentReport {
@@ -581,6 +770,17 @@ impl AgentHost {
             let mut vm = saved.snapshot.restore()?;
             if let Some(model) = active_owned(&vm)? {
                 if model {
+                    // A waiting Chat call has not begun appending its answer.
+                    // Its previous turn is stable even while the native HTTP
+                    // future/receipt lookup is pending on this resumed drive.
+                    if matches!(vm.context().status, ExecutionStatus::Waiting { .. }) {
+                        publish_progress(
+                            &session(&vm)?,
+                            store.generation(),
+                            &mut delivered,
+                            &mut progress,
+                        )?;
+                    }
                     vm.set_model_calls_enabled(true);
                     let report = vm
                         .drive_model_async(
@@ -618,6 +818,7 @@ impl AgentHost {
                 continue;
             }
             let state = session(&vm)?;
+            publish_progress(&state, store.generation(), &mut delivered, &mut progress)?;
             if state.phase == 3 {
                 let result: Json = serde_json::from_str(
                     state
