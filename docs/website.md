@@ -99,12 +99,76 @@ cargo run -p renraku-vm -- inspect-checkpoint target/website.db
 cargo run -p renraku-vm -- invocation target/website.db http-v1/UNIVERSE_ID/visit-one
 ```
 
-A restarted host may choose a different installed handler for new IDs. Existing
-requests keep their original binding and saved result. The initial host selector
-is fixed until restart; a durable route table and live route publication remain
-future work. The host also pins its universe ID and rejects an unexpected database
-replacement. No sockets, native threads, or browser storage become guest state.
-The existing checkpoint format remains 7, with readers for formats 1 through 6.
+Existing requests keep their original binding and saved result through handler
+publication and host restarts. The host pins its universe ID and rejects an
+unexpected database replacement. No sockets, native threads, or browser storage
+become guest state. Checkpoint format remains 7, with readers for formats 1–6.
+
+## Compile, install, and publish a handler
+
+Publication selects one saved **default** handler for new request IDs. The handler
+still owns application routing by request target. Every new request reloads this
+binding; a running host observes a publication without restarting. Already accepted
+requests resume their original pinned method/code, and completed requests return
+their original immutable response. Publication can commit at a paused handler's
+instruction boundary; it does not start a second guest context or replace a body.
+New requests still wait until that active execution finishes.
+
+The three operations have separate identities and commits. Compile a new caller
+against the current Website reference view, install it, then explicitly publish it:
+
+```sh
+dotnet build tools/Compiler --output target/compiler
+cargo run -p renraku-vm -- export-reference target/website.db Renraku.Guest.Website > target/website-view.json
+cargo run -p renraku-vm -- compile-once target/website.db target/website-compiler.db page-v2-build target/compiler/Renraku.Compiler.dll Example.WebsiteV2 --reference-view target/website-view.json guest/examples/WebsiteV2.cs
+cargo run -p renraku-vm -- install-compilation target/website.db target/website-compiler.db page-v2-build page-v2-install
+cargo run -p renraku-vm -- web-publish target/website.db page-v2 PublishedPage::Handle
+cargo run -p renraku-vm -- web-inspect target/website.db
+```
+
+The example adds a heading and calls the original handler. Its frozen reference
+binding resolves to the existing logical Website type, including the same Visits
+and History statics. Earlier request IDs retain their earlier page. A new GET
+`/page` shows the new heading and the retained history.
+
+`web-publish` binds a 1..64 character publication ID (ASCII letters, digits, dots,
+underscores, hyphens) to the exact installed method/code and returns a format-1
+JSON receipt. Reusing the ID with a different handler rejects. Retrying an old ID
+returns its original receipt **without making it current again**, even after a
+newer publication. To deliberately return to an earlier handler, use a fresh ID.
+Compilation and installation alone do not change the route. Publication requires
+the existing static four-string/string-result ABI and grants no model capability.
+
+`web-inspect` is a read-only format-1 JSON projection containing the universe,
+checkpoint generation, current publication, and all receipts in sequence order.
+After publication, serve without a process-local fallback:
+
+```sh
+cargo run -p renraku-vm -- web-serve target/website.db @published 127.0.0.1:9000 10000
+```
+
+`@published` rejects an unpublished universe. The original explicit handler form
+remains a fallback for unpublished universes; a saved publication takes precedence
+for new requests. No SDK, compiler ledger, or source files are needed to publish
+installed code or serve it after recovery.
+
+Publication receipts are immutable managed JSON strings, rooted under the reserved
+host namespace `renraku.http-v1/publication/<ID>`. The root
+`renraku.http-v1/current` aliases the latest receipt. Each receipt pins format 1,
+universe, ID, route `default`, sequence, method ID, and code ID. The journal and
+current alias commit atomically with all heap, code, frames, and request receipts.
+GC retains these strings. Website operations validate the namespace, contiguous
+sequence, latest alias, and exact installed bindings; malformed or unknown journal
+data rejects instead of falling back. Other host tools must preserve these roots.
+There are at most 128 retained publications, without eviction. This uses existing
+format-7 heap/root encoding, adding no native snapshot or HTTP wire fields.
+
+An unsaved or conflicting publication leaves the prior route intact. A process
+that loses the commit reply must retry the same publication ID and handler; the
+receipt resolves whether it committed. Optimistic checkpoint fencing prevents a
+publisher from overwriting guest progress committed by a concurrent host. A rejected
+stale writer must reload and explicitly retry. There is no route deletion, path
+table, method-body replacement, or multi-context scheduling in this milestone.
 
 ## Supported HTTP profile and bounds
 
@@ -135,7 +199,7 @@ host seam; it does not persist a native networking stack inside CIL.
 cargo test -p renraku-vm --test web
 ```
 
-Eight tests exercise real TCP and native CLI delivery, immutable old-page replay
+Twelve tests exercise real TCP and native CLI delivery, immutable old-page replay
 after later mutations, changed-data conflicts, every handler instruction with
 GC/restore, pending-work exclusion, disabled model calls, terminal fault/invalid
 text receipts, malformed and unsupported HTTP, failed checkpoint recovery, and
@@ -143,6 +207,15 @@ fragmented UTF-8/NUL request and response bytes. A native CLI fixture runs with 
 tools on PATH. Subprocess SIGKILL tests stop before execution, after a partial
 mutation, and after response commit before socket delivery. The same port rebinds,
 and retry returns one mutation under the original execution ID.
+
+Publication coverage compiles the checked-in WebsiteV2 example through the durable
+external compiler against a frozen Website view, installs while an older request
+is partially mutated, publishes, and recovers the older frames under their original
+code. New TCP requests use the compiled caller and shared visit state. Tests also
+cover SDK-free publication/serving, lost replies and older publication replay,
+limits, invalid ABI/IDs, corrupt journals, checkpoint errors, stale-writer fencing,
+GC, and actual SIGKILL before/after publication commit. The complete route, receipt,
+and paused context always recover together.
 
 A browser smoke test recorded visit `e6625702-7e2b-4df8-9e56-f66024f46d1b` in universe
 `746a4bbe12be43eb8fb13fcce285cc4e`, restarted the host on the same port, and reloaded

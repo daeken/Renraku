@@ -46,6 +46,9 @@ and [checkpoint contract](docs/checkpoints.md) specify the current limits.
 A [persistent localhost website](docs/website.md) is also working: CIL handlers
 own page content and visit state, while the host owns sockets. Stable request IDs
 resume or replay saved responses after a crash without repeating mutations.
+New handlers can be compiled externally, installed, and durably published while
+accepted requests retain their original code and response. Publication retries
+preserve a newer handler selection.
 
 ## Run the demonstration
 

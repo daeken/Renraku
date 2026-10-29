@@ -19,6 +19,29 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("web-publish") if args.len() == 5 => {
+            let mut store = CheckpointStore::open(&args[1])?;
+            let stop = match args[4].as_str() {
+                "prepared" => CommitStage::Prepared,
+                "written" => CommitStage::Written,
+                "committed" => CommitStage::Committed,
+                _ => return Err(Error("invalid publication crash stage".into())),
+            };
+            renraku_vm::web::publish_handler_with_observer(
+                &mut store,
+                &args[2],
+                &args[3],
+                |stage| {
+                    if stage == stop {
+                        println!("READY {stage:?}");
+                        std::io::stdout().flush()?;
+                        std::io::stdin().read_exact(&mut [0u8; 1])?;
+                    }
+                    Ok(())
+                },
+            )?;
+            Ok(())
+        }
         Some("compile") if args.len() == 7 => {
             let universe = UniverseId::from_bytes(
                 *uuid::Uuid::parse_str(&args[2])

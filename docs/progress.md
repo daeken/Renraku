@@ -204,6 +204,18 @@ and do not inherit persistence.
   http://127.0.0.1:56903/ with database `target/web-demo-20261029.db`; its host may
   need manual restart after this session. See [website guide](website.md).
   Checkpoint format remains 7; handlers receive no implicit model capability.
+- Durable default-handler publication with `web-publish`, `web-inspect`, and
+  `web-serve ... @published`. New request IDs reload the saved binding; older
+  accepted requests keep their pinned method/code and response. Separate compile,
+  install, and publication IDs preserve the external compiler boundary. Immutable
+  publication receipts and the current alias are managed strings/named roots,
+  committed with the same heap/code/frames. Old publication retries return their
+  original receipt without overwriting a newer selection. Publication runs no CIL
+  and may commit while an older request is paused. Reserved journal validation,
+  optimistic fencing, a 128-publication cap, and no eviction are explicit.
+  `guest/examples/WebsiteV2.cs` compiles against a frozen Website view and calls
+  its original handler against the same persistent visit state. Format 7 and
+  HTTP-v1 wire/receipt semantics are unchanged. See [publication guide](website.md#compile-install-and-publish-a-handler).
 
 ## Validation
 
@@ -211,7 +223,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 190 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 194 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -308,13 +320,21 @@ and completes the original pre-input-schema agent under a local provider. A seco
 goal reuses installed source/code without an SDK and preserves the first mutation
 receipt. The HTTP fixture sends both complete histories plus the new user message
 and reaches Counter 33 using only three new model requests and one installation.
-Eight website tests cover actual TCP/CLI serving, SDK-free CLI delivery, exact
+Twelve website tests cover actual TCP/CLI serving, SDK-free CLI delivery, exact
 old-response replay after newer mutations and handler selection, all handler
 instruction cuts with GC/recovery, paused-call exclusion, denied model authority,
 fault/null/surrogate/oversized terminal responses, malformed framing and bounds,
 failed response checkpoints, and fragmented UTF-8/NUL data. Actual SIGKILL tests
 stop before execution, after a partial mutation, and after response commit before
 socket delivery; the same port rebinds and retry retains one original execution.
+The publication acceptance compiles the checked-in new handler through the pinned
+compiler service, installs while an old request is partially mutated, and publishes
+without disturbing that execution. The old request resumes its original code; new
+TCP requests use the installed caller and the same visit history. Publication ID
+conflicts, replay after newer publication, caps, invalid ABI/IDs, corrupt roots,
+failed commits, stale writers, GC, and native SDK-free serving are covered. Actual
+publication SIGKILL at Prepared/Written/Committed restores a coherent old or new
+route, journal, and paused context. No live inference was needed for this milestone.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -424,16 +444,24 @@ Its supported HTTP-v1 profile fixes successful status/content type and returns a
 immutable managed string. Keep these receipt semantics stable; richer response
 envelopes and general network APIs require explicit contracts.
 
-**Next connect external compilation/installation to durable website handler
-publication.** Introduce a saved route/handler binding for new request IDs while
-older accepted requests retain their pinned method/code and response. Use the
-existing compiler and append-only installation seams. Keep compilation distinct
-from installation/publication, avoid replacing existing method bodies, and give
-publication a durable request identity so a lost reply cannot overwrite a newer
-route on replay. Demonstrate a new handler on new requests while an old paused
-request recovers under its original code, preserving shared persistent state.
-Use local HTTP fixtures; keep sockets outside checkpoints and the one-context
-limit explicit. Prefer a narrow publication contract over broader HTTP features.
+Durable website publication now connects external compilation and append-only
+installation to live selection for new request IDs. Retain its narrow default
+route contract, immutable publication IDs, original accepted-call bindings, and
+strict journal validation; method dispatch replacement remains unsupported.
+
+**Next connect the coding agent to explicitly authorized website publication.**
+Add a bounded publication action using a stable saved-turn-derived ID and the
+existing publication receipt, with its actual input/result in the managed journal.
+Make the capability an explicit host policy, disabled by default; installed code
+alone must not grant publication authority. Describe the supported handler ABI
+and expose the current publication through bounded inspection. Reconcile a lost
+publication result without rolling back a newer route. Verify a model-selected
+discover/read/compile/install/publish/finish sequence using local Responses/HTTP
+fixtures and a second goal reusing state, keeping one-context exclusion explicit.
+Use live inference only for the new acceptance question of authoring and publishing
+a website handler; retain the actual transcript/receipts and distinguish fixtures
+from autonomous model evidence. Preserve the existing demo database and visit IDs.
+Avoid expanding HTTP features or introducing general shell/compiler-path authority.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

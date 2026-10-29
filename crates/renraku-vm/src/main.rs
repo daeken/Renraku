@@ -32,7 +32,9 @@ fn execute() -> Result<()> {
         "       renraku-vm inspect-checkpoint <universe.db>\n",
         "       renraku-vm agent-inspect <universe.db>\n",
         "       renraku-vm agent-input <universe.db> <input-ID> <goal> [instruction-budget]\n",
-        "       renraku-vm web-serve <universe.db> <handler-method> <loopback-address:port> [instruction-budget] [connection-limit]\n",
+        "       renraku-vm web-serve <universe.db> <handler-method|@published> <loopback-address:port> [instruction-budget] [connection-limit]\n",
+        "       renraku-vm web-publish <universe.db> <publication-ID> <handler-method>\n",
+        "       renraku-vm web-inspect <universe.db>\n",
         "       renraku-vm search <universe.db> <query> [limit]\n",
         "       renraku-vm read-code <universe.db> <method-or-code-ID>\n",
         "       renraku-vm export-reference <universe.db> <type-name-or-ID> [type ...]\n",
@@ -66,6 +68,22 @@ fn execute() -> Result<()> {
         return Err(Error(USAGE.into()));
     }
     match args.first().map(String::as_str) {
+        Some("web-publish" | "web-inspect")
+            if (args[0] == "web-publish" && args.len() == 4)
+                || (args[0] == "web-inspect" && args.len() == 2) =>
+        {
+            if !std::path::Path::new(&args[1]).is_file() {
+                return Err(Error("website checkpoint does not exist".into()));
+            }
+            let mut store = CheckpointStore::open(&args[1])?;
+            if args[0] == "web-publish" {
+                let record = renraku_vm::web::publish_handler(&mut store, &args[2], &args[3])?;
+                print_json(&serde_json::to_value(record).map_err(|e| Error(e.to_string()))?)?;
+            } else {
+                print_json(&renraku_vm::web::inspect_publications(&mut store)?)?;
+            }
+            return Ok(());
+        }
         Some("web-serve") if (4..=6).contains(&args.len()) => {
             use renraku_vm::web::{WebHost, WebServer};
             let address = args[3]
@@ -73,7 +91,11 @@ fn execute() -> Result<()> {
                 .map_err(|_| Error("invalid listener address".into()))?;
             let budget = number(args.get(4), 10_000)?;
             let limit = number(args.get(5), u64::MAX)?;
-            let host = WebHost::open(&args[1], &args[2])?;
+            let host = if args[2] == "@published" {
+                WebHost::open_published(&args[1])?
+            } else {
+                WebHost::open(&args[1], &args[2])?
+            };
             let universe = host.universe();
             let server = WebServer::bind(host, address, budget)?;
             println!(

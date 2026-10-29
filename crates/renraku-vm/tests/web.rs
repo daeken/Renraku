@@ -1,11 +1,17 @@
 #[allow(dead_code)]
 mod common;
 use renraku_vm::{
+    artifact::install_once,
     checkpoint::CheckpointStore,
+    compiler::{CompilationRequest, CompilationStore, CompilerToolchain},
+    error::Error,
     invocation::InvocationState,
     runtime::{RunOutcome, Vm},
     value::Value,
-    web::{WebHost, WebRequest, WebServer, WebStage},
+    web::{
+        WebHost, WebRequest, WebServer, WebStage, inspect_publications, publish_handler,
+        publish_handler_with_observer,
+    },
 };
 use rusqlite::{Connection, params};
 use std::{
@@ -14,6 +20,7 @@ use std::{
     net::{Shutdown, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
@@ -22,6 +29,420 @@ const HANDLER: &str = "Renraku.Guest.Website::Handle";
 struct Test {
     directory: PathBuf,
     database: PathBuf,
+}
+
+fn toolchain() -> &'static CompilerToolchain {
+    static TOOLCHAIN: OnceLock<CompilerToolchain> = OnceLock::new();
+    TOOLCHAIN.get_or_init(|| {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let output = root
+            .join("target")
+            .join(format!("web-compiler-tests-{}", std::process::id()));
+        let built = Command::new("dotnet")
+            .args(["build", "--nologo", "--verbosity", "quiet", "--output"])
+            .arg(&output)
+            .arg(root.join("tools/Compiler"))
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stdout)
+        );
+        let dotnet = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("dotnet"))
+            .find(|path| path.is_file())
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        CompilerToolchain::open(dotnet, output.join("Renraku.Compiler.dll")).unwrap()
+    })
+}
+fn web_cli(args: &[&str]) -> serde_json::Value {
+    let result = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+        .args(args)
+        .env("PATH", "/no-website-tools")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    serde_json::from_slice(&result.stdout).unwrap()
+}
+
+#[test]
+fn compiled_publication_changes_new_requests_while_paused_code_and_shared_state_recover() {
+    let test = Test::new();
+    let mut store = CheckpointStore::open(&test.database).unwrap();
+    let first = publish_handler(&mut store, "release-one", HANDLER).unwrap();
+    // The same running host must observe later publications without a restart.
+    let host = test.host();
+    let mut paused = host.process(&request("old"), 1).unwrap();
+    while state(&test.database).0 == 0 {
+        paused = host.process(&request("old"), 1).unwrap();
+    }
+    assert_eq!(paused.status, 202);
+    let original = state(&test.database).1[0].1.clone();
+    let saved = store.load().unwrap();
+    let program = &saved.snapshot.program;
+    let view = program
+        .reference_view(&[program.find_type("Renraku.Guest.Website").unwrap()])
+        .unwrap();
+    let source = include_bytes!("../../../guest/examples/WebsiteV2.cs");
+    let input = CompilationRequest::capture(
+        program,
+        host.universe(),
+        toolchain(),
+        "Generated.Website".into(),
+        vec![("WebsiteV2.cs".into(), source.to_vec())],
+        vec![view],
+    )
+    .unwrap();
+    let compiler_path = test.directory.join("compiler.db");
+    let mut compiler = CompilationStore::open(&compiler_path).unwrap();
+    compiler.prepare("page-build", &input).unwrap();
+    let compiled = compiler
+        .drive(host.universe(), "page-build", toolchain())
+        .unwrap();
+    let artifact = compiled.artifact.expect("website compilation succeeds");
+    // Compilation and append-only installation do not publish the route.
+    assert_eq!(
+        inspect_publications(&mut store).unwrap()["current"]["id"],
+        "release-one"
+    );
+    install_once(&mut store, "page-install", &artifact).unwrap();
+    assert_eq!(
+        inspect_publications(&mut store).unwrap()["current"]["id"],
+        "release-one"
+    );
+    assert_eq!(state(&test.database).1[0].1, original);
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.context().id, original.execution);
+    let second = publish_handler(&mut store, "release-two", "PublishedPage::Handle").unwrap();
+    assert_ne!(second.method, first.method);
+    assert_ne!(second.code, first.code);
+    assert_eq!(second.sequence, 2);
+    let generation = store.generation();
+    // A lost reply for the older publication must never roll back the route.
+    assert_eq!(
+        publish_handler(&mut store, "release-one", HANDLER).unwrap(),
+        first
+    );
+    assert_eq!(store.generation(), generation);
+    assert_eq!(
+        inspect_publications(&mut store).unwrap()["current"]["id"],
+        "release-two"
+    );
+    assert_eq!(
+        host.process(&request("new"), 10000).unwrap_err().status,
+        503
+    );
+    drop(compiler);
+    fs::remove_file(compiler_path).unwrap();
+    collect(&test.database);
+    let recovered = host.process(&request("old"), 10000).unwrap();
+    assert_eq!(recovered.status, 200);
+    assert_eq!(recovered.execution, paused.execution);
+    assert!(!recovered.body.contains("Published v2"));
+    assert_eq!(state(&test.database).0, 1);
+    let new = exchange(&host, 10000, &wire("POST", "/visit", Some("new"), b""));
+    assert!(body(&new).starts_with("<h2>Published v2</h2>"));
+    assert!(body(&new).contains("<li>old</li>") && body(&new).contains("<li>new</li>"));
+    assert_eq!(state(&test.database).0, 2);
+    let replay = host.process(&request("old"), 10000).unwrap();
+    assert_eq!(replay.body, recovered.body);
+    assert_eq!(replay.instructions, 0);
+    // The compiler ledger, SDK, original files, and host fallback are unnecessary.
+    let database = test.database.to_str().unwrap();
+    assert_eq!(
+        web_cli(&[
+            "web-publish",
+            database,
+            "release-two",
+            "PublishedPage::Handle"
+        ]),
+        serde_json::to_value(&second).unwrap()
+    );
+    collect(&test.database);
+    let inspected = web_cli(&["web-inspect", database]);
+    assert_eq!(inspected["current"]["id"], "release-two");
+    assert_eq!(inspected["publications"].as_array().unwrap().len(), 2);
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert!(
+        vm.read_code("PublishedPage::Handle")
+            .unwrap()
+            .to_string()
+            .contains("WebsiteV2.cs")
+    );
+    assert_eq!(vm.context().frames.len(), 0);
+    let server = WebHost::open_published(&test.database).unwrap();
+    assert_eq!(
+        body(&exchange(
+            &server,
+            10000,
+            &wire("POST", "/visit", Some("new"), b"")
+        )),
+        body(&new)
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+        .args([
+            "web-serve",
+            database,
+            "@published",
+            "127.0.0.1:0",
+            "10000",
+            "2",
+        ])
+        .env("PATH", "/no-website-tools")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::BufRead;
+    let mut ready = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    let ready: serde_json::Value = serde_json::from_str(&ready).unwrap();
+    let address = ready["listening"].as_str().unwrap().parse().unwrap();
+    let wire = wire("GET", "/page", Some("after-restart"), b"");
+    let response = exchange_at(address, &wire);
+    assert!(String::from_utf8_lossy(&response).contains("Published v2"));
+    assert_eq!(exchange_at(address, &wire), response);
+    assert!(child.wait().unwrap().success());
+    assert_eq!(state(&test.database).0, 2);
+}
+
+#[test]
+fn publication_ids_limits_and_corrupt_routes_reject_without_silent_fallback() {
+    let test = Test::new();
+    assert!(WebHost::open_published(&test.database).is_err());
+    let mut store = CheckpointStore::open(&test.database).unwrap();
+    let empty = inspect_publications(&mut store).unwrap();
+    assert!(empty["current"].is_null());
+    let before = store.generation();
+    for id in ["", "bad/id", "\n", &"x".repeat(65)] {
+        assert!(publish_handler(&mut store, id, HANDLER).is_err());
+    }
+    assert!(publish_handler(&mut store, "wrong-abi", "Renraku.Guest.Simulation::Run").is_err());
+    assert!(publish_handler(&mut store, "not-installed", "Missing::Handle").is_err());
+    assert_eq!(store.generation(), before);
+    let original = publish_handler(&mut store, "release", HANDLER).unwrap();
+    let before = store.generation();
+    assert!(publish_handler(&mut store, "release", "Renraku.Guest.Website::Alternate").is_err());
+    assert_eq!(store.generation(), before);
+    for n in 1..128 {
+        publish_handler(&mut store, &format!("release-{n}"), HANDLER).unwrap();
+    }
+    let before = store.generation();
+    assert!(
+        publish_handler(&mut store, "overflow", HANDLER)
+            .unwrap_err()
+            .0
+            .contains("limit")
+    );
+    assert_eq!(
+        publish_handler(&mut store, "release", HANDLER).unwrap(),
+        original
+    );
+    assert_eq!(store.generation(), before);
+    collect(&test.database);
+    // A syntactically valid heap checkpoint can still contain an unsupported
+    // application journal. Validate its schema and bindings before selecting it.
+    for (field, value) in [
+        ("format", serde_json::json!(2)),
+        ("universe", serde_json::json!("another-universe")),
+        ("route", serde_json::json!("other")),
+        ("id", serde_json::json!("changed")),
+        ("sequence", serde_json::json!(0)),
+        ("method", serde_json::json!("Renraku.Guest.Website::Handle")),
+        ("code", serde_json::json!("missing-code")),
+        ("futureField", serde_json::json!(true)),
+    ] {
+        let database = test.directory.join(format!("bad-{field}.db"));
+        copy_world(&test.database, &database);
+        let mut broken = CheckpointStore::open(&database).unwrap();
+        let saved = broken.load().unwrap();
+        let mut vm = saved.snapshot.restore().unwrap();
+        let name = "renraku.http-v1/publication/release-127";
+        let object = vm.heap().roots()[name];
+        let text =
+            String::from_utf16(vm.heap().object(object).unwrap().string_units().unwrap()).unwrap();
+        let mut record: serde_json::Value = serde_json::from_str(&text).unwrap();
+        record[field] = value;
+        let object = vm
+            .new_string(record.to_string().encode_utf16().collect())
+            .unwrap();
+        vm.set_root(name, object).unwrap();
+        vm.set_root("renraku.http-v1/current", object).unwrap();
+        broken.save(&vm).unwrap();
+        let before = broken.generation();
+        assert!(WebHost::open(&database, HANDLER).is_err(), "{field}");
+        assert!(inspect_publications(&mut broken).is_err(), "{field}");
+        assert!(
+            publish_handler(&mut broken, "repair", HANDLER).is_err(),
+            "{field}"
+        );
+        assert_eq!(broken.generation(), before);
+    }
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    vm.remove_root("renraku.http-v1/current");
+    store.save(&vm).unwrap();
+    assert!(
+        WebHost::open(&test.database, HANDLER)
+            .unwrap_err()
+            .0
+            .contains("publication root")
+    );
+    assert!(inspect_publications(&mut store).is_err());
+    assert!(publish_handler(&mut store, "repair-by-guessing", HANDLER).is_err());
+}
+
+#[test]
+fn publication_commit_errors_and_stale_writers_keep_one_coherent_route_and_execution() {
+    use renraku_vm::checkpoint::CommitStage;
+    for stop in [
+        CommitStage::Prepared,
+        CommitStage::Written,
+        CommitStage::Committed,
+    ] {
+        let test = Test::new();
+        let host = test.host();
+        let paused = host.process(&request("active"), 1).unwrap();
+        let mut store = CheckpointStore::open(&test.database).unwrap();
+        let old = publish_handler(&mut store, "one", HANDLER).unwrap();
+        let error = publish_handler_with_observer(
+            &mut store,
+            "two",
+            "Renraku.Guest.Website::Alternate",
+            |stage| {
+                if stage == stop {
+                    Err(Error("lost publication reply".into()))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(error.0.contains("lost publication reply"));
+        let current = inspect_publications(&mut store).unwrap();
+        assert_eq!(
+            current["current"]["id"],
+            if stop == CommitStage::Committed {
+                "two"
+            } else {
+                "one"
+            }
+        );
+        assert_eq!(
+            state(&test.database).1[0].1.execution.to_string(),
+            paused.execution
+        );
+        let resumed = host.process(&request("active"), 10000).unwrap();
+        assert_eq!(resumed.execution, paused.execution);
+        assert!(resumed.body.contains("<li>active</li>"));
+        publish_handler(&mut store, "two", "Renraku.Guest.Website::Alternate").unwrap();
+        let before = store.generation();
+        assert_eq!(publish_handler(&mut store, "one", HANDLER).unwrap(), old);
+        assert_eq!(store.generation(), before);
+        assert_eq!(
+            host.process(&request("new"), 10000).unwrap().body,
+            "alternate handler"
+        );
+        assert_eq!(state(&test.database).0, 1);
+    }
+    let test = Test::new();
+    let host = test.host();
+    host.process(&request("active"), 1).unwrap();
+    let mut store = CheckpointStore::open(&test.database).unwrap();
+    publish_handler(&mut store, "one", HANDLER).unwrap();
+    let error = publish_handler_with_observer(
+        &mut store,
+        "two",
+        "Renraku.Guest.Website::Alternate",
+        |stage| {
+            if stage == CommitStage::Prepared {
+                host.process(&request("active"), 10000)
+                    .map_err(|e| Error(e.to_string()))?;
+            }
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(error.0.contains("checkpoint conflict"));
+    assert_eq!(
+        inspect_publications(&mut store).unwrap()["current"]["id"],
+        "one"
+    );
+    assert_eq!(state(&test.database).0, 1);
+}
+
+#[test]
+fn sigkill_publication_keeps_receipt_route_and_paused_frames_atomic() {
+    for phase in ["prepared", "written", "committed"] {
+        let test = Test::new();
+        let host = test.host();
+        let paused = host.process(&request("active"), 1).unwrap();
+        let mut store = CheckpointStore::open(&test.database).unwrap();
+        publish_handler(&mut store, "one", HANDLER).unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_renraku-checkpoint-probe"))
+            .args([
+                "web-publish",
+                test.database.to_str().unwrap(),
+                "two",
+                "Renraku.Guest.Website::Alternate",
+                phase,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::BufRead;
+        let mut ready = std::io::BufReader::new(child.stdout.take().unwrap());
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = thread::spawn(move || {
+            let mut line = String::new();
+            ready.read_line(&mut line).unwrap();
+            send.send(line).unwrap();
+        });
+        let line = receive.recv_timeout(Duration::from_secs(20));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        reader.join().unwrap();
+        assert!(line.unwrap().starts_with("READY"));
+        collect(&test.database);
+        let current = inspect_publications(&mut store).unwrap();
+        assert_eq!(
+            current["current"]["id"],
+            if phase == "committed" { "two" } else { "one" }
+        );
+        let resumed = host.process(&request("active"), 10000).unwrap();
+        assert_eq!(resumed.execution, paused.execution);
+        assert_eq!(state(&test.database).0, 1);
+        assert!(resumed.body.contains("<li>active</li>"));
+        publish_handler(&mut store, "two", "Renraku.Guest.Website::Alternate").unwrap();
+        assert_eq!(
+            inspect_publications(&mut store).unwrap()["publications"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            host.process(&request("new"), 10000).unwrap().body,
+            "alternate handler"
+        );
+    }
 }
 impl Test {
     fn new() -> Self {

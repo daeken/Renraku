@@ -19,6 +19,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod publication;
+pub use publication::{
+    PublicationRecord, inspect_publications, publish_handler, publish_handler_with_observer,
+};
+
 const MAX_HEADERS: usize = 8192;
 const MAX_BODY: usize = 8192;
 const MAX_RESPONSE: usize = 32768;
@@ -71,7 +76,7 @@ pub struct WebReply {
 #[derive(Clone, Debug)]
 pub struct WebHost {
     database: PathBuf,
-    handler: String,
+    handler: Option<String>,
     universe: UniverseId,
 }
 fn validate_id(id: &str) -> WebResult<()> {
@@ -128,17 +133,27 @@ fn string(vm: &Vm<'_>, value: Value) -> Result<String> {
 }
 impl WebHost {
     pub fn open(database: impl AsRef<Path>, selector: &str) -> Result<Self> {
-        require(
-            database.as_ref().is_file(),
-            "website checkpoint does not exist",
-        )?;
-        let mut store = CheckpointStore::open(database.as_ref())?;
+        Self::open_selection(database.as_ref(), Some(selector))
+    }
+    /// Require a durable publication, without a process-local fallback handler.
+    pub fn open_published(database: impl AsRef<Path>) -> Result<Self> {
+        Self::open_selection(database.as_ref(), None)
+    }
+    fn open_selection(database: &Path, selector: Option<&str>) -> Result<Self> {
+        require(database.is_file(), "website checkpoint does not exist")?;
+        let mut store = CheckpointStore::open(database)?;
         let saved = store.load()?;
-        handler(&saved.snapshot.program, selector)?;
         let vm = saved.snapshot.restore()?;
+        if let Some(selector) = selector {
+            handler(vm.program, selector)?;
+        }
+        require(
+            publication::published_method(&vm)?.is_some() || selector.is_some(),
+            "website has no published handler",
+        )?;
         Ok(Self {
-            database: database.as_ref().to_path_buf(),
-            handler: selector.into(),
+            database: database.to_path_buf(),
+            handler: selector.map(str::to_owned),
             universe: vm.universe_id(),
         })
     }
@@ -199,7 +214,18 @@ impl WebHost {
                     "another execution is active; finish its accepted request first",
                 ));
             }
-            let entry = handler(vm.program, &self.handler)?;
+            // Reload the publication from this request's checkpoint, including
+            // publications made after the host opened. Receipts above never
+            // consult it: they continue their original pinned execution.
+            let entry = match publication::published_method(&vm)? {
+                Some(entry) => entry,
+                None => handler(
+                    vm.program,
+                    self.handler
+                        .as_deref()
+                        .ok_or_else(|| Error("website has no published handler".into()))?,
+                )?,
+            };
             let arguments = texts
                 .into_iter()
                 .map(|s| {
