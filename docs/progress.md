@@ -429,7 +429,7 @@ and do not inherit persistence.
   preserves its operand width. Decoder byte offsets and checkpoint abstract
   stacks retain the new operations without a checkpoint-format change. Null/
   object reference and mixed-width failures preserve original operands and
-  continuation. Native integers, checked arithmetic/conversion and EH
+  continuation. Native integers, checked conversions and EH
   remain unsupported; there is no new host capability or wait.
   A separate guest/IntegerBitwise.cs test module compiles unchanged against both
   cores. Its 4,128-case real CoreCLR matrix covers all 16 direct signed/unsigned
@@ -452,7 +452,7 @@ and do not inherit persistence.
   including negative/high counts; left shift discards high bits, shr preserves
   sign and shr.un inserts zeros. This is Renraku's portable policy for ECMA's
   unspecified count range, separate from C#'s own emitted count masks. Native
-  values, I64 counts, checked arithmetic/conversions and EH remain unsupported.
+  values, I64 counts, checked conversions and EH remain unsupported.
   Runtime/type rejection and checkpoint abstract stacks preserve failing operands,
   continuations and byte offsets. No new capability, host wait or checkpoint field.
   guest/IntegerShifts.cs compiles unchanged against both cores; 5,570 boundary/
@@ -577,13 +577,38 @@ and do not inherit persistence.
   no inference was needed.
 
 
+- Checked fixed-width add.ovf/add.ovf.un, sub.ovf/sub.ovf.un and
+  mul.ovf/mul.ovf.un now execute on matching I32/I64 stacks. Signed forms test
+  signed ranges and unsigned forms test the same raw bits against unsigned
+  ranges; results preserve width. Explicit checked operations make overflow
+  independent of Rust build-mode settings. Overflow and invalid operands retain
+  the original frame/stack/continuation; terminal durable VM fault receipts do
+  not roll back earlier instructions. Checkpoint abstract stacks track the same
+  widths. No host capability/wait, value tag, CoreLib change or checkpoint field
+  was added. Checked/native/floating conversions, native/floating arithmetic,
+  arbitrary small-width storage and EH remain unsupported.
+  guest/CheckedIntegerArithmetic.cs compiles unchanged against both cores. A
+  4,608-case CoreCLR matrix independently verifies exact BigInteger ranges and
+  all twelve operator/signedness/width combinations. Thirty-six success/fault
+  operations restore each instruction with GC/original IDs. Nested checked work
+  changes the same Counter 19 to 29, then 42; its first receipt still returns 29
+  without changing 42 or Mutations=2. Every operator faults after a prior mutation
+  with original argument roots retained after static/context replacement and GC.
+  Six injected terminal-save failures recover the committed operands and do not
+  repeat that mutation. Twenty-four SDK-free native resumes/replays cover valid
+  high-bit results and each mutating overflow. Loader/compiler/install rejection
+  fixtures now use unsupported conv.ovf.i4 rather than newly supported addition.
+  CoreLib, old modules, format 7/every fixture and both idle demos stay unchanged.
+  See [CIL profile](cil-profile.md); no inference was needed.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 280 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 287 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -852,21 +877,22 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next implement checked fixed-width integer arithmetic.** Follow primary
-ECMA-335 for add.ovf/add.ovf.un, sub.ovf/sub.ovf.un and mul.ovf/mul.ovf.un on
-matching I32/I64 stacks. Signed and unsigned variants must test their declared
-ranges before producing raw same-width bits; never inherit Rust panic/release
-behavior. Overflow uses the current terminal durable VM fault contract with
-original operands/continuations and prior mutations retained, not guest EH or
-rollback. Compare actual emitted C# with CoreCLR over boundaries/high bits/seeded
-cases, then instruction-cut/GC/recovery and terminal invoke-once overflow after
-an earlier mutation. Verify receipt replay, failed terminal saves, stable IDs and
-SDK-free native recovery. Move checked-addition rejection fixtures to a still
-unsupported checked conversion so opcode rejection remains meaningful. Keep
-native/floating/checked conversions, EH and small-width storage unsupported.
-Preserve all switch/arithmetic/library/foreign-type/reference-set/receipt/
-provenance/transcript/capability/demo/legacy contracts and update guidance only
-for implemented operations. No live inference is needed for this narrow step.
+**Next implement checked fixed-width integer conversions.** Consult primary
+ECMA-335 III.3.28–29/Table 8 for conv.ovf.i4/u4/i8/u8 and each .un form, taking
+I32/I64 values only. Distinguish source interpretation (.un means raw unsigned
+input) from target range/extension; the result remains I32/I64 storage. Validate
+ranges before narrowing or extending, retain failing operands/continuations,
+and use the current durable overflow fault contract without guest EH/rollback.
+Compare actual emitted C# with CoreCLR plus independent mathematical range
+oracles, including signed minima, high unsigned bits and every source/target
+width. Recover every instruction with GC, pinned IDs, prior-mutation fault
+receipts, failed terminal saves and SDK-free native replay. Move conv.ovf.i4
+negative fixtures to another still unsupported opcode such as boxing, preserving
+compiler/installation rejection coverage. Keep small-width checked conversions,
+native/floating inputs, arbitrary small-width storage and EH unsupported. Preserve
+all arithmetic/switch/library/foreign-result/reference-set/receipt/provenance/
+transcript/capability/demo/legacy contracts and update guidance after implementation.
+No live inference is needed for this narrow runtime milestone.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

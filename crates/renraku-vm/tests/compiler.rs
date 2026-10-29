@@ -1347,7 +1347,7 @@ fn installation_commit_failures_bad_cil_and_mismatched_cores_publish_no_partial_
         .unwrap();
     let bad = compile_artifact(
         &directory,
-        "public static class Extra { public static int Run(int a,int b) { return checked(a+b); } }",
+        "public static class Extra { public static int Run(long value) { return checked((int)value); } }",
         "bad-cil",
     );
     assert!(
@@ -2156,7 +2156,7 @@ fn emitting_a_dll_does_not_imply_support_for_its_cil() {
     let directory = Directory::new();
     let source = directory.source(
         "Unsupported.cs",
-        "public static class App { public static int Run(int a, int b) { return checked(a + b); } }",
+        "public static class App { public static int Run(long value) { return checked((int)value); } }",
     );
     let (output, report) = directory.compile(&[source], "bundle");
     assert_success(&output, &report);
@@ -2165,7 +2165,7 @@ fn emitting_a_dll_does_not_imply_support_for_its_cil() {
         Program::load(&[&fixtures().core, &guest])
             .unwrap_err()
             .0
-            .contains("unsupported CIL opcode d6")
+            .contains("unsupported CIL opcode b7")
     );
 }
 

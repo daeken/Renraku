@@ -454,6 +454,9 @@ fn stack_shapes(program: &Program, method: &Method) -> Result<BTreeMap<u32, Vec<
             Op::Add
             | Op::Subtract
             | Op::Multiply
+            | Op::AddChecked { .. }
+            | Op::SubtractChecked { .. }
+            | Op::MultiplyChecked { .. }
             | Op::Divide { .. }
             | Op::Remainder { .. }
             | Op::BitAnd

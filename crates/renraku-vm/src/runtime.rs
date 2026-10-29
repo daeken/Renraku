@@ -509,6 +509,13 @@ impl<'a> Vm<'a> {
                 let value = arithmetic(left, right, &instruction.op)?;
                 frame.evaluation_stack.push(value);
             }
+            Op::AddChecked { .. } | Op::SubtractChecked { .. } | Op::MultiplyChecked { .. } => {
+                let right = pop(&mut frame)?;
+                let left = pop(&mut frame)?;
+                frame
+                    .evaluation_stack
+                    .push(checked_arithmetic(left, right, &instruction.op)?);
+            }
             Op::BitAnd | Op::BitOr | Op::BitXor => {
                 let right = pop(&mut frame)?;
                 let left = pop(&mut frame)?;
@@ -979,6 +986,54 @@ fn bitwise(left: Value, right: Value, op: &Op) -> Result<Value> {
                 "bitwise operations require matching integer stack types".into(),
             ));
         }
+    })
+}
+
+fn checked_arithmetic(left: Value, right: Value, op: &Op) -> Result<Value> {
+    let unsigned = matches!(
+        op,
+        Op::AddChecked { unsigned: true }
+            | Op::SubtractChecked { unsigned: true }
+            | Op::MultiplyChecked { unsigned: true }
+    );
+    // Rust's checked operations return None for the declared integer range;
+    // neither host overflow settings nor a wrapped intermediate define CIL.
+    macro_rules! checked {
+        ($a:expr, $b:expr) => {
+            match op {
+                Op::AddChecked { .. } => $a.checked_add($b),
+                Op::SubtractChecked { .. } => $a.checked_sub($b),
+                Op::MultiplyChecked { .. } => $a.checked_mul($b),
+                _ => unreachable!(),
+            }
+        };
+    }
+    let value = match (left, right) {
+        (Value::I32(a), Value::I32(b)) if unsigned => {
+            checked!(a as u32, b as u32).map(|n| Value::I32(n as i32))
+        }
+        (Value::I32(a), Value::I32(b)) => checked!(a, b).map(Value::I32),
+        (Value::I64(a), Value::I64(b)) if unsigned => {
+            checked!(a as u64, b as u64).map(|n| Value::I64(n as i64))
+        }
+        (Value::I64(a), Value::I64(b)) => checked!(a, b).map(Value::I64),
+        _ => {
+            return Err(Error(
+                "checked arithmetic requires matching integer stack types".into(),
+            ));
+        }
+    };
+    value.ok_or_else(|| {
+        Error(format!(
+            "checked {} integer {} overflow",
+            if unsigned { "unsigned" } else { "signed" },
+            match op {
+                Op::AddChecked { .. } => "addition",
+                Op::SubtractChecked { .. } => "subtraction",
+                Op::MultiplyChecked { .. } => "multiplication",
+                _ => unreachable!(),
+            }
+        ))
     })
 }
 

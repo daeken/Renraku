@@ -393,7 +393,7 @@ The model controls trusted managed computation in this universe. It is not a
 security sandbox for hostile generated code. No shell, file, or general network
 tools are exposed. Generated invocations run with model capabilities disabled;
 only the coordinator's owned model turn enables submission. Existing CIL limits
-still apply, including no arrays, generics, exception handling, checked arithmetic, arbitrary
+still apply, including no arrays, generics, exception handling, checked conversions, arbitrary
 host BCL, or C# async/await. Cancellation and in-place conversation editing are not
 implemented. A budget-paused invocation remains pending until explicitly resumed.
 Int32/UInt32/Int64/UInt64 division and remainder are supported. Zero divisors and
@@ -404,7 +404,7 @@ unsigned declarations. Binary operands must have matching widths. They execute a
 ordinary CIL, with no capability grant or host wait. Fixed-width `<<`, `>>` and `>>>` accept I32 counts. Raw CIL counts use their
 low 5/6 bits for I32/I64 values, including negative/high counts; this is a
 portable Renraku policy where ECMA leaves results unspecified. Signed right shift
-preserves sign; unsigned right shift inserts zeros. Native/checked operations
+preserves sign; unsigned right shift inserts zeros. Native arithmetic and checked conversions
 remain unsupported.
 
 Unary integer `-value` is supported: unchecked CIL negation preserves width, and
@@ -435,6 +435,11 @@ without a prefix; input permits ASCII hex digits and an optional 0x/0X prefix
 within 64 units, with no signs or whitespace. It returns the existing unsigned
 result types. Select HexIntegerText as a frozen root; the result-module dependency
 is included automatically. Stored I32/I64 bits still carry unsigned values.
+Checked fixed-width signed/unsigned addition, subtraction and multiplication are
+supported. Overflow is a terminal VM fault with retained operands and prior
+mutations; it does not roll back a tool invocation or enable guest exception
+handling. Checked conversions and native/floating arithmetic remain unsupported.
+
 Integer/Int32-enum switch dispatch is supported under the [CIL profile](cil-profile.md),
 with I32 indices, validated targets and at most 4,096 entries per table. Dispatch
 is pure computation under existing guest instruction budgets. String-switch

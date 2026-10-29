@@ -30,6 +30,15 @@ pub enum Op {
     Add,
     Subtract,
     Multiply,
+    AddChecked {
+        unsigned: bool,
+    },
+    SubtractChecked {
+        unsigned: bool,
+    },
+    MultiplyChecked {
+        unsigned: bool,
+    },
     BitAnd,
     BitOr,
     BitXor,
@@ -263,6 +272,12 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
             0x6e => Op::ConvertU64,
             0xd1 => Op::ConvertU16,
             0xd2 => Op::ConvertU8,
+            0xd6 => Op::AddChecked { unsigned: false },
+            0xd7 => Op::AddChecked { unsigned: true },
+            0xd8 => Op::MultiplyChecked { unsigned: false },
+            0xd9 => Op::MultiplyChecked { unsigned: true },
+            0xda => Op::SubtractChecked { unsigned: false },
+            0xdb => Op::SubtractChecked { unsigned: true },
             0x72 => Op::LoadString(reader.u32()?),
             0x73 => Op::NewObject(reader.u32()?),
             0x7b | 0x7e => Op::LoadField {

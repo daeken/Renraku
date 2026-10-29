@@ -75,6 +75,7 @@ IL byte offsets remain byte offsets after decoding.
 | `ldloc.0` through `ldloc.3`, `ldloc.s`, `ldloc`; `stloc.0` through `stloc.3`, `stloc.s`, `stloc` | Read or replace a typed local |
 | `dup`, `pop` | Duplicate or discard the top value |
 | `add`, `sub`, `mul` | Wrapping arithmetic on matching integer stack types |
+| `add.ovf`, `sub.ovf`, `mul.ovf` and `.un` variants | Checked signed/unsigned arithmetic on matching I32/I64 stacks; same-width result or terminal overflow fault |
 | `and`, `or`, `xor` | Bitwise operations on matching I32 or I64 stacks; preserve operand width |
 | `not` | Bitwise complement of one I32 or I64; preserve operand width |
 | `neg` | Two's-complement negation of one I32 or I64; signed minimum remains unchanged |
@@ -151,8 +152,8 @@ method/offset and the original operand stack. They are terminal invocation
 receipts, rather than catchable guest exceptions. Retrying a saved fault does
 not execute the call again or repeat a preceding mutation. Pure arithmetic uses
 ordinary instruction safe points and does not suspend for host work. Floating
-point, native integers, checked arithmetic opcodes, and
-exception handling remain unsupported.
+point, native integers, checked conversions and exception handling remain
+unsupported.
 
 Bitwise instructions operate on all 32 or 64 storage bits. Signed and unsigned
 source declarations use the same instructions and produce identical bits.
@@ -163,11 +164,43 @@ implements the fixed-width subset of ECMA-335 III.3.3, III.3.52–53 and III.3.6
 [Table 5 and instruction definitions](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=352).
 Native integer operations remain unsupported.
 
+Checked `add.ovf`, `sub.ovf` and `mul.ovf` interpret operands as signed;
+`.un` forms interpret their raw bits as unsigned. Both operands must have the
+same I32/I64 width; the result keeps that width. The mathematical result must
+fit [-2^(width-1), 2^(width-1)-1] for signed forms or [0, 2^width-1] for unsigned
+forms. Overflow faults instead of wrapping. For example, raw I32 -1 plus zero
+is valid in both forms, while unsigned -1 plus one overflows. The implementation
+uses explicit range-checked operations, independent of Rust build-mode overflow
+settings. Refer to ECMA-335 Table III.7 and
+[III.3.2](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=351),
+[III.3.49](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=401) and
+[III.3.65](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=417).
+
+These remain single pure CIL steps. Invalid operands and overflow preserve the
+original frame/stack/continuation. Overflow uses a terminal durable VM/invocation
+diagnostic; it is not a catchable guest exception and does not roll back earlier
+instructions. Signed minimum times -1 faults in checked multiplication; ordinary
+`neg` still leaves signed minimum unchanged. No value tag, host capability, CoreLib
+change or checkpoint field is introduced. Checked/native/floating conversions,
+native/floating arithmetic, small-width storage and EH remain unsupported.
+
+`guest/CheckedIntegerArithmetic.cs` compiles unchanged against both cores. Its
+4,608-case real CoreCLR matrix also checks an independent BigInteger range oracle,
+covering all twelve signed/unsigned/width/operator combinations. Thirty-six
+success/fault cases restore each instruction with GC and original bindings.
+Nested checked computation mutates the original Counter 19 to 29, then 42; the
+first receipt still returns 29 without changing 42 or Mutations=2. All twelve
+operators have terminal faults after a prior mutation, retaining original objects
+through static/context replacement and GC. Six injected terminal-save failures
+recover committed operands without repeating the mutation. Twenty-four SDK-free
+native resumes/replays cover successful raw high-bit results and every mutating
+overflow. Rejection fixtures now use unsupported checked conversion `conv.ovf.i4`.
+
 Unchecked `neg` preserves the operand width and negates its integer bits modulo
 2^32 or 2^64. Zero stays zero; signed minimum stays signed minimum. It does not
 take the signed division/remainder overflow-fault path. References fault with
 the original operand and continuation intact; floating/native operands and
-checked arithmetic remain unsupported. The implementation uses explicit wrapping
+checked conversions remain unsupported. The implementation uses explicit wrapping
 negation independently of Rust debug/release overflow checks. See ECMA-335
 III.3.50/Table 3 in the [primary negation specification](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=402).
 
@@ -203,7 +236,7 @@ unspecified when the count reaches/exceeds the value width. The masking above is
 an explicit portable Renraku policy, not a claim that ECMA mandates it. Roslyn
 also emits count masks for C# shifts; both those masks and raw CIL obey this
 policy. See the [primary shift specification](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=410).
-Native/count-I64/checked operations remain unsupported.
+Native/count-I64 shifts remain unsupported; checked arithmetic is separate.
 
 `guest/IntegerShifts.cs` compiles unchanged against both cores. Its 5,570-case
 matrix compares emitted C# and raw CIL with boundary/high/negative counts; 231

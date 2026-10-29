@@ -167,7 +167,7 @@ fn bitwise_operands_reject_references_and_mixed_widths_without_consuming_the_sta
         assert_eq!(vm.instructions_executed(), 2);
         assert!(vm.heap().object(id).is_ok());
     }
-    for opcode in [0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb] {
+    for opcode in 0xb3..=0xba {
         assert!(
             decode(&[opcode])
                 .unwrap_err()
@@ -816,4 +816,69 @@ fn switch_consumes_only_i32_and_preserves_invalid_index_frames() {
             .contains("switch requires an I32 index")
     );
     assert_eq!(vm.context().frames, before.frames);
+}
+
+#[test]
+fn checked_arithmetic_rejects_mixed_widths_null_and_objects_without_consuming_operands() {
+    for opcode in 0xd6..=0xdb {
+        for (parameters, arguments) in [
+            (
+                vec![SlotType::I32, SlotType::I64],
+                vec![Value::I32(1), Value::I64(0)],
+            ),
+            (
+                vec![SlotType::I64, SlotType::I32],
+                vec![Value::I64(-1), Value::I32(1)],
+            ),
+        ] {
+            let (program, method) = program(
+                &[2, 3, opcode, 0x2a],
+                parameters,
+                vec![],
+                Some(SlotType::I32),
+            );
+            let mut vm = Vm::new(&program);
+            vm.start(method, arguments).unwrap();
+            vm.run(2).unwrap();
+            let before = vm.context().clone();
+            let error = vm.run(1).unwrap_err();
+            assert!(error.0.contains("matching integer stack types"));
+            assert!(error.0.contains("IL_0002"));
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 2);
+        }
+        for object in [false, true] {
+            let (program, method) = program(
+                &[0x14, 0x14, opcode, 0x2a],
+                vec![],
+                vec![],
+                Some(SlotType::I32),
+            );
+            let mut vm = Vm::new(&program);
+            vm.start(method, vec![]).unwrap();
+            vm.run(2).unwrap();
+            if object {
+                let id = ObjectId::fresh();
+                vm.heap
+                    .allocate(
+                        id,
+                        program.method(method).unwrap().owner,
+                        1,
+                        crate::heap::AllocationDomain::Managed,
+                    )
+                    .unwrap();
+                vm.context.frames[0].evaluation_stack =
+                    vec![Value::Reference(id), Value::Reference(id)];
+            }
+            let before = vm.context().clone();
+            assert!(
+                vm.run(1)
+                    .unwrap_err()
+                    .0
+                    .contains("matching integer stack types")
+            );
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 2);
+        }
+    }
 }
