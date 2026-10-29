@@ -228,6 +228,8 @@ boundaries, one-context exclusion, and durable receipts retain their distinct ro
 The separate [unsigned decimal module](unsigned-text.md) builds UInt32/UInt64
 text from fixed-width conversion and unsigned division/remainder, with explicit
 overflow results and no native formatter.
+The separate [hexadecimal module](hex-text.md) uses bitwise/shift loops and the
+existing unsigned result types; its foreign constructor frames recover normally.
 
 Strings are immutable heap objects with ordinary object identities and exact
 UTF-16 payloads. Length and indexing count UTF-16 units, following

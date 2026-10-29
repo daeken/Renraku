@@ -421,6 +421,12 @@ signs reject, including `-0`. Select its own frozen type root after installation
 Raw invoke/inspection I32/I64 values keep their storage bits; unsigned decimal
 meaning comes from the managed API, including a stored I64 -1 for UInt64 maximum.
 Existing signed-library and CoreLib bodies are unchanged.
+The separately installed [hex module](hex-text.md) exposes
+`Renraku.Text.HexIntegerText` FormatUInt32/64 and ParseUInt32/64. Output is lowercase
+without a prefix; input permits ASCII hex digits and an optional 0x/0X prefix
+within 64 units, with no signs or whitespace. It returns the existing unsigned
+result types. Select HexIntegerText as a frozen root; the result-module dependency
+is included automatically. Stored I32/I64 bits still carry unsigned values.
 
 The separately installed [StringMap module](string-map.md) exposes bounded
 ordinal UTF-16 string Get/Set/Remove/Count with data results. Search/describe

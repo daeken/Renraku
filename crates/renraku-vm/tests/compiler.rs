@@ -168,6 +168,326 @@ impl Directory {
 }
 
 #[test]
+fn hex_library_reuses_frozen_foreign_results_and_saved_objects_without_implementation_references() {
+    let directory = Directory::new();
+    let program = Program::load(&[
+        &fixtures().core,
+        &fixtures().guest,
+        &fs::read(fixtures().output.join("Renraku.UnsignedText.dll")).unwrap(),
+    ])
+    .unwrap();
+    let r32 = program.find_type("Renraku.Text.UInt32ParseResult").unwrap();
+    let r64 = program.find_type("Renraku.Text.UInt64ParseResult").unwrap();
+    let counter_type = program.find_type("Renraku.Guest.Counter").unwrap();
+    let counter_value = program
+        .fields()
+        .find(|f| f.owner == counter_type && f.name == "Value")
+        .unwrap()
+        .id;
+    let root = program
+        .fields()
+        .find(|f| {
+            f.owner == program.find_type("Renraku.Guest.Simulation").unwrap() && f.name == "Saved"
+        })
+        .unwrap()
+        .id;
+    let database = directory.0.join("hex.db");
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let mut vm = Vm::new(&program);
+    vm.start(common::entry(&program, "SaveObject"), vec![])
+        .unwrap();
+    assert_eq!(
+        vm.run(1000).unwrap(),
+        RunOutcome::Completed(Some(Value::I32(19)))
+    );
+    let counter = vm.static_fields()[&root];
+    let decimal_input = Value::Reference(
+        vm.new_string("18446744073709551615".encode_utf16().collect())
+            .unwrap(),
+    );
+    let decimal = vm
+        .invoke_once(
+            &mut store,
+            "decimal-before-hex",
+            program
+                .entry("Renraku.Text.UnsignedIntegerText::ParseUInt64")
+                .unwrap(),
+            vec![decimal_input],
+            5000,
+            7,
+        )
+        .unwrap();
+    let result_view = directory.0.join("unsigned-results.json");
+    let result_set = program.reference_set(&[r32, r64]).unwrap();
+    assert_eq!(result_set.views.len(), 1);
+    fs::write(&result_view, result_set.to_json().unwrap()).unwrap();
+    let hex_source = directory.source(
+        "HexIntegerText.cs",
+        include_str!("../../../guest/HexIntegerText.cs"),
+    );
+    let (output, report) = directory.compile_named(
+        std::slice::from_ref(&hex_source),
+        "hex-library",
+        std::slice::from_ref(&result_view),
+        "Renraku.HexText",
+    );
+    assert_success(&output, &report);
+    let library = BuildArtifact::from_bundle(directory.0.join("hex-library")).unwrap();
+    assert_eq!(
+        manifest(&directory.0.join("hex-library"))["references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let installed = install_once(&mut store, "hex/install", &library).unwrap();
+    assert_eq!(
+        install_once(&mut store, "hex/install", &library).unwrap(),
+        installed
+    );
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    for method in program.methods() {
+        assert_eq!(
+            registry.method(method.binding.method).unwrap().binding,
+            method.binding
+        );
+    }
+    for before in program.types() {
+        let after = registry.types().find(|t| t.id == before.id).unwrap();
+        assert_eq!(
+            (&after.name, after.base, &after.fields),
+            (&before.name, before.base, &before.fields)
+        );
+    }
+    for name in [
+        "Renraku.Text.UInt32ParseResult",
+        "Renraku.Text.UInt64ParseResult",
+    ] {
+        assert_eq!(registry.types().filter(|t| t.name == name).count(), 1);
+        assert_eq!(
+            registry.find_type(name).unwrap(),
+            program.find_type(name).unwrap()
+        );
+    }
+    assert_eq!(
+        saved
+            .snapshot
+            .restore()
+            .unwrap()
+            .invocation("decimal-before-hex")
+            .unwrap(),
+        &decimal
+    );
+    let hex_type = registry.find_type("Renraku.Text.HexIntegerText").unwrap();
+    let set = registry.reference_set(&[hex_type, counter_type]).unwrap();
+    assert_eq!(set.views.len(), 3);
+    let hex_view = set
+        .views
+        .iter()
+        .find(|v| {
+            serde_json::from_str::<Json>(&v.schema_json).unwrap()["moduleName"] == "Renraku.HexText"
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Json>(&hex_view.to_json().unwrap()).unwrap()["format"],
+        2
+    );
+    assert_eq!(
+        serde_json::from_str::<Json>(&hex_view.schema_json).unwrap()["dependencies"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let caller_view = directory.0.join("hex-set.json");
+    fs::write(&caller_view, set.to_json().unwrap()).unwrap();
+    let caller = directory.source(
+        "HexCaller.cs",
+        r#"
+using Renraku.Text;
+public static class HexCaller {
+ public static int Calls;
+ public static UInt64ParseResult Last;
+ public static string Run(Renraku.Guest.Counter counter, string text) {
+  UInt64ParseResult parsed = HexIntegerText.ParseUInt64(text);
+  Last = parsed;
+  if (!parsed.Success) return parsed.Error;
+  Calls = Calls + 1;
+  counter.Add(1);
+  return string.Concat(HexIntegerText.FormatUInt64(parsed.Value),
+    string.Concat("/", HexIntegerText.FormatUInt32((uint)counter.Value)));
+ }
+}"#,
+    );
+    let caller_source = fs::read_to_string(&caller).unwrap();
+    let (output, report) = directory.compile_with_views(
+        std::slice::from_ref(&caller),
+        "hex-caller",
+        std::slice::from_ref(&caller_view),
+    );
+    assert_success(&output, &report);
+    let artifact = BuildArtifact::from_bundle(directory.0.join("hex-caller")).unwrap();
+    assert_eq!(
+        manifest(&directory.0.join("hex-caller"))["references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    install_once(&mut store, "hex-caller/install", &artifact).unwrap();
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let method = registry.entry("HexCaller::Run").unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    let input = vm
+        .new_string("0Xffffffffffffffff".encode_utf16().collect())
+        .unwrap();
+    let args = vec![counter, Value::Reference(input)];
+    let intent = vm
+        .invoke_once(&mut store, "hex-caller/invoke", method, args.clone(), 0, 7)
+        .unwrap();
+    assert_eq!(
+        intent.state,
+        renraku_vm::invocation::InvocationState::Running
+    );
+    // Persist an actual foreign constructor, including its partially initialized
+    // old-type result and the caller's portable newobj continuation.
+    let mut saw_ctor = false;
+    for _ in 0..5000 {
+        let receipt = vm
+            .invoke_once(&mut store, "hex-caller/invoke", method, args.clone(), 1, 1)
+            .unwrap();
+        assert_eq!(receipt.execution, intent.execution);
+        if vm.context().frames.iter().any(|f| {
+            let m = registry.method(f.method.method).unwrap();
+            m.owner == r64 && m.name == ".ctor"
+        }) {
+            saw_ctor = true;
+            break;
+        }
+        assert_eq!(
+            receipt.state,
+            renraku_vm::invocation::InvocationState::Running
+        );
+    }
+    assert!(saw_ctor);
+    vm.collect_garbage().unwrap();
+    assert!(vm.heap().object(input).is_ok());
+    store.save(&vm).unwrap();
+    drop(store);
+    for path in ["hex-library", "hex-caller"] {
+        fs::remove_dir_all(directory.0.join(path)).unwrap();
+    }
+    for path in [hex_source, result_view, caller, caller_view] {
+        fs::remove_file(path).unwrap();
+    }
+    let counter_arg = format!("object:{}", counter.referenced_object().unwrap());
+    let input_arg = format!("object:{input}");
+    let native = || -> Json {
+        let output = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+            .args([
+                "invoke-once",
+                database.to_str().unwrap(),
+                "hex-caller/invoke",
+                &method.to_string(),
+                "10000",
+                &counter_arg,
+                &input_arg,
+            ])
+            .env("PATH", "/no-hex-compiler-or-sdk")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let first = native();
+    assert_eq!(first["state"], "completed");
+    assert_eq!(first["execution"], intent.execution.to_string());
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    let receipt = vm.invocation("hex-caller/invoke").unwrap().clone();
+    let renraku_vm::invocation::InvocationState::Completed {
+        result: Some(value),
+    } = receipt.state
+    else {
+        panic!()
+    };
+    assert_eq!(
+        String::from_utf16(
+            vm.heap()
+                .object(value.referenced_object().unwrap())
+                .unwrap()
+                .string_units()
+                .unwrap()
+        )
+        .unwrap(),
+        "ffffffffffffffff/14"
+    );
+    let calls = registry
+        .fields()
+        .find(|f| f.owner == registry.find_type("HexCaller").unwrap() && f.name == "Calls")
+        .unwrap()
+        .id;
+    let last = registry
+        .fields()
+        .find(|f| f.owner == registry.find_type("HexCaller").unwrap() && f.name == "Last")
+        .unwrap()
+        .id;
+    let parsed = vm
+        .heap()
+        .object(vm.static_fields()[&last].referenced_object().unwrap())
+        .unwrap();
+    assert_eq!(parsed.type_id(), r64);
+    let value_field = registry
+        .fields()
+        .find(|f| f.owner == r64 && f.name == "Value")
+        .unwrap()
+        .id;
+    assert_eq!(parsed.fields()[&value_field], Value::I64(-1));
+    vm.start(common::entry(registry, "Arithmetic"), vec![])
+        .unwrap();
+    vm.run(1000).unwrap();
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    drop(store);
+    let replay = native();
+    for key in [
+        "state",
+        "execution",
+        "result",
+        "methodId",
+        "codeVersion",
+        "requestId",
+    ] {
+        assert_eq!(first[key], replay[key]);
+    }
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.static_fields()[&root], counter);
+    assert_eq!(vm.static_fields()[&calls], Value::I32(1));
+    assert_eq!(
+        vm.heap()
+            .object(counter.referenced_object().unwrap())
+            .unwrap()
+            .fields()[&counter_value],
+        Value::I32(20)
+    );
+    assert_eq!(vm.invocation("hex-caller/invoke").unwrap(), &receipt);
+    assert_eq!(vm.invocation("decimal-before-hex").unwrap(), &decimal);
+    let source = vm.read_code(&method.to_string()).unwrap();
+    assert_eq!(source["sourceAvailable"], true);
+    assert_eq!(source["sources"][0]["text"], caller_source);
+}
+
+#[test]
 fn unsigned_library_installs_append_only_and_frozen_callers_replay_without_sdk() {
     let directory = Directory::new();
     // Start with the original signed library, heap and saved counter already present.

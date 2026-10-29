@@ -5,6 +5,8 @@
 ordinary CIL loops, unsigned arithmetic, immutable strings and result objects.
 Existing CoreLib, Renraku.Library and other saved module bodies stay unchanged;
 install this module explicitly in an existing universe.
+The separate [hexadecimal module](hex-text.md) reuses these same parse-result
+declarations through frozen references, while preserving this decimal API.
 
 | Method | Result |
 | --- | --- |

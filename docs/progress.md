@@ -471,6 +471,31 @@ and do not inherit persistence.
   libraries, format 7/all original fixtures and both demos remain unchanged.
   Model guidance describes the implemented shifts; no live inference was needed.
 
+- Bounded managed hexadecimal text is implemented in the separate append-only
+  Renraku.HexText module from guest/HexIntegerText.cs. HexIntegerText supplies
+  FormatUInt32/64, ParseUInt32/64 and MaxParseUnits()=64, reusing the original
+  unsigned UInt32ParseResult/UInt64ParseResult declarations/constructors rather
+  than creating replacement types. Canonical output is lowercase, no prefix,
+  8/16 units maximum. Parsing accepts ASCII hex digits, optional 0x/0X prefix,
+  leading zeros and mixed case within 64 units including prefix. Signs, whitespace,
+  NUL/non-ASCII/surrogate units reject with exact first-error offsets; length
+  preflight and pre-shift overflow guards retain full unsigned range. Failures
+  keep zero Value and the established null/empty/too_long/invalid_digit/overflow
+  result vocabulary. All work is ordinary CIL; no new intrinsic/capability/format.
+  Tests compare 280 formats/1,736 parses against actual CoreCLR and an independent
+  BigInteger radix-prefix oracle. Six operations restore each instruction with GC,
+  exact input units, strings and foreign result-constructor frames; native SDK-free
+  processes finish saved work. The compiler test installs HexText through frozen
+  unsigned result references, preserving old module/type/field/method/code IDs and
+  a retained decimal parse receipt. Its exported HexText/unsigned-result/Counter
+  dependency set compiles a new caller, which pauses at the original UInt64 result
+  constructor. After GC/deleting sources/views/bundles, native SDK-free invocation
+  returns ffffffffffffffff/14 from the same Counter=20 and original result type
+  storing raw I64 -1. Source, installation and invocation receipts survive;
+  later-context/GC replay keeps Calls=1 and Counter=20. CoreLib, decimal libraries,
+  checkpoint format 7, original fixtures and demos are unchanged. See
+  [hexadecimal text](hex-text.md); no inference was needed.
+
 
 ## Validation
 
@@ -478,7 +503,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 253 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 257 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -747,27 +772,22 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next add bounded managed hexadecimal integer text.** Use the new ordinary
-CIL bitwise/shift foundation in a separate append-only Renraku.HexText module,
-with a small static API such as Renraku.Text.HexIntegerText FormatUInt32/64 and
-ParseUInt32/64. Canonical output should be lowercase without a prefix, at most
-8/16 units. Define the strict culture-independent input syntax explicitly:
-ASCII hex digits, optional 0x/0X prefix, no signs/whitespace, leading zeros and
-64-unit input cap including prefix. Preserve exact UTF-16, precise first-error
-positions and pre-shift overflow guards, including full unsigned maxima. Reuse
-the existing UInt32ParseResult/UInt64ParseResult declarations from Renraku.UnsignedText
-rather than recreating foreign types; retain its module/type/method IDs. Compile
-through its frozen reference closure, and export HexText's foreign-result
-reference set for subsequent callers. Never use an implementation reference as
-a production shortcut or replace saved decimal/CoreLib bodies. Compare actual
-C# with CoreCLR and an independent BigInteger radix-prefix oracle, test invalid
-UTF-16 and boundaries, and cut formatting/parsing/foreign result constructors
-at every instruction with GC/recovery. Demonstrate external compilation/use
-against existing saved state, retained source/receipts and SDK-free replay
-without a second mutation. Keep arrays, generics, byrefs, culture, arbitrary
-radices and native formatting outside this narrow milestone. Preserve all old
-library/page semantics, capabilities, demos, managed transcripts and legacy
-fixtures; no live model demonstration is needed for this pure library work.
+**Next implement fixed-width unary negation (neg).** This ordinary CIL
+foundation enables common C# variable negation without requiring a helper. Follow
+primary ECMA-335 III.3.50/Table 3 for I32/I64 results and minimum-value behavior:
+use an explicit portable two's-complement implementation rather than Rust debug
+overflow/panics. Preserve raw bits, width, byte offsets, failing reference operands
+and checkpoint abstract stacks. Compare actual emitted C# with CoreCLR over
+min/max/high-bit/seeded inputs, cut execution at each instruction with GC/recovery,
+and verify a small durable negation-driven mutation/receipt across later state
+changes and SDK-free native resumes. Keep existing signed-min division/remainder
+fault policy distinct from unchecked negation. Floating/native values, checked
+arithmetic/conversions and EH stay unsupported; the checked-addition negative
+fixtures retain their purpose. No host formatter, new module replacement,
+capability, checkpoint field or live inference is needed. Preserve the new hex
+module/foreign result bindings, all old libraries/CoreLib, source/compile/install/
+invoke provenance, reference sets, managed transcripts, capabilities, demos and
+all legacy readers/fixtures. Update model guidance only for implemented behavior.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
