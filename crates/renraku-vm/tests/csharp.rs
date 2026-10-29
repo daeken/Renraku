@@ -163,6 +163,10 @@ fn unsupported_csharp_capabilities_are_rejected_during_loading() {
     let fixture = fixtures();
     for (name, expected) in [
         ("Boxing", "unsupported CIL opcode 8c"),
+        ("ValueIsInst", "reference cast target"),
+        ("ArrayIsInst", "unsupported metadata table 27"),
+        ("InterfaceIsInst", "interfaces are unsupported"),
+        ("GenericIsInst", "unsupported metadata table"),
         ("SmallStorage", "unsupported signature element 05"),
         ("FloatArithmetic", "unsupported signature element 0d"),
         // Roslyn also embeds native-int annotation constructors with array

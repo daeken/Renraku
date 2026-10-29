@@ -445,6 +445,12 @@ are separate; overflow retains the failing frame. Native/floating
 arithmetic and conversions remain unsupported. Byte/SByte/Int16/UInt16 storage
 signatures/locals/fields remain unsupported.
 
+Reference-only class `as`/`is` and explicit casts are supported. Successful casts
+preserve the original object/type identity; `isinst` mismatch returns null and
+`castclass` mismatch faults without rollback. Targets must resolve to supported
+reference classes. Boxing/value, array, interface/generic, TypeSpec and pointer
+casts remain unsupported. No capability is granted by a cast.
+
 Integer/Int32-enum switch dispatch is supported under the [CIL profile](cil-profile.md),
 with I32 indices, validated targets and at most 4,096 entries per table. Dispatch
 is pure computation under existing guest instruction budgets. String-switch

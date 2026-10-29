@@ -710,9 +710,19 @@ impl Program {
                 }
             }
         }
-        for (image, (assembly, _, _)) in images.iter().zip(&modules) {
+        for (image, (assembly, assembly_name, own_types)) in images.iter().zip(&modules) {
+            let resolver = Resolver {
+                image,
+                assembly: assembly_name,
+                names: &names,
+                own_types,
+            };
             for method in program.methods.values().filter(|m| m.assembly == *assembly) {
                 for instruction in method.instructions.values() {
+                    if let Op::ReferenceCast { token, .. } = instruction.op {
+                        let id = resolver.type_token(token)?;
+                        program.type_tokens.insert((*assembly, token), id);
+                    }
                     if let Op::LoadString(token) = instruction.op {
                         require(token >> 24 == 0x70, "invalid ldstr token")?;
                         program
@@ -788,6 +798,34 @@ impl Program {
         }
         false
     }
+    pub(crate) fn reference_cast_target(&self, assembly: AssemblyId, token: u32) -> Result<TypeId> {
+        require(
+            matches!(token >> 24, 1 | 2),
+            "reference casts require TypeDef/TypeRef targets",
+        )?;
+        let id = *self
+            .type_tokens
+            .get(&(assembly, token))
+            .ok_or_else(|| Error("unresolved reference cast target".into()))?;
+        let mut current = Some(id);
+        while let Some(owner) = current {
+            let ty = self
+                .types
+                .get(&owner)
+                .ok_or_else(|| Error("missing reference cast type".into()))?;
+            require(
+                ty.flags & 0x20 == 0
+                    && ty.flags & 0x18 == 0
+                    && !matches!(
+                        ty.name.as_str(),
+                        "System.ValueType" | "System.Enum" | "System.Array"
+                    ),
+                "reference cast target must be a supported reference class; value/array/interface targets are unsupported",
+            )?;
+            current = ty.base;
+        }
+        Ok(id)
+    }
     pub(crate) fn allocatable(&self, id: TypeId) -> Result<()> {
         let ty = &self.types[&id];
         require(ty.flags & 0x80 == 0, "cannot instantiate an abstract type")?;
@@ -816,6 +854,9 @@ impl Program {
             }
             for instruction in method.instructions.values() {
                 match instruction.op {
+                    Op::ReferenceCast { token, .. } => {
+                        self.reference_cast_target(method.assembly, token)?;
+                    }
                     Op::LoadString(token) => {
                         self.string_type()?;
                         require(

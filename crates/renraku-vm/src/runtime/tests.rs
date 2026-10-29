@@ -977,3 +977,63 @@ fn small_checked_conversions_enforce_ranges_extend_into_i32_and_keep_invalid_fra
         }
     }
 }
+
+#[test]
+fn reference_casts_reject_scalars_preserve_identity_and_never_promote_transient_objects() {
+    for test in [false, true] {
+        for value in [Value::I32(0), Value::I32(-1), Value::I64(0)] {
+            let (mut program, method) = program(
+                &[0, if test { 0x75 } else { 0x74 }, 1, 0, 0, 2, 0x2a],
+                vec![],
+                vec![],
+                Some(SlotType::I32),
+            );
+            let owner = program.method(method).unwrap().owner;
+            let assembly = program.method(method).unwrap().assembly;
+            program.type_tokens.insert((assembly, 0x02000001), owner);
+            let mut vm = Vm::new(&program);
+            vm.start(method, vec![]).unwrap();
+            vm.run(1).unwrap();
+            vm.context.frames[0].evaluation_stack = vec![value];
+            let before = vm.context().clone();
+            assert!(
+                vm.run(1)
+                    .unwrap_err()
+                    .0
+                    .contains("reference cast requires an object reference or null")
+            );
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 1);
+        }
+        for transient in [false, true] {
+            let (mut program, method) = program(
+                &[0, if test { 0x75 } else { 0x74 }, 1, 0, 0, 2, 0x2a],
+                vec![],
+                vec![],
+                Some(SlotType::I32),
+            );
+            let owner = program.method(method).unwrap().owner;
+            let assembly = program.method(method).unwrap().assembly;
+            program.type_tokens.insert((assembly, 0x02000001), owner);
+            let mut vm = Vm::new(&program);
+            vm.start(method, vec![]).unwrap();
+            vm.run(1).unwrap();
+            let id = ObjectId::fresh();
+            let domain = if transient {
+                crate::heap::AllocationDomain::Transient(crate::identity::ArenaId::fresh())
+            } else {
+                crate::heap::AllocationDomain::Managed
+            };
+            vm.heap.allocate(id, owner, 1, domain).unwrap();
+            vm.context.frames[0].evaluation_stack = vec![Value::Reference(id)];
+            let heap = vm.heap().clone();
+            assert_eq!(vm.run(1).unwrap(), RunOutcome::Paused);
+            assert_eq!(
+                vm.context().frames[0].evaluation_stack,
+                vec![Value::Reference(id)]
+            );
+            assert_eq!(vm.heap(), &heap);
+            assert_eq!(vm.heap().object(id).unwrap().domain(), domain);
+        }
+    }
+}

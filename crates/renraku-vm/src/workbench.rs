@@ -150,6 +150,7 @@ impl Program {
                     let field = &self.fields[id]; json!({"kind":"field","id":id.to_string(),"name":format!("{}::{}",self.types[&field.owner].name,field.name)})
                 }),
                 Op::LoadString(token) => self.string_literals.get(&(method.assembly,token)).map(|units| json!({"kind":"string","utf16":units})),
+                Op::ReferenceCast { token, .. } => self.type_tokens.get(&(method.assembly, token)).map(|id| json!({"kind":"type","id":id.to_string(),"name":self.types[id].name})),
                 _ => None,
             };
             json!({"offset":instruction.offset,"next":instruction.next,"operation":format!("{:?}",instruction.op),"target":target})

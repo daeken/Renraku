@@ -654,13 +654,43 @@ and do not inherit persistence.
   See [CIL profile](cil-profile.md); no live inference was needed.
 
 
+- Reference-only isinst/castclass now resolve TypeDef/TypeRef operands through
+  the saved registry to original logical class IDs. Compatible references retain
+  their exact object ID/runtime type/allocation domain; null stays null. isinst
+  mismatch returns null and castclass mismatch uses terminal durable diagnostics
+  with original stack/continuation and prior mutations retained. No allocation,
+  heap/static writes, host authority/wait or value/checkpoint kind was added.
+  Value/boxed/array/interface/TypeSpec/generic/pointer and unsupported-layout
+  targets reject explicitly. Scalar operands keep failing frames. Checkpoint
+  reference stack shapes track targets, and read-code exposes bounded resolved
+  type IDs. TypeRef caches rebuild from saved images/bindings without a format
+  change; reference-set ownership still comes only from original TypeDefs.
+  guest/ReferenceCasts.cs compiles unchanged against both cores. A 171-case
+  CoreCLR matrix covers as/is/casts, null/base/derived/leaf/sibling/unrelated
+  references, strings/Counter and typed field reads. Every case restores each
+  instruction with GC/original IDs/cycles/shared roots, including clearing both
+  static roots before casting. A unit test rejects I32/I64 operands intact and
+  preserves transient domains; four metadata/five bad-token fixtures reject
+  before execution. Prior-mutation fault receipts, failed terminal saves and ten
+  SDK-free native cases retain object IDs and exact NUL/lone-surrogate strings.
+  A frozen-reference caller pauses before casting the original saved Counter,
+  then resumes SDK-free after deleting source/view/bundle files to change 19 to
+  26. A later request reaches 23; old replay returns 26 while retaining 23,
+  Calls=2 and exactly one original Counter. Original type/field/method/code IDs,
+  byte-identical reference-set JSON, source/install/invoke provenance survive.
+  The decoder's old castclass-negative fixture now uses boxing, with explicit
+  five-byte/truncated-token coverage added. CoreLib/old bodies, format 7/every
+  fixture and both idle demos are unchanged. See [CIL profile](cil-profile.md);
+  no live inference was needed.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 302 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 311 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -929,25 +959,28 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next implement reference-only isinst/castclass.** Consult primary ECMA-335
-III.4.3/4.6 for null, success/mismatch and stack behavior. Resolve TypeDef/TypeRef
-operands to existing logical reference-class IDs, using the authoritative registry;
-reject missing, ambiguous, value/array/interface/generic/pointer targets explicitly.
-Successful casts preserve the exact object ID and allocation domain. isinst returns
-null for incompatible references; castclass mismatch uses the current terminal
-VM fault contract with original operands/continuation and prior mutations retained.
-No boxing, reflection objects, host capabilities or new value/checkpoint kinds.
-Support ordinary object/string/class inheritance under existing schema rules,
-validate checkpoint reference stack shapes and keep invalid scalar inputs intact.
-Compare actual C# class as/is/casts with CoreCLR, then instruction-cut GC/recovery,
-null/base/derived/mismatch/shared-object cases, terminal prior-mutation fault
-receipts, failed saves and SDK-free replay. Compile a frozen-reference caller that
-casts an existing saved Counter from object and uses that same instance, preserving
-type/field/method/object IDs, source/provenance and receipts across recovery.
-Keep boxing/small-storage rejection fixtures useful and CoreLib/old bodies unchanged.
-Arrays, arbitrary value types, interfaces/generics, EH, body replacement and
-same-universe concurrency remain unsupported. Update guidance only for verified
-reference operations; no live inference is needed for this narrow runtime step.
+**Next add a bounded managed object map.** Use a separate append-only module
+such as Renraku.ObjectCollections with a nongeneric Renraku.Collections.ObjectMap
+and ordinary linked CIL nodes. Follow StringMap's exact ordinal UTF-16 key
+contract and modest 64-entry/128-key-unit limits, with Get/Set/Remove/Count and
+explicit result data for missing/invalid/full. Values are nullable managed object
+references, never implicitly boxed scalars. Distinguish stored null from absence;
+replacement/no-op equality uses reference identity, including different strings
+with equal text, and preserve existing node/key IDs. Removed results retain their
+returned value through ordinary typed roots; a readonly result reference does
+not freeze the mutable target's state. Respect lifetime barriers without promoting
+transient references. Methods have resumable intermediate fields rather than
+whole-method atomicity; one-context exclusion and receipts protect recovery.
+Compare actual C# with a host ordinal dictionary/reference-identity oracle, then
+instruction-cut GC/recovery with cycles/shared values, capacity reuse, static-root
+replacement, removed-value receipt roots and SDK-free replay. Compile frozen-set
+callers that retrieve/cast/use the same saved Counter, preserving all IDs/source/
+receipts; demonstrate a narrow managed website reusing existing saved state with
+HTTP-v1 deduplication and SDK-free recovery. Add no native dictionary/generics/
+arrays/iterator/indexer/new authority. Keep all old modules, CoreLib, reference
+casts/conversions, compiler/transcript/publication/preview/inspection contracts,
+demos and legacy fixtures unchanged. No live model run is needed for this pure
+library milestone.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may

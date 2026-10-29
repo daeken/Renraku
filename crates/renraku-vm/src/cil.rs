@@ -19,6 +19,10 @@ pub enum Comparison {
 #[derive(Clone, Debug)]
 pub enum Op {
     LoadString(u32),
+    ReferenceCast {
+        token: u32,
+        test: bool,
+    },
     Nop,
     Constant(Value),
     LoadArgument(usize),
@@ -300,6 +304,10 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Instruction>> {
             0xdb => Op::SubtractChecked { unsigned: true },
             0x72 => Op::LoadString(reader.u32()?),
             0x73 => Op::NewObject(reader.u32()?),
+            0x74 | 0x75 => Op::ReferenceCast {
+                token: reader.u32()?,
+                test: opcode == 0x75,
+            },
             0x7b | 0x7e => Op::LoadField {
                 token: reader.u32()?,
                 is_static: opcode == 0x7e,

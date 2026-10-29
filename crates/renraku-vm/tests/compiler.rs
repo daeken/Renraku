@@ -2217,3 +2217,224 @@ fn invalid_inputs_limits_and_existing_outputs_are_rejected_without_replacing_art
             .exists()
     );
 }
+
+#[test]
+fn frozen_reference_cast_caller_keeps_saved_counter_identity_provenance_and_sdk_free_receipts() {
+    use renraku_vm::{cil::Op, execution::Continuation, invocation::InvocationState};
+    let directory = Directory::new();
+    let program = common::program();
+    let counter_type = program.find_type("Renraku.Guest.Counter").unwrap();
+    let root = program
+        .fields()
+        .find(|f| {
+            f.owner == program.find_type("Renraku.Guest.Simulation").unwrap() && f.name == "Saved"
+        })
+        .unwrap()
+        .id;
+    let value = program
+        .fields()
+        .find(|f| f.owner == counter_type && f.name == "Value")
+        .unwrap()
+        .id;
+    let view = program
+        .reference_set(&[counter_type])
+        .unwrap()
+        .to_json()
+        .unwrap();
+    let view_path = directory.0.join("counter.view.json");
+    fs::write(&view_path, &view).unwrap();
+    let database = directory.0.join("reference-cast.db");
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let mut vm = Vm::new(&program);
+    vm.start(common::entry(&program, "SaveObject"), vec![])
+        .unwrap();
+    vm.run(1000).unwrap();
+    let counter = vm.static_fields()[&root];
+    store.save(&vm).unwrap();
+    let source_text = "public static class CastCaller { public static int Calls; public static Renraku.Guest.Counter Last; public static Renraku.Guest.Counter Cast(object value) { return (Renraku.Guest.Counter)value; } public static int Run(object value, int delta) { Renraku.Guest.Counter same=value as Renraku.Guest.Counter; if(same==null)return -1; Renraku.Guest.Counter exact=Cast(value); if(same!=exact)return -2; Last=exact; Calls=Calls+1; exact.Add(delta); return exact.Value; } }";
+    let source = directory.source("CastCaller.cs", source_text);
+    let (output, report) = directory.compile_with_views(
+        std::slice::from_ref(&source),
+        "cast-caller",
+        std::slice::from_ref(&view_path),
+    );
+    assert_success(&output, &report);
+    let artifact = BuildArtifact::from_bundle(directory.0.join("cast-caller")).unwrap();
+    let installation = install_once(&mut store, "cast/install", &artifact).unwrap();
+    assert_eq!(
+        install_once(&mut store, "cast/install", &artifact).unwrap(),
+        installation
+    );
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    assert_eq!(
+        registry
+            .reference_set(&[counter_type])
+            .unwrap()
+            .to_json()
+            .unwrap(),
+        view
+    );
+    for old in program.methods() {
+        assert_eq!(
+            registry.method(old.binding.method).unwrap().binding,
+            old.binding
+        );
+    }
+    for old in program.types() {
+        let now = registry.types().find(|t| t.id == old.id).unwrap();
+        assert_eq!(
+            (&now.name, now.base, &now.fields),
+            (&old.name, old.base, &old.fields)
+        );
+    }
+    for old in program.fields() {
+        let now = registry.fields().find(|f| f.id == old.id).unwrap();
+        assert_eq!(
+            (&now.name, now.owner, now.value_type),
+            (&old.name, old.owner, old.value_type)
+        );
+    }
+    let method = registry.entry("CastCaller::Run").unwrap();
+    let helper = registry.entry("CastCaller::Cast").unwrap();
+    let binding = registry.method(method).unwrap().binding;
+    let code = vm.read_code(&helper.to_string()).unwrap();
+    let cast = code["instructions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["target"]["kind"] == "type")
+        .unwrap();
+    assert_eq!(cast["target"]["id"], counter_type.to_string());
+    let args = vec![counter, Value::I32(7)];
+    let intent = vm
+        .invoke_once(&mut store, "cast/invoke", method, args.clone(), 0, 1)
+        .unwrap();
+    let mut paused = false;
+    for _ in 0..100 {
+        let frame = vm.context().frames.last().unwrap();
+        if let Continuation::Execute { next } = frame.continuation
+            && frame.method.method == helper
+            && matches!(
+                registry.method(helper).unwrap().instructions[&next].op,
+                Op::ReferenceCast { test: false, .. }
+            )
+        {
+            assert_eq!(frame.evaluation_stack, vec![counter]);
+            paused = true;
+            break;
+        }
+        vm.invoke_once(&mut store, "cast/invoke", method, args.clone(), 1, 1)
+            .unwrap();
+    }
+    assert!(paused);
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    drop(store);
+    fs::remove_file(source).unwrap();
+    fs::remove_file(view_path).unwrap();
+    fs::remove_dir_all(directory.0.join("cast-caller")).unwrap();
+    let argument = format!("object:{}", counter.referenced_object().unwrap());
+    let invoke = || -> Json {
+        let output = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+            .args([
+                "invoke-once",
+                database.to_str().unwrap(),
+                "cast/invoke",
+                &method.to_string(),
+                "1000",
+                &argument,
+                "i32:7",
+            ])
+            .env("PATH", "/no-cast-compiler-or-sdk")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let first = invoke();
+    assert_eq!(first["execution"], intent.execution.to_string());
+    assert_eq!(first["result"]["value"], 26);
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let mut vm = saved.snapshot.restore().unwrap();
+    let owner = registry.find_type("CastCaller").unwrap();
+    let calls = registry
+        .fields()
+        .find(|f| f.owner == owner && f.name == "Calls")
+        .unwrap()
+        .id;
+    let last = registry
+        .fields()
+        .find(|f| f.owner == owner && f.name == "Last")
+        .unwrap()
+        .id;
+    assert_eq!(vm.static_fields()[&last], counter);
+    assert_eq!(vm.static_fields()[&calls], Value::I32(1));
+    let receipt = vm.invocation("cast/invoke").unwrap().clone();
+    let second = vm
+        .invoke_once(
+            &mut store,
+            "cast/later",
+            method,
+            vec![counter, Value::I32(-3)],
+            1000,
+            7,
+        )
+        .unwrap();
+    assert_eq!(
+        second.state,
+        InvocationState::Completed {
+            result: Some(Value::I32(23))
+        }
+    );
+    vm.start(common::entry(registry, "Arithmetic"), vec![])
+        .unwrap();
+    vm.run(1000).unwrap();
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    drop(store);
+    let replay = invoke();
+    for key in ["execution", "state", "result", "methodId", "codeVersion"] {
+        assert_eq!(first[key], replay[key]);
+    }
+    let mut store = CheckpointStore::open(&database).unwrap();
+    let saved = store.load().unwrap();
+    let registry = &saved.snapshot.program;
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.invocation("cast/invoke").unwrap(), &receipt);
+    assert_eq!(registry.method(method).unwrap().binding, binding);
+    assert_eq!(
+        registry
+            .reference_set(&[counter_type])
+            .unwrap()
+            .to_json()
+            .unwrap(),
+        view
+    );
+    assert_eq!(vm.static_fields()[&root], counter);
+    assert_eq!(vm.static_fields()[&last], counter);
+    assert_eq!(vm.static_fields()[&calls], Value::I32(2));
+    let object = vm
+        .heap()
+        .object(counter.referenced_object().unwrap())
+        .unwrap();
+    assert_eq!(object.type_id(), counter_type);
+    assert_eq!(object.fields()[&value], Value::I32(23));
+    assert_eq!(
+        vm.heap()
+            .objects()
+            .filter(|o| o.type_id() == counter_type)
+            .count(),
+        1
+    );
+    let code = vm.read_code(&method.to_string()).unwrap();
+    assert_eq!(code["sourceAvailable"], true);
+    assert_eq!(code["sources"][0]["text"], source_text);
+}

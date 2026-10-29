@@ -399,6 +399,30 @@ impl<'a> Vm<'a> {
             }
             Op::Nop => {}
             Op::Constant(value) => frame.evaluation_stack.push(value),
+            Op::ReferenceCast { token, test } => {
+                let target = self.program.reference_cast_target(method.assembly, token)?;
+                let value = match pop(&mut frame)? {
+                    Value::Null => Value::Null,
+                    Value::Reference(id) => {
+                        if self
+                            .program
+                            .is_assignable(self.heap.object(id)?.type_id(), target)
+                        {
+                            Value::Reference(id)
+                        } else if test {
+                            Value::Null
+                        } else {
+                            return Err(Error("invalid reference cast".into()));
+                        }
+                    }
+                    _ => {
+                        return Err(Error(
+                            "reference cast requires an object reference or null".into(),
+                        ));
+                    }
+                };
+                frame.evaluation_stack.push(value);
+            }
             Op::LoadArgument(index) => frame.evaluation_stack.push(
                 *frame
                     .arguments

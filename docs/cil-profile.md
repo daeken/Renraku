@@ -98,6 +98,7 @@ IL byte offsets remain byte offsets after decoding.
 | `call` | Invoke a managed method |
 | `callvirt` | Null check and invoke a nonvirtual instance method |
 | `newobj` | Allocate an object and invoke its constructor |
+| `isinst`, `castclass` | Test/cast an existing reference against a resolved reference-class ID; preserve identity |
 | `ldfld`, `stfld` | Read or replace an instance field after receiver and type checks |
 | `ldsfld`, `stsfld` | Read or replace a static field |
 | `ret` | Complete a call and produce its result |
@@ -130,6 +131,46 @@ same Counter 19 to 30, then 7, while the first receipt keeps 30 without repeatin
 a mutation. Seven fresh SDK-free native resumes retain saved switch indices and
 receipt identities/results, including the original Counter mutation. String-switch
 lowering and general pattern matching have no supported contract in this milestone.
+
+Reference-only `isinst` and `castclass` take an object reference or null and
+resolve a TypeDef/TypeRef operand to an existing logical class ID. A compatible
+object returns unchanged, including its identity, runtime type and allocation
+domain. Null stays null. For an incompatible reference, isinst returns null;
+castclass produces the current terminal VM diagnostic with original operands
+and continuation. Earlier mutations remain committed; no guest EH or rollback
+is added. These are pure CIL steps with no allocation, heap/static writes, waits
+or capabilities. See [ECMA-335 III.4.3](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=424) and
+[III.4.6](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=427).
+
+This profile deliberately rejects value/boxed, array, interface, TypeSpec/generic
+and pointer targets, even where the full CLI defines more behavior. Missing or
+invalid type tokens fail during loading; original module bindings determine the
+live target, never facade token identities. Target validation follows the saved
+class hierarchy and excludes unsupported layouts. Scalar I32/I64 operands fault
+without consuming the original frame. Checkpoint abstract stacks track the target
+reference type; null is compatible with that tracked type. read-code adds a resolved
+logical type target for these new instructions, within its existing output bound.
+No checkpoint field, CoreLib image or saved body is changed.
+
+`guest/ReferenceCasts.cs` compiles unchanged against both cores. A 171-case actual
+CoreCLR comparison covers class as/is/explicit casts, null/base/derived/leaf/
+sibling/unrelated instances, strings, existing Counter declarations and a typed
+field-reading caller. Every case restores each instruction with GC, cyclic/shared
+references and original IDs, including helper code clearing both static roots
+before casting. Heap/static state is unchanged by the cast step itself. Runtime
+unit coverage keeps invalid scalars intact and proves transient references are
+not promoted to managed storage. Four real metadata rejection fixtures and five
+patched bad-token images reject before execution. Terminal prior-mutation cast
+faults, failed terminal saves and ten SDK-free native cases retain receipts,
+reference identity and exact NUL/lone-surrogate string units.
+
+A frozen-reference compiler fixture starts with an existing Counter=19, installs
+a caller using as and a nested explicit cast, and pauses before the cast against
+the original Counter type ID. After deleting source/view/bundle files, an SDK-free
+native process updates that same object once to 26. Another request reaches 23,
+and first-receipt replay still returns 26 while leaving Calls=2 and the one object
+at 23. Original type/field/method/code IDs, the byte-identical Counter reference
+set, retained source and installation/invocation receipts survive GC/recovery.
 
 Two non-null references have no exposed ordering; ordering comparisons between
 them are rejected. The supported `callvirt` behavior handles calls Roslyn emits

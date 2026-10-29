@@ -436,6 +436,15 @@ fn stack_shapes(program: &Program, method: &Method) -> Result<BTreeMap<u32, Vec<
         let mut targets = vec![instruction.next];
         match instruction.op {
             Op::LoadString(_) => stack.push(Kind::Reference(program.string_type()?)),
+            Op::ReferenceCast { token, .. } => {
+                require(
+                    reference(pop(&mut stack)?),
+                    "invalid reference cast operand",
+                )?;
+                stack.push(Kind::Reference(
+                    program.reference_cast_target(method.assembly, token)?,
+                ));
+            }
             Op::Nop => {}
             Op::Constant(value) => stack.push(constant_kind(value)?),
             Op::LoadArgument(index) => stack.push(argument(method, index)?),
