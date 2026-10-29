@@ -466,18 +466,18 @@ fn pure_compiler_recovery_does_not_imply_guest_cil_acceptance() {
         &program,
         universe,
         toolchain(),
-        "Generated.Bitwise".into(),
+        "Generated.Shift".into(),
         vec![(
-            "Bitwise.cs".into(),
-            b"public static class Generated { public static int Xor(int a,int b) { return a^b; } }"
+            "Shift.cs".into(),
+            b"public static class Generated { public static int Left(int a,int b) { return a<<b; } }"
                 .to_vec(),
         )],
         vec![],
     )
     .unwrap();
     let mut store = directory.ledger();
-    store.prepare("bitwise", &request).unwrap();
-    let compiled = store.drive(universe, "bitwise", toolchain()).unwrap();
+    store.prepare("shift", &request).unwrap();
+    let compiled = store.drive(universe, "shift", toolchain()).unwrap();
     assert!(compiled.artifact.is_some());
     assert!(
         install_once(

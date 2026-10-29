@@ -105,6 +105,79 @@ fn division_and_remainder_reject_noninteger_or_mixed_stacks_without_consuming_op
 }
 
 #[test]
+fn bitwise_operands_reject_references_and_mixed_widths_without_consuming_the_stack() {
+    for opcode in [0x5f, 0x60, 0x61] {
+        for (bytes, parameters, arguments) in [
+            (
+                vec![2, 3, opcode, 0x2a],
+                vec![SlotType::I32, SlotType::I64],
+                vec![Value::I32(1), Value::I64(-1)],
+            ),
+            (
+                vec![2, 3, opcode, 0x2a],
+                vec![SlotType::I64, SlotType::I32],
+                vec![Value::I64(-1), Value::I32(0)],
+            ),
+            (vec![0x14, 0x14, opcode, 0x2a], vec![], vec![]),
+        ] {
+            let (program, method) = program(&bytes, parameters, vec![], Some(SlotType::I32));
+            let mut vm = Vm::new(&program);
+            vm.start(method, arguments).unwrap();
+            assert_eq!(vm.run(2).unwrap(), RunOutcome::Paused);
+            let before = vm.context().clone();
+            let error = vm.run(1).unwrap_err();
+            assert!(error.0.contains("matching integer stack types"));
+            assert!(error.0.contains("IL_0002"));
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 2);
+        }
+    }
+    let (program, method) = program(&[0x14, 0x66, 0x2a], vec![], vec![], Some(SlotType::I32));
+    let mut vm = Vm::new(&program);
+    vm.start(method, vec![]).unwrap();
+    vm.run(1).unwrap();
+    let before = vm.context().clone();
+    assert!(vm.run(1).unwrap_err().0.contains("not requires an integer"));
+    assert_eq!(vm.context().frames, before.frames);
+    assert_eq!(vm.instructions_executed(), 1);
+    for opcode in [0x5f, 0x60, 0x61, 0x66] {
+        let (program, method) =
+            self::program(&[0, 0, opcode, 0x2a], vec![], vec![], Some(SlotType::I32));
+        let mut vm = Vm::new(&program);
+        vm.start(method, vec![]).unwrap();
+        vm.run(2).unwrap();
+        let id = ObjectId::fresh();
+        vm.heap
+            .allocate(
+                id,
+                program.method(method).unwrap().owner,
+                1,
+                crate::heap::AllocationDomain::Managed,
+            )
+            .unwrap();
+        vm.context.frames[0].evaluation_stack = if opcode == 0x66 {
+            vec![Value::Reference(id)]
+        } else {
+            vec![Value::Reference(id), Value::Reference(id)]
+        };
+        let before = vm.context().clone();
+        let error = vm.run(1).unwrap_err();
+        assert!(error.0.contains("integer"));
+        assert_eq!(vm.context().frames, before.frames);
+        assert_eq!(vm.instructions_executed(), 2);
+        assert!(vm.heap().object(id).is_ok());
+    }
+    for opcode in [0x62, 0x63, 0x64] {
+        assert!(
+            decode(&[opcode])
+                .unwrap_err()
+                .0
+                .contains("unsupported CIL opcode")
+        );
+    }
+}
+
+#[test]
 fn every_integer_constant_encoding_preserves_its_exact_bits() {
     for (opcode, expected) in (0x15..=0x1e).zip(-1..=8) {
         assert_eq!(

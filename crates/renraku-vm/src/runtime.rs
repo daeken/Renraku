@@ -485,6 +485,21 @@ impl<'a> Vm<'a> {
                 let value = arithmetic(left, right, &instruction.op)?;
                 frame.evaluation_stack.push(value);
             }
+            Op::BitAnd | Op::BitOr | Op::BitXor => {
+                let right = pop(&mut frame)?;
+                let left = pop(&mut frame)?;
+                frame
+                    .evaluation_stack
+                    .push(bitwise(left, right, &instruction.op)?);
+            }
+            Op::BitNot => {
+                let result = match pop(&mut frame)? {
+                    Value::I32(value) => Value::I32(!value),
+                    Value::I64(value) => Value::I64(!value),
+                    _ => return Err(Error("not requires an integer".into())),
+                };
+                frame.evaluation_stack.push(result);
+            }
             Op::Branch(target) => frame.continuation = Continuation::Execute { next: target },
             Op::BranchIf { target, when_true } => {
                 if truth(pop(&mut frame)?) == when_true {
@@ -869,6 +884,28 @@ fn truth(value: Value) -> bool {
         Value::Reference(_) => true,
     }
 }
+fn bitwise(left: Value, right: Value, op: &Op) -> Result<Value> {
+    Ok(match (left, right) {
+        (Value::I32(a), Value::I32(b)) => Value::I32(match op {
+            Op::BitAnd => a & b,
+            Op::BitOr => a | b,
+            Op::BitXor => a ^ b,
+            _ => unreachable!(),
+        }),
+        (Value::I64(a), Value::I64(b)) => Value::I64(match op {
+            Op::BitAnd => a & b,
+            Op::BitOr => a | b,
+            Op::BitXor => a ^ b,
+            _ => unreachable!(),
+        }),
+        _ => {
+            return Err(Error(
+                "bitwise operations require matching integer stack types".into(),
+            ));
+        }
+    })
+}
+
 fn arithmetic(left: Value, right: Value, op: &Op) -> Result<Value> {
     let quotient_or_remainder = matches!(op, Op::Divide { .. } | Op::Remainder { .. });
     if quotient_or_remainder && matches!(right, Value::I32(0) | Value::I64(0)) {

@@ -69,11 +69,14 @@ try
         new[] { MetadataReference.CreateFromImage(core) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.CoreLib.dll"), core);
     File.WriteAllBytes(Path.Combine(output, "Renraku.Simulation.dll"), guest);
+    string bitwise = File.ReadAllText(Path.Combine(root, "guest/IntegerBitwise.cs"));
+    File.WriteAllBytes(Path.Combine(output, "Renraku.BitwiseTests.dll"), Compile("Renraku.BitwiseTests", bitwise,
+        new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(guest) }));
 
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
+    byte[] reference = Compile("Renraku.Reference", bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
@@ -130,6 +133,7 @@ try
     IntegerTextReference.Write(assembly, output);
     UnsignedTextReference.Write(assembly, output);
     ConversionReference.Write(assembly, output);
+    BitwiseReference.Write(assembly, output);
     StringMapReference.Write(assembly, output);
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))
         File.WriteAllBytes(Path.Combine(output, Path.GetFileNameWithoutExtension(path) + ".dll"),

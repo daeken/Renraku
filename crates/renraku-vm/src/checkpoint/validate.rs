@@ -451,8 +451,20 @@ fn stack_shapes(program: &Program, method: &Method) -> Result<BTreeMap<u32, Vec<
             Op::Pop => {
                 pop(&mut stack)?;
             }
-            Op::Add | Op::Subtract | Op::Multiply | Op::Divide { .. } | Op::Remainder { .. } => {
+            Op::Add
+            | Op::Subtract
+            | Op::Multiply
+            | Op::Divide { .. }
+            | Op::Remainder { .. }
+            | Op::BitAnd
+            | Op::BitOr
+            | Op::BitXor => {
                 let ty = pair(&mut stack, true)?;
+                stack.push(ty);
+            }
+            Op::BitNot => {
+                let ty = pop(&mut stack)?;
+                require(!reference(ty), "invalid not operand")?;
                 stack.push(ty);
             }
             Op::ConvertI32 => {

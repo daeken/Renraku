@@ -75,6 +75,8 @@ IL byte offsets remain byte offsets after decoding.
 | `ldloc.0` through `ldloc.3`, `ldloc.s`, `ldloc`; `stloc.0` through `stloc.3`, `stloc.s`, `stloc` | Read or replace a typed local |
 | `dup`, `pop` | Duplicate or discard the top value |
 | `add`, `sub`, `mul` | Wrapping arithmetic on matching integer stack types |
+| `and`, `or`, `xor` | Bitwise operations on matching I32 or I64 stacks; preserve operand width |
+| `not` | Bitwise complement of one I32 or I64; preserve operand width |
 | `div`, `div.un`, `rem`, `rem.un` | Signed or unsigned division/remainder on matching Int32 or Int64 stack types |
 | `conv.i8` | Sign extend Int32 or preserve Int64 |
 | `conv.u8` | Zero extend Int32 or preserve Int64 bits |
@@ -115,8 +117,27 @@ method/offset and the original operand stack. They are terminal invocation
 receipts, rather than catchable guest exceptions. Retrying a saved fault does
 not execute the call again or repeat a preceding mutation. Pure arithmetic uses
 ordinary instruction safe points and does not suspend for host work. Floating
-point, native integers, checked arithmetic opcodes, bitwise operators, and
+point, native integers, checked arithmetic opcodes, shifts, and
 exception handling remain unsupported.
+
+Bitwise instructions operate on all 32 or 64 storage bits. Signed and unsigned
+source declarations use the same instructions and produce identical bits.
+Binary operands must have the same width; `not` returns its operand width.
+There is no arithmetic overflow or host wait. References and mixed-width binary
+operands fault without consuming their original stack or continuation. This
+implements the fixed-width subset of ECMA-335 III.3.3, III.3.52–53 and III.3.67,
+[Table 5 and instruction definitions](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=352).
+Native integers and shifts remain unsupported.
+
+`guest/IntegerBitwise.cs` compiles unchanged against both cores in a separate
+test module. Its 4,128-case CoreCLR oracle covers signed/unsigned declarations,
+high bits, zero/all-one patterns, boundaries and seeded operands. All 16 direct
+methods checkpoint each instruction with GC. A nested flag update changes an
+existing Counter 19 to 29 through OR/NOT/AND/XOR; after another invocation reaches
+84, replay of the first receipt returns 29 and leaves 84 in the original object.
+Fresh native processes finish paused operands and replay receipts without SDK
+tools. The CLI's observed checkpoint generation can advance when it fences a
+retry; pinned execution, method/code, arguments and result remain the same.
 
 Fixed-width conversions consume one I32/I64 stack value and produce the target
 width. No signedness tag is stored: `conv.i4` and `conv.u4` produce identical low

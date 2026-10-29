@@ -288,7 +288,7 @@ and do not inherit persistence.
   bounds, matching widths, every instruction cut, GC, stable identities, cyclic
   state, fault-after-mutation receipt replay after root/context replacement,
   failed terminal checkpoint recovery, and SDK-free native process resume.
-  Negative compiler/install tests now use unsupported XOR; floating/native
+  Negative compiler/install tests now use unsupported shifts; floating/native
   arithmetic still rejects. Format 7 and every legacy fixture are unchanged.
   See [CIL profile](cil-profile.md). No live inference was needed for this step.
 - Bounded managed decimal text in the separately compiled `Renraku.Library`:
@@ -424,13 +424,37 @@ and do not inherit persistence.
   Counter=20. Format 7, legacy fixtures and both demos remain unchanged; no live
   inference was required.
 
+- Fixed-width bitwise and/or/xor/not now execute on I32/I64 stacks with the
+  same bits for signed/unsigned declarations. Binary widths must match; not
+  preserves its operand width. Decoder byte offsets and checkpoint abstract
+  stacks retain the new operations without a checkpoint-format change. Null/
+  object reference and mixed-width failures preserve original operands and
+  continuation. Shifts, native integers, checked arithmetic/conversion and EH
+  remain unsupported; there is no new host capability or wait.
+  A separate guest/IntegerBitwise.cs test module compiles unchanged against both
+  cores. Its 4,128-case real CoreCLR matrix covers all 16 direct signed/unsigned
+  methods, boundaries, alternating high-bit patterns and seeded values. Every
+  direct instruction restores with GC and original method/code/execution IDs.
+  A nested durable flag update uses OR/NOT/AND/XOR on an existing Counter, reaches
+  29 from 19 under per-instruction recovery, then a later request reaches 84.
+  Replaying the first receipt returns its original 29 without changing 84 or
+  repeating either mutation; an unrelated context/GC does not lose roots.
+  Five SDK-free native resumes cover pending bitwise operands/compound work and
+  stable execution/results on replay. The CLI still reports the observed current
+  checkpoint generation, which may advance when fencing a retry. Unsupported
+  XOR rejection fixtures now use left shifts in loader/compiler/install tests.
+  Model guidance and [CIL profile](cil-profile.md) describe only implemented
+  behavior. CoreLib, all managed libraries, original fixtures and both idle demos
+  remain unchanged. No live inference was needed.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 243 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 248 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -699,23 +723,26 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next implement fixed-width integer bitwise AND/OR/XOR/NOT.** These ordinary
-CIL operations are a useful foundation for flags and managed hashing. Follow
-primary ECMA-335 semantics for I32/I64 stacks, preserve exact raw bits and byte
-offsets, and reject mismatched widths/reference operands with intact failing
-frames. Update checkpoint abstract stacks and test actual emitted C# against
-CoreCLR over high-bit/boundary/seeded cases. Include individual instruction cuts,
-GC/recovery and a durable invoke-once mutation using a bitwise result, preserving
-original object/code IDs and replay without another mutation. Keep ordinary pure
-computation in CIL; add no host formatter, collection or effect. Existing XOR
-negative fixtures must switch to a still unsupported opcode so rejection tests
-retain their purpose. Shifts need their own explicit shift-count contract and
-remain unsupported for this milestone, alongside floating/native integers,
-checked arithmetic/conversions and EH. Preserve the newly implemented unsigned
-module, all source/install/invoke receipts, old libraries/CoreLib, reference sets,
-managed transcripts, capability defaults, demos and legacy format readers. Update
-model guidance only after implementation. No live model demonstration is needed
-for this pure runtime change.
+**Next define and implement portable fixed-width shifts: shl/shr/shr.un.**
+Consult primary ECMA-335 for value/count/result stack rules and the unspecified
+out-of-range count boundary. Choose and document an explicit portable Renraku
+policy for raw counts (including negative/high counts) rather than inheriting
+Rust panics or host CPU masking. Distinguish the raw CIL contract from C#'s emitted
+count masks. Start with I32/I64 values and I32 counts only; native integers remain
+unsupported. Verify actual emitted signed/unsigned C# against CoreCLR, raw opcode
+boundaries, high/negative counts under the chosen policy, type rejection with
+intact failing frames, checkpoint abstract stacks, instruction-cut GC/recovery and
+stable IDs. Demonstrate a small ordinary CIL flag/hash workload and durable
+invoke-once replay after mutation without repeating it. Keep pure work ordinary;
+no new host formatter, collection, effect or checkpoint fields are needed. Move
+current left-shift rejection fixtures to a still unsupported operation (for
+example checked addition) so loader/compiler/install rejection stays meaningful.
+Preserve the bitwise/conversion/unsigned/signed/map support, old module bodies,
+source/install/invoke receipts, frozen references, managed history, capabilities,
+demo universes and all legacy readers/fixtures. Checked arithmetic/conversions,
+EH, floating/native values, broad BCL compatibility, body replacement and
+same-universe concurrency remain future work. No live model demonstration is
+needed for pure runtime shifts.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
