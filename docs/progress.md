@@ -216,6 +216,24 @@ and do not inherit persistence.
   `guest/examples/WebsiteV2.cs` compiles against a frozen Website view and calls
   its original handler against the same persistent visit state. Format 7 and
   HTTP-v1 wire/receipt semantics are unchanged. See [publication guide](website.md#compile-install-and-publish-a-handler).
+- Coding-agent `web_status` and `publish_web` actions, with exact method/code
+  frozen in the managed turn. Inspection exposes the bounded current publication,
+  handler ABI, limits, and current host permission. Publication authority defaults
+  off and requires `AgentHost::allow_web_publication` or CLI
+  `--allow-web-publication`, independently of model opt-in. Resume commands preserve
+  that explicit policy. IDs `agent.<universe>.<turn>.publish` reconcile committed
+  receipts read-only even after authority is removed or a newer route is published.
+  An uncommitted action without authority returns a saved tool error. Unknown
+  fields, unsupported ABI/code bindings, and host paths reject. No guest/native
+  schema or HTTP wire changes were required.
+- Live website acceptance: GPT-6.1 Sol chose discovery/inspection, wrote and
+  published a handler, then inspected its retained source and authored/published a
+  second version after a real HTTP visit. Across five fresh foreground processes,
+  15 model turns and terminal receipts retained both visit IDs and the original
+  old-request response/execution. Finished recovery without publication permission
+  used zero operations. A separate browser demo is at http://127.0.0.1:59177/
+  against `target/live-website-20261029-01/universe.db`; preserve its state and
+  the original website demo. See [live report](acceptance/live-website-2026-10-29.md).
 
 ## Validation
 
@@ -223,7 +241,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 194 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 200 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -288,7 +306,7 @@ inputs and compiler identity, failed preparation/publication, lost post-commit
 replies, foreign/corrupt ledgers, successful compilation with unsupported CIL,
 and actual SIGKILL at prepared, child-started, captured, written, and committed
 boundaries. Terminal replay is tested with an observer that fails if invoked.
-Fifteen coding-agent tests cover full action selection from actual saved request
+Eighteen coding-agent tests cover full action selection from actual saved request
 history, lost results after all tools, SDK-free terminal replay, frozen static
 arguments, pre-invocation GC roots, uncertain inference without resubmission,
 strict inputs and all budgets, generated-code capability denial, compiler worker
@@ -296,7 +314,7 @@ yielding to another universe, and partial journal recovery with seven-instructio
 budgets. A foreground CLI test rejects missing opt-in and oversized budgets before
 touching universe/auth state. Existing field-name test lookups now include owners,
 so valid same-named fields in different managed classes cannot make tests flaky.
-Five further agent tests exercise the actual subscription adapter with local
+Six further agent tests exercise the actual subscription adapter with local
 HTTP: the nine-turn correction/installation/source-inspection sequence, interrupted
 and unsupported native-call streams without resubmission, signed-out receipt
 recovery into a single action/mutation, and actual controller SIGKILL after the
@@ -308,7 +326,7 @@ after commit, including seven-instruction partial helper updates. Losing console
 output after the invocation result commits replays its event ID and original
 receipt without repeating the mutation. The HTTP correction/recovery fixture
 projects all 18 saved action/result events with zero-operation replay, including
-CS1503 diagnostics. Two console unit tests cover terminal-vs-budget/uncertain
+CS1503 diagnostics. Three console unit tests cover terminal-vs-budget/uncertain
 guidance and shell quoting of spaces, quotes, substitutions, and newlines. Another
 CLI integration test keeps progress on stderr and stdout parseable JSON, verifies
 bounded/control-escaped signed-out finished recovery without a new checkpoint,
@@ -335,6 +353,14 @@ conflicts, replay after newer publication, caps, invalid ABI/IDs, corrupt roots,
 failed commits, stale writers, GC, and native SDK-free serving are covered. Actual
 publication SIGKILL at Prepared/Written/Committed restores a coherent old or new
 route, journal, and paused context. No live inference was needed for this milestone.
+The agent publication tests additionally cover default denial, strict zero-argument
+inspection, frozen code IDs, revoked authority before/after commit, and read-only
+recovery after a newer operator publication. The HTTP fixture completes 13 selected
+turns across two goals, comparing every full request history to the linked CIL
+transcript, replaying a lost publication result offline without permission, and
+using the same Website history through real TCP. The second goal needs no compiler.
+Native CLI tests accept both opt-in flag orders, preserve the flag in resume
+arguments, and reject unrelated/duplicate grants or missing model authorization.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -449,19 +475,26 @@ installation to live selection for new request IDs. Retain its narrow default
 route contract, immutable publication IDs, original accepted-call bindings, and
 strict journal validation; method dispatch replacement remains unsupported.
 
-**Next connect the coding agent to explicitly authorized website publication.**
-Add a bounded publication action using a stable saved-turn-derived ID and the
-existing publication receipt, with its actual input/result in the managed journal.
-Make the capability an explicit host policy, disabled by default; installed code
-alone must not grant publication authority. Describe the supported handler ABI
-and expose the current publication through bounded inspection. Reconcile a lost
-publication result without rolling back a newer route. Verify a model-selected
-discover/read/compile/install/publish/finish sequence using local Responses/HTTP
-fixtures and a second goal reusing state, keeping one-context exclusion explicit.
-Use live inference only for the new acceptance question of authoring and publishing
-a website handler; retain the actual transcript/receipts and distinguish fixtures
-from autonomous model evidence. Preserve the existing demo database and visit IDs.
-Avoid expanding HTTP features or introducing general shell/compiler-path authority.
+The coding agent now authors and publishes website handlers under explicit host
+authority, with durable results and local/live two-goal acceptance. Preserve its
+default denial and read-only committed-receipt recovery after authority changes.
+
+**Next let the agent test its published handler through a bounded local preview.**
+Add a strict action for the current universe's saved handler, without arbitrary
+URLs, sockets, or external network authority. Reuse the HTTP-v1 request/response
+contract and durable inbox with a stable turn-derived client ID; freeze request
+data and the selected publication before acceptance. Keep actual inputs/results
+in managed history, exact old-code recovery, and model-disabled handler execution.
+Return bounded response text/status with explicit truncation. Model-visible preview
+is execution of the managed handler, not evidence that the socket/HTTP edge was
+tested. Preserve independent TCP fixtures for that boundary. A paused preview must
+be owned/resumed by the agent without starting a second context, and its instruction
+cost must fit existing budgets. Test lost results, route changes before/after
+acceptance, GC/recovery, one mutation per saved request, faults, strict arguments,
+and model-selected correction from the observed body. Use live inference only to
+answer the new acceptance question of testing and correcting a published page.
+Preserve both demo universes, the HTTP-v1 profile, compiler boundaries, and all
+existing receipts. Do not add general shell/network tools or native function calls.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

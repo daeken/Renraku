@@ -241,12 +241,54 @@ fn agent_console_separates_progress_from_json_and_gives_durable_resume_or_failur
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["stop"], "instruction_budget");
     assert_eq!(report["recovery"]["kind"], "resume");
+    assert!(
+        !report["recovery"]["resumeArgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "--allow-web-publication")
+    );
     assert_eq!(
         report["recovery"]["resumeArgs"][4],
         universe.display().to_string()
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("Paused") && stderr.contains("Resume:") && stderr.contains("Inspect:"));
+    for flags in [
+        ["--allow-model-calls", "--allow-web-publication"],
+        ["--allow-web-publication", "--allow-model-calls"],
+    ] {
+        let mut resume: Vec<String> = vec![
+            "agent-drive".into(),
+            universe.display().to_string(),
+            directory.0.join("receipts").display().to_string(),
+            directory.0.join("compiler.db").display().to_string(),
+            "/missing/compiler.dll".into(),
+            profile.to_string(),
+            "chosen-model".into(),
+            "0".into(),
+            "0".into(),
+            "0".into(),
+        ];
+        resume.extend(flags.map(str::to_owned));
+        let output = command(&directory.0, &resume);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["stop"], "instruction_budget");
+        assert_eq!(
+            report["recovery"]["resumeArgs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|arg| *arg == "--allow-web-publication")
+                .count(),
+            1
+        );
+    }
 
     // Complete the managed finish turn locally. The CLI can then project saved
     // progress while signed out, with no credentials or inference HTTP available.
@@ -361,4 +403,45 @@ fn agent_console_separates_progress_from_json_and_gives_durable_resume_or_failur
             && stderr.contains("Saved work is retained")
             && stderr.contains("Frames:")
     );
+}
+
+#[test]
+fn cli_rejects_unrelated_or_duplicate_publication_flags_and_keeps_model_opt_in_separate() {
+    let directory = Directory::new();
+    for (args, error) in [
+        (vec!["status", "--allow-web-publication"], "only supported"),
+        (
+            vec![
+                "--help",
+                "--allow-web-publication",
+                "--allow-web-publication",
+            ],
+            "duplicate authorization",
+        ),
+        (
+            vec![
+                "agent",
+                "world.db",
+                "receipts",
+                "compiler.db",
+                "compiler.dll",
+                "core.dll",
+                "guest.dll",
+                "profile",
+                "model",
+                "goal",
+                "1",
+                "1",
+                "1",
+                "--allow-web-publication",
+            ],
+            "requires --allow-model-calls",
+        ),
+    ] {
+        let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+        let output = command(&directory.0, &args);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(error));
+        assert!(!directory.0.join("auth").exists());
+    }
 }

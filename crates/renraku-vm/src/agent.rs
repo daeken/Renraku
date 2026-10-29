@@ -38,15 +38,19 @@ pub const SYSTEM_PROMPT: &str = r#"You control a persistent CIL runtime. Reply w
 {"op":"compile","assembly":"Generated.Example","source":"C# source","referenceTypes":["Renraku.Guest.Counter"]} compiles one Generated.cs against the core and selected live types. Roots must share one module. Source <=32768 UTF-8 bytes. Compilation alone does not install code.
 {"op":"install","compilationTurn":3} installs the artifact compiled in that earlier numbered turn. Assembly names must be new; this does not replace existing bodies.
 {"op":"invoke","method":"logical method ID or Type::Method","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]} invokes a static entry with <=8 arguments. Other arguments: {"kind":"i32","value":7}, {"kind":"i64","value":"9007199254740993"}, {"kind":"object","id":"logical object ID"}, {"kind":"null"}. Calls have bounded instructions and cannot submit model requests. Static selectors freeze to their current values before execution.
+{"op":"web_status"} inspects the saved default website publication, current host publication authority, and supported handler ABI. It performs no publication or HTTP request.
+{"op":"publish_web","method":"logical method ID or Type::Method"} publishes an already installed static string handler with four string arguments (id, method, target, body). Optional codeVersion pins an exact installed code ID. Requires separate host publication opt-in, disabled by default. New HTTP request IDs select the publication; accepted requests keep their pinned code/response. Compilation, installation, and publication are separate operations. Handler HTML is bounded to 32768 UTF-8 bytes, with fixed HTTP-v1 status 200/content type. The handler owns application routing and uses ordinary persistent objects/statics. No host paths, sockets, or extra capabilities are granted. Only one guest context can execute; HTTP work must wait while the agent is active. Do not invent formatting/collection APIs: inspect supported CIL and core methods first.
 {"op":"finish","message":"short result"} ends the session.
 Search and inspect before coding. The initial test object is Renraku.Guest.Simulation::Saved, a persistent Counter (created with Value=19 only if absent). Use normal managed fields/methods and supported CIL: integers, references, strings, constructors, calls, branches. Arrays, generics, exceptions, division, .NET host BCL, native I/O and C# async/await are unsupported. Source/compiler/host paths are not accepted. Do not redefine live types: compile callers using referenceTypes. Examine errors and use a new turn to correct code. Tool outcomes and request identities are durable; no hidden retries or remote inference permissions are granted. Maximum 32 assistant turns, bounded transcript/tool output. Return finish when the goal is satisfied. A later user message may provide a follow-up goal in the same universe; retain the prior history and existing objects/code, and use new turns rather than replaying earlier mutations."#;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct AgentHost {
     pub universe: PathBuf,
     pub compiler_ledger: PathBuf,
     pub dotnet: PathBuf,
     pub compiler_driver: PathBuf,
+    /// Transient host authority, never restored from guest state or installed code.
+    pub allow_web_publication: bool,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct AgentLimits {
@@ -145,6 +149,16 @@ enum Action {
     Invoke {
         method: String,
         arguments: Vec<Argument>,
+    },
+    WebStatus {},
+    PublishWeb {
+        method: String,
+        #[serde(
+            rename = "codeVersion",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        code_version: Option<String>,
     },
     Finish {
         message: String,
@@ -544,6 +558,13 @@ fn action_summary(action: Option<&Action>) -> (&'static str, String) {
             "invoke",
             format!("invoke {method} ({} arguments)", arguments.len()),
         ),
+        Some(Action::WebStatus {}) => (
+            "web_status",
+            "inspect website publication and authority".into(),
+        ),
+        Some(Action::PublishWeb { method, .. }) => {
+            ("publish_web", format!("publish website handler {method}"))
+        }
         Some(Action::Finish { message }) => ("finish", message.clone()),
         None => ("invalid", "invalid or unsupported action".into()),
     }
@@ -578,6 +599,12 @@ fn result_summary(result: &Json) -> String {
     }
     if let Some(assembly) = result["assemblyId"].as_str() {
         return format!("installed assembly {assembly}");
+    }
+    if let Some(method) = result["publication"]["method"].as_str() {
+        return format!(
+            "website publication {} saved for {method}",
+            result["publication"]["sequence"]
+        );
     }
     if let Some(value) = result.get("result") {
         return format!("returned {value}");
@@ -764,6 +791,24 @@ fn freeze(vm: &Vm<'_>, action: Action, count: u32) -> Result<Action> {
             Action::Invoke {
                 method: id.to_string(),
                 arguments: values.into_iter().map(literal).collect(),
+            }
+        }
+        Action::WebStatus {} => Action::WebStatus {},
+        Action::PublishWeb {
+            method,
+            code_version,
+        } => {
+            let method = crate::web::handler(vm.program, &method)?;
+            let binding = vm.program.method(method)?.binding;
+            require(
+                code_version
+                    .as_ref()
+                    .is_none_or(|code| *code == binding.code.to_string()),
+                "website publication code version differs from the installed binding",
+            )?;
+            Action::PublishWeb {
+                method: method.to_string(),
+                code_version: Some(binding.code.to_string()),
             }
         }
         Action::Finish { message } => {
@@ -1345,6 +1390,46 @@ fn execute(
                 InvocationState::Faulted { message } => {
                     json!({"ok":false,"requestId":id,"execution":record.execution.to_string(),"error":message})
                 }
+            }
+        }
+        Action::WebStatus {} => {
+            let status = crate::web::inspect_publications(&mut store)?;
+            json!({"ok":true,"output":{"format":1,"route":"default",
+                "current":status["current"],"publicationCount":status["publications"].as_array().unwrap().len(),
+                "publicationLimit":crate::web::MAX_PUBLICATIONS,"publicationEnabled":host.allow_web_publication,
+                "handlerAbi":"static string Handle(string id, string method, string target, string body)",
+                "httpProfile":"http-v1","oneContext":true}})
+        }
+        Action::PublishWeb {
+            method,
+            code_version,
+        } => {
+            // Publication IDs use the HTTP journal's bounded ASCII alphabet.
+            let id = format!("agent.{session_id}.{turn}.publish");
+            let existing = crate::web::find_publication(&mut store, &id)?;
+            if let Some(record) = existing {
+                require(
+                    record.method == method && Some(&record.code) == code_version.as_ref(),
+                    "saved website publication differs from its frozen agent input",
+                )?;
+                json!({"ok":true,"requestId":id,"publication":record})
+            } else if !host.allow_web_publication {
+                failed(Error(
+                    "website publication requires explicit host opt-in (--allow-web-publication)"
+                        .into(),
+                ))
+            } else if crate::web::inspect_publications(&mut store)?["publications"]
+                .as_array()
+                .unwrap()
+                .len()
+                >= crate::web::MAX_PUBLICATIONS
+            {
+                failed(Error("HTTP publication limit exceeded".into()))
+            } else {
+                // Save/storage failures propagate: retain the pending managed
+                // action so recovery reconciles the same receipt before Apply.
+                let record = crate::web::publish_handler(&mut store, &id, &method)?;
+                json!({"ok":true,"requestId":id,"publication":record})
             }
         }
         Action::Finish { message } => json!({"ok":true,"message":message}),

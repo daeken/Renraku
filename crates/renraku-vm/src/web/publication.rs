@@ -14,7 +14,7 @@ use serde_json::{Value as Json, json};
 const NAMESPACE: &str = "renraku.http-v1/";
 const CURRENT: &str = "renraku.http-v1/current";
 const RECEIPTS: &str = "renraku.http-v1/publication/";
-const MAX_PUBLICATIONS: usize = 128;
+pub const MAX_PUBLICATIONS: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +112,16 @@ pub fn inspect_publications(store: &mut CheckpointStore) -> Result<Json> {
     Ok(json!({"format":1,"universe":vm.universe_id().to_string(),
         "checkpoint":store.generation(),"route":"default",
         "current":records.last(),"publications":records}))
+}
+/// A lookup never changes the current publication or advances the checkpoint.
+pub fn find_publication(
+    store: &mut CheckpointStore,
+    id: &str,
+) -> Result<Option<PublicationRecord>> {
+    validate_id(id)?;
+    let saved = store.load()?;
+    let vm = saved.snapshot.restore()?;
+    Ok(journal(&vm)?.into_iter().find(|record| record.id == id))
 }
 /// Publish installed CIL without running guest instructions or changing method
 /// dispatch. A duplicate ID returns its original receipt, never republishing it.

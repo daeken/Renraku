@@ -21,7 +21,8 @@ use std::{
 
 mod publication;
 pub use publication::{
-    PublicationRecord, inspect_publications, publish_handler, publish_handler_with_observer,
+    MAX_PUBLICATIONS, PublicationRecord, find_publication, inspect_publications, publish_handler,
+    publish_handler_with_observer,
 };
 
 const MAX_HEADERS: usize = 8192;
@@ -107,7 +108,7 @@ fn validate_target(target: &str) -> WebResult<()> {
     }
     Ok(())
 }
-fn handler(program: &Program, name: &str) -> Result<MethodId> {
+pub(crate) fn handler(program: &Program, name: &str) -> Result<MethodId> {
     let id = program.entry(name)?;
     let method = program.method(id)?;
     let string = SlotType::Reference(program.find_type("System.String")?);

@@ -49,6 +49,9 @@ resume or replay saved responses after a crash without repeating mutations.
 New handlers can be compiled externally, installed, and durably published while
 accepted requests retain their original code and response. Publication retries
 preserve a newer handler selection.
+The coding agent can publish under a separate explicit opt-in. A
+[live two-goal run](docs/acceptance/live-website-2026-10-29.md) authored and
+published two website versions while preserving saved visits and old responses.
 
 ## Run the demonstration
 

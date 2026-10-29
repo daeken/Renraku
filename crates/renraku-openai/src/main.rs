@@ -44,8 +44,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         directory = Some(PathBuf::from(&args[1]));
         args.drain(..2);
     }
-    let allow_model = args.last().is_some_and(|a| a == "--allow-model-calls");
-    if allow_model {
+    let mut allow_model = false;
+    let mut allow_web = false;
+    while let Some(flag) = args.last() {
+        let setting = match flag.as_str() {
+            "--allow-model-calls" => &mut allow_model,
+            "--allow-web-publication" => &mut allow_web,
+            _ => break,
+        };
+        if *setting {
+            return Err("duplicate authorization flag".into());
+        }
+        *setting = true;
         args.pop();
     }
     if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
@@ -53,9 +63,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "usage: renraku-openai [--auth-dir <private-directory>] <command>\n\ncommands:\n  login [--new-profile]\n  status\n  select <profile-id>\n  refresh\n  logout\n  models <profile-id>\n  demo <universe.db> <receipt-directory> <CoreLib.dll> <guest.dll> <profile-id> <model> <prompt> --allow-model-calls\n  drive <universe.db> <receipt-directory> <profile-id> <model> <instructions> <provider-operations> --allow-model-calls"
         );
         println!(
+            "  Append --allow-web-publication to agent or agent-drive to authorize website publication separately."
+        );
+        println!(
             "  agent <universe.db> <receipt-directory> <compiler.db> <Renraku.Compiler.dll> <CoreLib.dll> <guest.dll> <profile-id> <model> <goal> <instructions> <provider-operations> <tool-actions> --allow-model-calls\n  agent-drive <universe.db> <receipt-directory> <compiler.db> <Renraku.Compiler.dll> <profile-id> <model> <instructions> <provider-operations> <tool-actions> --allow-model-calls"
         );
         return Ok(());
+    }
+    if allow_web && !matches!(args[0].as_str(), "agent" | "agent-drive") {
+        return Err("--allow-web-publication is only supported by agent and agent-drive".into());
     }
     let directory = directory
         .or_else(|| {
@@ -104,6 +120,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 compiler_ledger: PathBuf::from(compiler_ledger),
                 dotnet: PathBuf::from("dotnet"),
                 compiler_driver: PathBuf::from(compiler_driver),
+                allow_web_publication: allow_web,
             };
             drop(vm);
             drop(store);
@@ -115,6 +132,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 compiler_driver: host.compiler_driver.clone(),
                 profile: profile.to_string(),
                 model: model.clone(),
+                allow_web_publication: allow_web,
             };
             runtime()?.block_on(run_agent(&host, &console, limits))?;
         }
@@ -143,6 +161,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 compiler_ledger: PathBuf::from(compiler_ledger),
                 dotnet: PathBuf::from("dotnet"),
                 compiler_driver: PathBuf::from(compiler_driver),
+                allow_web_publication: allow_web,
             };
             let console = AgentConsole {
                 auth: directory.clone(),
@@ -152,6 +171,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 compiler_driver: host.compiler_driver.clone(),
                 profile: profile.to_string(),
                 model: model.clone(),
+                allow_web_publication: allow_web,
             };
             runtime()?.block_on(run_agent(&host, &console, limits))?;
         }

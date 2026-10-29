@@ -57,6 +57,7 @@ impl Test {
             compiler_ledger: directory.join("compiler.db"),
             dotnet: PathBuf::from("dotnet"),
             compiler_driver: compiler().to_path_buf(),
+            allow_web_publication: false,
         };
         let program = program();
         let mut vm = Vm::new(&program);
@@ -89,6 +90,9 @@ enum Mode {
     Finish,
     FinishAtLimit,
     Followup,
+    WebDenied,
+    WebPublish,
+    WebStrict,
 }
 impl Script {
     fn open(path: &Path) -> Self {
@@ -109,6 +113,25 @@ impl Script {
             .count();
         let last = String::from_utf16(&request.messages.last().unwrap().content).unwrap();
         match self.mode {
+            Mode::WebDenied => return Ok(match assistants {
+                0 => json!({"op":"web_status"}),
+                1 => { let r:Json=serde_json::from_str(&last).unwrap(); assert_eq!(r["output"]["publicationEnabled"],false); assert!(r["output"]["current"].is_null()); json!({"op":"publish_web","method":"Renraku.Guest.Website::Handle"}) },
+                2 => { let r:Json=serde_json::from_str(&last).unwrap(); assert_eq!(r["ok"],false); assert!(r["error"].as_str().unwrap().contains("--allow-web-publication")); json!({"op":"finish","message":"publication denied"}) },
+                _ => return Err(Error("unexpected website denial turn".into()))
+            }.to_string()),
+            Mode::WebPublish => return Ok(if assistants == 0 { json!({"op":"publish_web","method":"Renraku.Guest.Website::Handle"}) } else { json!({"op":"finish","message":"publication result inspected"}) }.to_string()),
+            Mode::WebStrict => {
+                if assistants > 0 { let r:Json=serde_json::from_str(&last).unwrap(); assert_eq!(r["ok"],false); }
+                return Ok(match assistants {
+                    0 => json!({"op":"web_status","path":"/private/file"}),
+                    1 => json!({"op":"publish_web","method":"Renraku.Guest.Website::Handle","codeVersion":"wrong-code"}),
+                    2 => json!({"op":"publish_web","method":"Renraku.Guest.Counter::Add"}),
+                    3 => json!({"op":"publish_web","method":"/private/handler.dll"}),
+                    4 => json!({"op":"publish_web","method":"Renraku.Guest.Website::Handle","hostPath":"/bin/sh"}),
+                    5 => json!({"op":"finish","message":"invalid publication inputs rejected"}),
+                    _ => return Err(Error("unexpected strict website turn".into()))
+                }.to_string());
+            }
             Mode::Finish => return Ok(json!({"op":"finish","message":"done"}).to_string()),
             Mode::FinishAtLimit => return Ok(if assistants == 31 { json!({"op":"finish","message":"done"}) } else { json!({"op":"search","query":"Counter","limit":1}) }.to_string()),
             Mode::Followup => return Ok(match assistants {
@@ -195,6 +218,112 @@ impl Script {
         self.db
             .query_row("SELECT count(*) FROM receipt", [], |row| row.get(0))
             .unwrap()
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn website_publication_is_separate_default_denied_authority_with_bounded_inspection() {
+    let test = Test::new();
+    assert!(!AgentHost::default().allow_web_publication);
+    let mut provider = test.provider();
+    provider.mode = Mode::WebDenied;
+    let report = test.host.drive(&mut provider, limits()).await.unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    let status = renraku_vm::web::inspect_publications(&mut store).unwrap();
+    assert!(status["current"].is_null());
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.installations().count(), 0);
+    let transcript = vm.agent_status().unwrap()["transcript"].to_string();
+    assert!(
+        transcript.contains("publicationEnabled") && transcript.contains("--allow-web-publication")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn website_actions_reject_unknown_fields_wrong_code_invalid_abi_and_host_paths() {
+    let mut test = Test::new();
+    test.host.allow_web_publication = true;
+    let mut provider = test.provider();
+    provider.mode = Mode::WebStrict;
+    assert!(matches!(
+        test.host.drive(&mut provider, limits()).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    assert!(renraku_vm::web::inspect_publications(&mut store).unwrap()["current"].is_null());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn publication_recovery_without_authority_only_reconciles_committed_receipts() {
+    use renraku_vm::web::{inspect_publications, publish_handler};
+    for committed in [false, true] {
+        let mut test = Test::new();
+        test.host.allow_web_publication = true;
+        let mut provider = test.provider();
+        provider.mode = Mode::WebPublish;
+        let stop = if committed {
+            AgentStage::ToolCompleted(1)
+        } else {
+            AgentStage::ToolStarted(1)
+        };
+        assert!(
+            test.host
+                .drive_with_observer(&mut provider, limits(), |stage| {
+                    if stage == stop {
+                        Err(Error("lost host controller".into()))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .await
+                .unwrap_err()
+                .0
+                .contains("lost host controller")
+        );
+        let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+        let before = inspect_publications(&mut store).unwrap();
+        let saved = store.load().unwrap();
+        let mut vm = saved.snapshot.restore().unwrap();
+        let state = vm.agent_status().unwrap();
+        let frozen: Json = serde_json::from_str(state["pendingInput"].as_str().unwrap()).unwrap();
+        assert_eq!(frozen["op"], "publish_web");
+        assert_eq!(frozen["method"].as_str().unwrap().len(), 32);
+        assert_eq!(frozen["codeVersion"].as_str().unwrap().len(), 32);
+        vm.collect_garbage().unwrap();
+        store.save(&vm).unwrap();
+        if committed {
+            assert_eq!(before["current"]["method"], frozen["method"]);
+            publish_handler(
+                &mut store,
+                "operator-newer",
+                "Renraku.Guest.Website::Alternate",
+            )
+            .unwrap();
+        } else {
+            assert!(before["current"].is_null());
+        }
+        test.host.allow_web_publication = false;
+        test.host.compiler_driver = test.directory.join("missing-compiler.dll");
+        assert!(matches!(
+            test.host.drive(&mut provider, limits()).await.unwrap().stop,
+            AgentStop::Finished(_)
+        ));
+        let status = inspect_publications(&mut store).unwrap();
+        let saved = store.load().unwrap();
+        let vm = saved.snapshot.restore().unwrap();
+        let transcript = vm.agent_status().unwrap()["transcript"].clone();
+        let result: Json =
+            serde_json::from_str(transcript[3]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(result["ok"], committed);
+        if committed {
+            assert_eq!(result["publication"], before["current"]);
+            assert_eq!(status["current"]["id"], "operator-newer");
+            assert_eq!(status["publications"].as_array().unwrap().len(), 2);
+        } else {
+            assert!(status["current"].is_null());
+        }
     }
 }
 

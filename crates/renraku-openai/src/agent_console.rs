@@ -11,6 +11,7 @@ pub(crate) struct AgentConsole {
     pub compiler_driver: PathBuf,
     pub profile: String,
     pub model: String,
+    pub allow_web_publication: bool,
 }
 fn path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
@@ -80,7 +81,7 @@ fn guidance(stop: &AgentStop) -> (&'static str, &'static str) {
 }
 impl AgentConsole {
     fn resume_arguments(&self, limits: AgentLimits) -> Vec<String> {
-        vec![
+        let mut arguments = vec![
             executable("renraku-openai"),
             "--auth-dir".into(),
             path(&self.auth),
@@ -94,8 +95,12 @@ impl AgentConsole {
             limits.instructions.max(10_000).to_string(),
             limits.provider_operations.max(1).to_string(),
             limits.tool_actions.max(16).to_string(),
-            "--allow-model-calls".into(),
-        ]
+        ];
+        if self.allow_web_publication {
+            arguments.push("--allow-web-publication".into());
+        }
+        arguments.push("--allow-model-calls".into());
+        arguments
     }
     fn inspect_arguments(&self) -> Vec<String> {
         vec![
@@ -158,7 +163,29 @@ mod tests {
             compiler_driver: "/tmp/compiler.dll".into(),
             profile: "profile-id".into(),
             model: "chosen-model".into(),
+            allow_web_publication: false,
         }
+    }
+    #[test]
+    fn resume_preserves_explicit_website_authority_without_enabling_it_by_default() {
+        let limits = AgentLimits {
+            instructions: 0,
+            provider_operations: 0,
+            tool_actions: 0,
+        };
+        let mut console = console();
+        assert!(
+            !console
+                .resume_arguments(limits)
+                .iter()
+                .any(|arg| arg == "--allow-web-publication")
+        );
+        console.allow_web_publication = true;
+        let args = console.resume_arguments(limits);
+        assert_eq!(
+            &args[args.len() - 2..],
+            &["--allow-web-publication", "--allow-model-calls"]
+        );
     }
     #[test]
     fn recovery_distinguishes_resumable_budgets_from_terminal_limits_and_uncertain_inference() {

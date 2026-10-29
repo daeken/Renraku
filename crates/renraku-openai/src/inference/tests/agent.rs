@@ -46,6 +46,7 @@ fn host(directory: &Path, compiler: &Path) -> AgentHost {
         compiler_ledger: directory.join("compiler.db"),
         dotnet: "dotnet".into(),
         compiler_driver: compiler.into(),
+        allow_web_publication: false,
     }
 }
 fn initialize(host: &AgentHost, profile: Uuid) {
@@ -720,4 +721,238 @@ async fn http_followup_goal_reuses_the_installed_caller_and_preserves_full_manag
     assert_eq!(vm.invocations().count(), 3);
     assert_eq!(vm.installations().count(), 1);
     assert_eq!(vm.agent_status().unwrap()["phase"], 3);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_website_authoring_publication_recovery_and_followup_preserve_managed_history_and_state()
+ {
+    use renraku_vm::web::{WebHost, WebRequest, WebServer, inspect_publications, publish_handler};
+    const FOLLOWUP: &str = "Inspect the installed website source and republish the same handler with a new turn. Reuse the existing visit history; do not compile or reset state.";
+    const PAGE: &str = include_str!("../../../../../guest/examples/WebsiteV2.cs");
+    let directory = Directory::new();
+    let id = profile(&directory.0.join("auth"), "coding", "coding-token");
+    let mut host = host(&directory.0, compiler());
+    host.allow_web_publication = true;
+    initialize(&host, id);
+    let server = Server::with_responder(
+        |request| {
+            assert_eq!(request.bearer, "Bearer coding-token");
+            let count = assistant_count(&request.body);
+            let result = if count > 0 && count != 10 {
+                last_result(&request.body)
+            } else {
+                Value::Null
+            };
+            let selected = match count {
+                0 => object!({"op":"search","query":"Website","limit":30}),
+                1 => {
+                    let method = result["output"]["symbols"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|symbol| symbol["name"] == "Renraku.Guest.Website::Handle")
+                        .unwrap();
+                    object!({"op":"read_code","method":method["codeVersion"]})
+                }
+                2 => {
+                    assert_eq!(result["output"]["name"], "Handle");
+                    object!({"op":"describe","type":"Renraku.Guest.Website"})
+                }
+                3 => {
+                    assert_eq!(result["ok"], true);
+                    object!({"op":"web_status"})
+                }
+                4 => {
+                    assert_eq!(result["output"]["publicationEnabled"], true);
+                    assert!(result["output"]["current"].is_null());
+                    assert!(
+                        result["output"]["handlerAbi"]
+                            .as_str()
+                            .unwrap()
+                            .contains("string body")
+                    );
+                    object!({"op":"compile","assembly":"Generated.Website","source":PAGE,"referenceTypes":["Renraku.Guest.Website"]})
+                }
+                5 => {
+                    assert_eq!(result["output"]["state"], "compiled");
+                    object!({"op":"install","compilationTurn":5})
+                }
+                6 => {
+                    assert_eq!(result["ok"], true);
+                    object!({"op":"publish_web","method":"PublishedPage::Handle"})
+                }
+                7 => {
+                    assert_eq!(result["publication"]["sequence"], 1);
+                    object!({"op":"web_status"})
+                }
+                8 => {
+                    assert_eq!(result["output"]["current"]["id"], "operator-newer");
+                    object!({"op":"publish_web","method":"PublishedPage::Handle"})
+                }
+                9 => {
+                    assert_eq!(result["publication"]["sequence"], 3);
+                    object!({"op":"finish","message":"Compiled website published; original receipt reconciled."})
+                }
+                10 => {
+                    assert_eq!(
+                        request.body["input"][22],
+                        object!({"role":"user","content":FOLLOWUP})
+                    );
+                    object!({"op":"read_code","method":"PublishedPage::Handle"})
+                }
+                11 => {
+                    assert_eq!(result["output"]["sources"][0]["text"], PAGE);
+                    object!({"op":"publish_web","method":"PublishedPage::Handle"})
+                }
+                12 => {
+                    assert_eq!(result["publication"]["sequence"], 4);
+                    object!({"op":"finish","message":"Existing website republished without compilation or reset."})
+                }
+                _ => panic!("unexpected extra website model call"),
+            };
+            FixtureReply::completed(&selected.to_string())
+        },
+        false,
+    );
+    let mut lost = false;
+    for _ in 0..20 {
+        let mut provider = async_adapter(&directory.0, id, &server.base).await;
+        let result = host
+            .drive_with_observer(&mut provider, budgets(1), |stage| {
+                if stage == AgentStage::ToolCompleted(7) && !lost {
+                    lost = true;
+                    Err(VmError("lost website publication result".into()))
+                } else {
+                    Ok(())
+                }
+            })
+            .await;
+        match result {
+            Err(error) => {
+                assert!(error.0.contains("lost website publication result"));
+                let mut store = CheckpointStore::open(&host.universe).unwrap();
+                let first = inspect_publications(&mut store).unwrap()["current"].clone();
+                assert_eq!(first["sequence"], 1);
+                publish_handler(
+                    &mut store,
+                    "operator-newer",
+                    "Renraku.Guest.Website::Alternate",
+                )
+                .unwrap();
+                host.allow_web_publication = false;
+                host.compiler_driver = directory.0.join("missing-compiler.dll");
+                let mut offline = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+                let report = host.drive(&mut offline, budgets(0)).await.unwrap();
+                assert_eq!(report.provider_operations, 0);
+                assert_eq!(report.stop, AgentStop::ProviderBudget);
+                assert_eq!(
+                    inspect_publications(&mut store).unwrap()["current"]["id"],
+                    "operator-newer"
+                );
+                let saved = store.load().unwrap();
+                let mut vm = saved.snapshot.restore().unwrap();
+                let status = vm.agent_status().unwrap();
+                let result: Value =
+                    serde_json::from_str(status["transcript"][15]["content"].as_str().unwrap())
+                        .unwrap();
+                assert_eq!(result["publication"], first);
+                vm.collect_garbage().unwrap();
+                store.save(&vm).unwrap();
+                let edge = WebHost::open_published(&host.universe).unwrap();
+                assert_eq!(
+                    edge.process(
+                        &WebRequest {
+                            id: "blocked".into(),
+                            method: "GET".into(),
+                            target: "/page".into(),
+                            body: String::new()
+                        },
+                        10000
+                    )
+                    .unwrap_err()
+                    .status,
+                    503
+                );
+                host.allow_web_publication = true;
+            }
+            Ok(report) if matches!(report.stop, AgentStop::Finished(_)) => break,
+            Ok(report) => assert_eq!(report.stop, AgentStop::ProviderBudget),
+        }
+    }
+    assert!(lost);
+    assert_eq!(server.posts(), 10);
+    fn exchange(host: &WebHost, id: &str) -> Vec<u8> {
+        use std::io::{Read, Write};
+        let server = WebServer::bind(host.clone(), "127.0.0.1:0".parse().unwrap(), 10000).unwrap();
+        let address = server.address().unwrap();
+        let worker = std::thread::spawn(move || server.serve_one());
+        let mut socket = std::net::TcpStream::connect(address).unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        write!(socket, "POST /visit HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nX-Renraku-Request-Id: {id}\r\n\r\n").unwrap();
+        socket.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).unwrap();
+        worker.join().unwrap().unwrap();
+        response
+    }
+    let edge = WebHost::open_published(&host.universe).unwrap();
+    let original = exchange(&edge, "goal-one-visit");
+    assert!(String::from_utf8_lossy(&original).contains("Published v2"));
+    assert_eq!(exchange(&edge, "goal-one-visit"), original);
+    let mut store = CheckpointStore::open(&host.universe).unwrap();
+    let initial = inspect_publications(&mut store).unwrap();
+    assert_eq!(initial["current"]["sequence"], 3);
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let original_execution = vm.invocations().next().unwrap().1.clone();
+    assert_eq!(vm.installations().count(), 1);
+    submit_input(&mut store, "website-followup", FOLLOWUP, 0).unwrap();
+    let mut provider = async_adapter(&directory.0, id, &server.base).await;
+    let report = host.drive(&mut provider, budgets(3)).await.unwrap();
+    assert!(matches!(report.stop, AgentStop::Finished(_)));
+    assert_eq!(report.provider_operations, 3);
+    assert_eq!(exchange(&edge, "goal-one-visit"), original);
+    let new = exchange(&edge, "goal-two-visit");
+    let text = String::from_utf8(new).unwrap();
+    assert!(text.contains("goal-one-visit") && text.contains("goal-two-visit"));
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.installations().count(), 1);
+    assert!(
+        vm.invocations()
+            .any(|(_, record)| *record == original_execution)
+    );
+    let status = vm.agent_status().unwrap();
+    assert_eq!(status["turn"], 13);
+    assert_eq!(server.posts(), 13);
+    assert_eq!(receipt_counts(&directory.0), (13, 13));
+    // Every model request is exactly a prefix of the authoritative linked CIL
+    // transcript, including the follow-up's extra durable user message.
+    for request in server
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.path == "/responses")
+    {
+        let length = request.body["input"].as_array().unwrap().len();
+        let expected:Vec<_> = status["transcript"].as_array().unwrap()[..length].iter().map(|message| {
+            object!({"role":match message["role"].as_i64().unwrap(){0=>"developer",1=>"user",2=>"assistant",_=>panic!()},"content":message["content"]})
+        }).collect();
+        assert_eq!(request.body["input"], object!(expected));
+    }
+    signed_out(&directory.0, id);
+    let mut offline = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+    let finished = host.drive(&mut offline, budgets(0)).await.unwrap();
+    assert!(matches!(finished.stop, AgentStop::Finished(_)));
+    assert_eq!(
+        (
+            finished.instructions,
+            finished.provider_operations,
+            finished.tool_actions
+        ),
+        (0, 0, 0)
+    );
 }

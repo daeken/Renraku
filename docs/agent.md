@@ -173,6 +173,8 @@ history, `store: false`, and streamed final text follow the subscription route's
 | Compile a caller | `{"op":"compile","assembly":"Generated.Example","source":"C# source","referenceTypes":["Renraku.Guest.Counter"]}` |
 | Install an earlier build | `{"op":"install","compilationTurn":3}` |
 | Invoke a static entry | `{"op":"invoke","method":"Generated.Entry::Run","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]}` |
+| Inspect website publication and authority | `{"op":"web_status"}` |
+| Publish an installed HTTP handler | `{"op":"publish_web","method":"Generated.Website::Handle"}` |
 | Finish | `{"op":"finish","message":"The saved counter is now 26."}` |
 
 Use logical IDs returned by search when names are ambiguous. `read_code` also
@@ -195,6 +197,57 @@ facade. Installation adds a new assembly; replacing bodies on existing types is
 not implemented. Compilation success does not imply supported CIL: installation
 performs a separate loader check. See [compilation](compilation.md),
 [workbench](workbench.md), and [compiler service](compiler-service.md).
+
+## Author and publish a website
+
+`web_status` reports the current default handler, publication count/limit, current
+host publication permission, and HTTP-v1 ABI. It returns the current receipt rather
+than the entire journal, keeping the model-visible result bounded even at 128
+publications. It performs no HTTP requests or mutations. `web-inspect` remains the
+full host inspection command.
+
+`publish_web` selects an already installed static
+`string Handle(string id, string method, string target, string body)` for new HTTP
+request IDs. The model may optionally include `codeVersion` to assert a particular
+installed body. Freeze resolves the method and exact code ID into the managed
+turn before execution; incompatible ABI or code IDs reject as saved tool errors.
+Compilation and installation do not publish by themselves. Existing accepted
+HTTP requests retain their original code and response. See the
+[website contract](website.md#compile-install-and-publish-a-handler).
+
+Publication authority is a separate, transient host policy, **disabled by default**.
+Embedders must set `AgentHost::allow_web_publication = true`. The foreground
+`agent` and `agent-drive` commands require an additional trailing
+`--allow-web-publication` flag; `--allow-model-calls` remains independently required.
+Both flag orders are accepted. Resume argument arrays preserve an existing grant
+and do not introduce one when absent. Permission is not saved in guest state and
+cannot be acquired by installing or invoking code. A denied publication becomes
+a durable model-visible tool error.
+
+For example, create a new universe with this goal and opt-in:
+
+```sh
+RENRAKU_WEB_GOAL="Discover Website, inspect its handler and compiler contract, then compile a new four-string/string-result handler that adds an HTML heading and calls the existing Website.Handle. Install and publish it. Preserve all visit state; never call Initialize. Finish after publication."
+cargo run -p renraku-openai -- agent target/agent-website.db "$RENRAKU_RECEIPTS" target/agent-web-compiler.db target/compiler/Renraku.Compiler.dll target/guest/Renraku.CoreLib.dll target/guest/Renraku.Simulation.dll "$RENRAKU_PROFILE" "$RENRAKU_MODEL" "$RENRAKU_WEB_GOAL" 20000 4 16 --allow-web-publication --allow-model-calls
+```
+
+Resume budget stops with the returned arguments. After the goal finishes, serve
+the saved handler with `renraku-vm web-serve ... @published ...`. Host listeners
+and sockets stay external. One guest execution remains the limit: new HTTP work
+receives 503 while the coordinator has active frames/waits. Use one controller
+per universe and finish accepted HTTP work before submitting another agent goal.
+Guest handlers inherit no model or publication capability.
+
+Publication IDs are `agent.<universe>.<turn>.publish`, within the HTTP journal's
+64-character ASCII alphabet. A committed result is reconciled by read-only lookup
+before checking current permission, so losing the controller after publication
+does not require granting authority again. It returns the original receipt,
+including when an operator has since published a newer route. The older action
+never republishes itself over that route. If no receipt committed and permission
+has been removed, recovery returns a denied result without publishing. Storage
+failures leave the turn pending; they do not become a success or a new action ID.
+The actual frozen inputs and publication results stay in linked managed history.
+This adds no native checkpoint fields or HTTP wire changes.
 
 ## Durable ownership and recovery
 
@@ -275,7 +328,7 @@ cargo test -p renraku-openai --test cli
 cargo test -p renraku-openai --lib inference::tests::agent
 ```
 
-Fifteen agent tests cover the selected search/read/compile/install/invoke/finish
+Eighteen agent tests cover the selected search/read/compile/install/invoke/finish
 sequence, lost results around every tool, SDK-free published replay, frozen
 static arguments and pre-invocation GC roots, uncertain inference with and without
 receipts, strict inputs and budgets, generated-code capability denial, compiler
@@ -287,7 +340,7 @@ component tests additionally exercise real process kills around compiler,
 installation, invocation, and inference commits. These automated fixtures use no
 live inference. The separately recorded live acceptance used ten real model turns.
 
-Five additional local HTTP integration tests run the actual asynchronous
+Six additional local HTTP integration tests run the actual asynchronous
 subscription adapter through the coding loop. The fixture chooses nine actions
 from the received full history: search, read CIL, describe a contract, compile an
 intentional type error, correct it using the saved CS1503 diagnostic, install,
@@ -318,3 +371,21 @@ goal reads and invokes the installed caller to reach 33 without a compiler or a
 second installation; its original invocation receipt remains unchanged. The
 subscription HTTP fixture sends the full managed history plus the new user goal,
 preserving monotonic turns and the same object across both goals.
+
+Website tests separately enforce default denial, strict inspection/publication
+schemas, exact frozen code binding, invalid ABI/path rejection, and revoked
+authority before and after commit. A local subscription fixture selects a full
+search/read/describe/inspect/compile/install/publish sequence, loses the publication
+result, and reconciles it offline without authority after a newer operator
+publication. A corrective model turn deliberately republishes with a fresh ID.
+A second goal inspects retained source and republishes the installed handler
+without a compiler. Real TCP visits share the original managed history; old
+request replay is byte-for-byte stable. Every HTTP model history matches the
+linked CIL transcript across both goals. These fixtures are scripted evidence,
+not proof of autonomous model intelligence.
+
+A [live two-goal website acceptance](acceptance/live-website-2026-10-29.md) used
+15 real GPT-6.1 Sol turns to author and publish two versions across fresh processes.
+HTTP visits retained their managed state; an older request kept its original page
+after the new publication. Finished recovery used zero operations. Publication
+authority was explicitly enabled for that run.

@@ -170,6 +170,12 @@ publisher from overwriting guest progress committed by a concurrent host. A reje
 stale writer must reload and explicitly retry. There is no route deletion, path
 table, method-body replacement, or multi-context scheduling in this milestone.
 
+The [coding agent](agent.md#author-and-publish-a-website) can inspect and publish
+handlers under a separate host opt-in. Its frozen method/code and turn-derived
+publication receipt live in the managed action history. A
+[live two-goal run](acceptance/live-website-2026-10-29.md) authored two handlers and
+retained HTTP visits and old-response replay across publication and host restarts.
+
 ## Supported HTTP profile and bounds
 
 The dedicated blocking host binds only loopback IP addresses and processes one
