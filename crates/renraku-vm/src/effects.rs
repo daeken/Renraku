@@ -1,16 +1,22 @@
 //! Durable request intent and reconciliation for bounded host capabilities.
 //! Delivery is explicitly separate from the universe's transaction.
+pub use crate::model::ModelRequest;
 use crate::{
     checkpoint::CheckpointStore,
     error::{Error, Result, require},
     execution::{Continuation, ExecutionStatus},
     heap::MAX_STRING_UNITS,
-    identity::{EffectId, ObjectId},
+    identity::{EffectId, ObjectId, TypeId},
+    model::{
+        DEFAULT_MODEL, MAX_MESSAGES, MessageReference, MessageRole, ModelMessage,
+        validate_identifier,
+    },
+    program::SlotType,
     runtime::Vm,
     value::Value,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use std::{path::Path, time::Duration};
+use std::{collections::BTreeSet, path::Path, time::Duration};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectState {
@@ -24,6 +30,8 @@ pub struct EffectRecord {
     pub id: EffectId,
     pub capability: String,
     pub request: ObjectId,
+    pub model: String,
+    pub messages: Vec<MessageReference>,
     pub state: EffectState,
 }
 impl EffectRecord {
@@ -32,19 +40,18 @@ impl EffectRecord {
             EffectState::Completed { response } => Some(response),
             _ => None,
         };
-        std::iter::once(self.request).chain(response)
+        std::iter::once(self.request)
+            .chain(self.messages.iter().map(|message| message.content))
+            .chain(response)
     }
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ModelRequest {
-    pub id: EffectId,
-    pub prompt: Vec<u16>,
-}
-
 /// A submission error means an uncertain outcome. Reconciliation returning None
 /// is not evidence that a provider did not accept or charge for a request.
 pub trait ModelProvider {
     fn capability(&self) -> &str;
+    fn supports_model(&self, model: &str) -> bool {
+        model == DEFAULT_MODEL
+    }
     fn submit(&mut self, request: &ModelRequest) -> Result<Vec<u16>>;
     fn reconcile(&mut self, request: &ModelRequest) -> Result<Option<Vec<u16>>>;
 }
@@ -78,10 +85,41 @@ impl Vm<'_> {
         Ok(id)
     }
     pub(crate) fn prepare_model_request(&self, request: ObjectId) -> Result<EffectRecord> {
+        self.prepare_chat_request(
+            "local.echo".into(),
+            DEFAULT_MODEL.into(),
+            vec![MessageReference {
+                role: MessageRole::User,
+                content: request,
+            }],
+        )
+    }
+    pub fn queue_chat_request(
+        &mut self,
+        capability: String,
+        model: String,
+        messages: Vec<MessageReference>,
+    ) -> Result<EffectId> {
+        let effect = self.prepare_chat_request(capability, model, messages)?;
+        let id = effect.id;
+        self.effects.insert(id, effect);
+        Ok(id)
+    }
+    fn prepare_chat_request(
+        &self,
+        capability: String,
+        model: String,
+        messages: Vec<MessageReference>,
+    ) -> Result<EffectRecord> {
+        validate_identifier(&capability)?;
+        validate_identifier(&model)?;
         require(
-            self.heap.object(request)?.string_units().is_some(),
-            "model request must be a managed string",
+            !messages.is_empty() && messages.len() <= MAX_MESSAGES,
+            "invalid model message count",
         )?;
+        let request = messages.last().unwrap().content;
+        let body = self.materialize_request(EffectId::fresh(), &capability, &model, &messages)?;
+        body.validate()?;
         require(
             self.effects.len() < 1_000_000,
             "effect outbox exceeds its record limit",
@@ -92,20 +130,138 @@ impl Vm<'_> {
         }
         Ok(EffectRecord {
             id,
-            capability: "local.echo".into(),
+            capability,
             request,
+            model,
+            messages,
             state: EffectState::Prepared,
         })
     }
+    fn model_field(
+        &self,
+        object: ObjectId,
+        owner: TypeId,
+        name: &str,
+        ty: SlotType,
+    ) -> Result<Value> {
+        let object = self.heap.object(object)?;
+        require(
+            object.type_id() == owner,
+            "model argument has the wrong nominal type",
+        )?;
+        let field = self
+            .program
+            .fields()
+            .find(|f| f.owner == owner && f.name == name && f.value_type == ty && !f.is_static)
+            .ok_or_else(|| Error(format!("invalid model argument field {name}")))?;
+        object
+            .fields()
+            .get(&field.id)
+            .copied()
+            .ok_or_else(|| Error("missing model argument field".into()))
+    }
+    pub(crate) fn prepare_guest_chat(
+        &self,
+        binding: ObjectId,
+        head: ObjectId,
+        binding_type: TypeId,
+        message_type: TypeId,
+    ) -> Result<EffectRecord> {
+        let string = SlotType::Reference(self.program.string_type()?);
+        let read_name = |field| -> Result<String> {
+            let Value::Reference(id) = self.model_field(binding, binding_type, field, string)?
+            else {
+                return Err(Error("model binding names must be non-null strings".into()));
+            };
+            String::from_utf16(
+                self.heap
+                    .object(id)?
+                    .string_units()
+                    .ok_or_else(|| Error("model binding name is not a string".into()))?,
+            )
+            .map_err(|_| Error("invalid model binding UTF-16".into()))
+        };
+        let capability = read_name("Capability")?;
+        let model = read_name("Model")?;
+        let mut messages = Vec::new();
+        let mut visited = BTreeSet::new();
+        let mut next = Some(head);
+        while let Some(id) = next {
+            require(visited.insert(id), "model message chain contains a cycle")?;
+            require(
+                messages.len() < MAX_MESSAGES,
+                "model message chain exceeds its limit",
+            )?;
+            let Value::I32(role) = self.model_field(id, message_type, "Role", SlotType::I32)?
+            else {
+                return Err(Error("model role is not Int32".into()));
+            };
+            let role = MessageRole::from_tag(
+                u8::try_from(role).map_err(|_| Error("unsupported model message role".into()))?,
+            )?;
+            let Value::Reference(content) =
+                self.model_field(id, message_type, "Content", string)?
+            else {
+                return Err(Error(
+                    "model message content must be a non-null string".into(),
+                ));
+            };
+            messages.push(MessageReference { role, content });
+            next = match self.model_field(
+                id,
+                message_type,
+                "Next",
+                SlotType::Reference(message_type),
+            )? {
+                Value::Null => None,
+                Value::Reference(id) => Some(id),
+                _ => return Err(Error("invalid model message link".into())),
+            };
+        }
+        self.prepare_chat_request(capability, model, messages)
+    }
     fn model_request(&self, id: EffectId) -> Result<ModelRequest> {
         let record = self.effect(id)?;
-        let prompt = self
-            .heap
-            .object(record.request)?
-            .string_units()
-            .ok_or_else(|| Error("model request payload is not a string".into()))?
-            .to_vec();
-        Ok(ModelRequest { id, prompt })
+        self.materialize_request(id, &record.capability, &record.model, &record.messages)
+    }
+    pub(crate) fn materialize_request(
+        &self,
+        id: EffectId,
+        capability: &str,
+        model: &str,
+        messages: &[MessageReference],
+    ) -> Result<ModelRequest> {
+        let mut total = 0usize;
+        let messages = messages
+            .iter()
+            .map(|message| {
+                let object = self.heap.object(message.content)?;
+                require(
+                    object.type_id() == self.program.string_type()?,
+                    "model message must be a managed string",
+                )?;
+                let content = object
+                    .string_units()
+                    .ok_or_else(|| Error("model message payload is not a string".into()))?;
+                total = total
+                    .checked_add(content.len())
+                    .ok_or_else(|| Error("model request size overflow".into()))?;
+                require(
+                    total <= MAX_STRING_UNITS,
+                    "model request exceeds the UTF-16 unit limit",
+                )?;
+                Ok(ModelMessage {
+                    role: message.role,
+                    content: content.to_vec(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ModelRequest {
+            id,
+            capability: capability.into(),
+            model: model.into(),
+            messages,
+        })
     }
     /// Commit intent and the dispatch marker before calling external code.
     /// Completed and uncertain effects are never automatically resubmitted.
@@ -118,6 +274,10 @@ impl Vm<'_> {
         require(
             self.effect(id)?.capability == provider.capability(),
             "provider does not match the effect capability",
+        )?;
+        require(
+            provider.supports_model(&self.effect(id)?.model),
+            "provider does not support the saved model",
         )?;
         match self.effect(id)?.state {
             EffectState::Completed { response } => return Ok(response),
@@ -204,6 +364,10 @@ impl Vm<'_> {
             self.effect(id)?.capability == provider.capability(),
             "provider does not match the effect capability",
         )?;
+        require(
+            provider.supports_model(&self.effect(id)?.model),
+            "provider does not support the saved model",
+        )?;
         match self.effect(id)?.state {
             EffectState::Completed { response } => return Ok(Some(response)),
             EffectState::InFlight | EffectState::OutcomeUnknown { .. } => {}
@@ -262,7 +426,7 @@ impl LocalModelProvider {
             tx.commit()?;
         } else {
             require(
-                application == PROVIDER_ID && version == 1,
+                application == PROVIDER_ID && matches!(version, 1 | 2),
                 "not a supported local model ledger",
             )?;
         }
@@ -272,6 +436,12 @@ impl LocalModelProvider {
             "provider ledger requires WAL mode",
         )?;
         connection.pragma_update(None, "synchronous", "FULL")?;
+        if connection.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))? == 1 {
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch("ALTER TABLE receipt ADD COLUMN request_format INTEGER NOT NULL DEFAULT 1 CHECK(request_format IN (1,2));")?;
+            tx.pragma_update(None, "user_version", 2)?;
+            tx.commit()?;
+        }
         Ok(Self { connection })
     }
     pub fn submission_attempts(&self, id: EffectId) -> Result<u64> {
@@ -312,20 +482,24 @@ impl ModelProvider for LocalModelProvider {
         "local.echo"
     }
     fn submit(&mut self, request: &ModelRequest) -> Result<Vec<u16>> {
-        let encoded = encode_units(&request.prompt)?;
+        require(
+            request.capability == self.capability() && self.supports_model(&request.model),
+            "unsupported local model binding",
+        )?;
+        let encoded = request.encode()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(Vec<u8>, Vec<u8>)> = tx
+        let existing: Option<(Vec<u8>, Vec<u8>, i64)> = tx
             .query_row(
-                "SELECT request,response FROM receipt WHERE effect=?1",
+                "SELECT request,response,request_format FROM receipt WHERE effect=?1",
                 params![request.id.as_bytes().as_slice()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        let response = if let Some((prompt, response)) = existing {
+        let response = if let Some((prompt, response, format)) = existing {
             require(
-                prompt == encoded,
+                receipt_matches(request, &encoded, &prompt, format)?,
                 "effect ID was reused with a different request",
             )?;
             tx.execute(
@@ -335,10 +509,10 @@ impl ModelProvider for LocalModelProvider {
             decode_units(&response)?
         } else {
             let mut response: Vec<u16> = "echo: ".encode_utf16().collect();
-            response.extend(&request.prompt);
+            response.extend(&request.messages.last().unwrap().content);
             let encoded_response = encode_units(&response)?;
             tx.execute(
-                "INSERT INTO receipt(effect,request,response,attempts) VALUES(?1,?2,?3,1)",
+                "INSERT INTO receipt(effect,request,response,attempts,request_format) VALUES(?1,?2,?3,1,2)",
                 params![request.id.as_bytes().as_slice(), encoded, encoded_response],
             )?;
             response
@@ -347,23 +521,43 @@ impl ModelProvider for LocalModelProvider {
         Ok(response)
     }
     fn reconcile(&mut self, request: &ModelRequest) -> Result<Option<Vec<u16>>> {
-        let existing: Option<(Vec<u8>, Vec<u8>)> = self
+        require(
+            request.capability == self.capability() && self.supports_model(&request.model),
+            "unsupported local model binding",
+        )?;
+        let encoded = request.encode()?;
+        let existing: Option<(Vec<u8>, Vec<u8>, i64)> = self
             .connection
             .query_row(
-                "SELECT request,response FROM receipt WHERE effect=?1",
+                "SELECT request,response,request_format FROM receipt WHERE effect=?1",
                 params![request.id.as_bytes().as_slice()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
         match existing {
-            Some((prompt, response)) => {
+            Some((prompt, response, format)) => {
                 require(
-                    prompt == encode_units(&request.prompt)?,
+                    receipt_matches(request, &encoded, &prompt, format)?,
                     "effect receipt does not match the request",
                 )?;
                 decode_units(&response).map(Some)
             }
             None => Ok(None),
         }
+    }
+}
+fn receipt_matches(
+    request: &ModelRequest,
+    encoded: &[u8],
+    saved: &[u8],
+    format: i64,
+) -> Result<bool> {
+    match format {
+        1 => match request.legacy_prompt() {
+            Some(prompt) => Ok(encode_units(prompt)? == saved),
+            None => Ok(false),
+        },
+        2 => Ok(encoded == saved),
+        _ => Err(Error("unsupported model receipt request format".into())),
     }
 }

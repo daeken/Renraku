@@ -4,6 +4,7 @@ use crate::{
     error::{Error, Result, require},
     execution::{CallResult, Continuation, ExecutionStatus},
     identity::{FieldId, TypeId},
+    model::{DEFAULT_MODEL, MessageRole},
     program::{Intrinsic, Method, Program, SlotType},
     runtime::Vm,
     value::Value,
@@ -113,6 +114,15 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
             "invalid effect capability name",
         )?;
         require(*id == effect.id, "effect record identity mismatch")?;
+        vm.materialize_request(*id, &effect.capability, &effect.model, &effect.messages)?
+            .validate()?;
+        require(
+            effect
+                .messages
+                .last()
+                .is_some_and(|m| m.content == effect.request),
+            "model request does not match its final message",
+        )?;
         for object in effect.references() {
             let object = vm.heap.object(object)?;
             require(
@@ -237,7 +247,7 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
                 )?;
                 let record = vm.effect(effect)?;
                 require(
-                    record.request == request && record.capability == "local.echo",
+                    record.request == request,
                     "waiting effect request or capability mismatch",
                 )?;
                 require(
@@ -259,15 +269,30 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
                 };
                 let callee = program.method(program.method_tokens[&(method.assembly, token)])?;
                 require(
-                    callee.intrinsic == Some(Intrinsic::ModelComplete),
+                    matches!(
+                        callee.intrinsic,
+                        Some(Intrinsic::ModelComplete | Intrinsic::ModelChat)
+                    ),
                     "saved effect call is not the model capability",
                 )?;
+                if callee.intrinsic == Some(Intrinsic::ModelComplete) {
+                    require(
+                        record.capability == "local.echo"
+                            && record.model == DEFAULT_MODEL
+                            && record.messages.len() == 1
+                            && record.messages[0].role == MessageRole::User,
+                        "simple model call has a different saved binding or message sequence",
+                    )?;
+                }
                 let mut shape = positions
                     .get(&call_site)
                     .cloned()
                     .ok_or_else(|| Error("saved effect call site is unreachable".into()))?;
-                require(!shape.is_empty(), "saved effect call stack underflow")?;
-                shape.pop(); // Its sole string argument is now retained by the effect record.
+                require(
+                    shape.len() >= callee.signature.parameters.len(),
+                    "saved effect call stack underflow",
+                )?;
+                shape.truncate(shape.len() - callee.signature.parameters.len());
                 require(
                     shape.len() < method.max_stack,
                     "saved effect result exceeds maxstack",

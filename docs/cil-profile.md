@@ -106,9 +106,12 @@ transitions. Budget exhaustion pauses the context; another `Vm::run` call resume
 it. A fault retains the failing stack. Native Rust frames never represent
 suspended guest calls.
 
-The one effectful intrinsic is `Renraku.Model.Complete(string) -> string` in
-Renraku.CoreLib. It requires host opt-in, removes its non-null prompt into the
-outbox, and installs an explicit `AwaitEffect` continuation. Execution returns
+The effectful intrinsics are `Renraku.Model.Complete(string) -> string` and
+`Renraku.Model.Chat(ModelBinding, ChatMessage) -> string` in Renraku.CoreLib.
+Complete captures a single user prompt with the local default binding; Chat
+captures a capability/model binding and an ordinary linked sequence of
+system/user/assistant messages. Calls require host opt-in, remove their arguments
+into immutable outbox data, and install an explicit `AwaitEffect` continuation. Execution returns
 `RunOutcome::Waiting` until delivery commits both a response on the evaluation
 stack and a runnable continuation. This transition creates no callee frame.
 Restoration disables new model calls until the host opts in again; it can still

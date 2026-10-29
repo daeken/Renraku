@@ -88,7 +88,7 @@ calls. It contains no persistence, serialization, or restart code.
 Use `Renraku.Guest.Simulation::Strings` as the entry method to try a persistent
 conversation object containing embedded NULs, an emoji, and an unpaired
 surrogate. The result is **167861**. Checkpoints preserve its exact UTF-16 units.
-Existing format 1, 2, and 3 universes remain readable and upgrade on their next commit.
+Existing format 1 through 4 universes remain readable and upgrade on their next commit.
 
 Unexpected process termination restores the most recent committed checkpoint.
 Uncommitted instructions and their heap mutations are rolled back together.
@@ -125,6 +125,18 @@ and restore. `Vm::set_model_calls_enabled(true)` is the embedding equivalent of
 the trailing CLI flag. Running a waiting VM returns its effect ID immediately
 without submitting or advancing guest instructions. Manual `dispatch-model`,
 `reconcile-model`, and `resume` commands remain available for individual steps.
+
+For full conversation input, use `Renraku.Model.Chat(binding, messages)`.
+`ModelBinding` holds a capability and model identifier; `ChatMessage` is an
+ordinary linked object with role, content, and next fields. The outbox captures
+the binding and message sequence at the call boundary. Later edits to guest
+history cannot change a saved request or its provider receipt.
+
+Run `Renraku.Guest.Simulation::ChatHarnessScore` as the entry method to try two
+structured calls with system, user, and assistant messages. It returns **11**,
+matching CoreCLR, while preserving embedded NULs and a lone surrogate. The local
+binding is `local.echo` / `echo-v1`; the echo substitute uses the final user text.
+Receipts verify the entire history and model identity.
 
 ## Deliver and reconcile requests
 
@@ -164,7 +176,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The C# integration tests require the .NET 10 SDK. They build the custom CoreLib,
-compile the same guest source for both Renraku and CoreCLR, and compare nineteen
+compile the same guest source for both Renraku and CoreCLR, and compare twenty
 results. Tests also single step through nested constructors and ordinary calls,
 check static storage across successive executions, enforce instruction and frame
 budgets, and reject unsupported or malformed assemblies. Focused CIL tests cover
@@ -182,6 +194,9 @@ verify that linked conversation history survives outbox collection.
 Driver tests enforce instruction and provider-operation budgets, recover actual
 process kills during automatic delivery, stop on missing receipts, and retain
 fault diagnostics and stale-writer protection.
+Structured request tests cover frozen histories, roles and model identities,
+malformed linked messages, request limits, full-history receipt matching, and
+upgrade of a waiting format 4 call with its original accepted provider receipt.
 
 The guest compiler uses Roslyn shipped with the SDK, with no NuGet package
 dependencies. Rust uses `uuid` for identities, `sha2` for checkpoint checksums,
@@ -196,9 +211,10 @@ implementation choices, acceptance criteria, and the LLM harness recovery model.
 
 The local model harness now demonstrates strings, linked conversation history,
 durable requests, waiting CIL callers, and bounded automatic execution and
-delivery. Structured model requests and explicit durable provider bindings are
-the next preparation for a real adapter. Real provider integration, broader
-introspection, and live code evolution remain on the architecture roadmap.
+delivery. Structured model requests and saved provider bindings are implemented.
+The selected first real provider is the OpenAI Responses API using the user's
+ChatGPT subscription through OAuth. Its adapter and sign-in flow,
+broader introspection, and live code evolution remain on the architecture roadmap.
 
 [Progress and handoff](docs/progress.md) records the current state and the next
 implementation targets for recurring development.

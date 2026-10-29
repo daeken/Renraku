@@ -43,7 +43,7 @@ row contains a generation, universe ID, payload format version, SHA-256 checksum
 and binary payload. The checksum detects damaged payloads; it is not an
 authentication mechanism.
 
-The writer emits payload format version 4 and still reads versions 1, 2, and 3. All start
+The writer emits payload format version 5 and still reads versions 1 through 4. All start
 with the eight bytes `RENRAKU\0` followed by a
 32-bit little endian version number and a 16-byte universe ID. It then records:
 
@@ -84,9 +84,18 @@ ID, and frame continuation tag 2 (await effect), followed by call-site and retur
 offsets, effect ID, and request string ID. Existing status and continuation tags
 are unchanged. The new tags are rejected under earlier payload versions.
 
-The next successful commit writes version 4. Unmodified fixtures captured from
+Version 5 appends a length-prefixed model identifier and captured message sequence
+after each effect's state payload. Each message is a role byte (0 system, 1 user,
+2 assistant) and a managed content string ID. The sequence has a 32-bit count
+and must contain 1–128 messages ending with a user message. Identifiers and the
+aggregate UTF-16 content limit are validated on save and restore. Formats 3 and 4
+restore with model echo-v1 and one user message referencing their existing request.
+
+The next successful commit writes version 5. Unmodified fixtures captured from
 the earlier writers verify active version 1 frames, exact version 2 strings,
-and a version 3 completed effect alongside active frames, then upgrade without
+and a version 3 completed effect alongside active frames. A format 4 waiting call
+has a matching original schema 1 provider receipt, proving upgrade and
+reconciliation without resubmission. All upgrade without
 changing their identities. Host authorization for future model calls is never
 serialized; it defaults to disabled after restoration.
 
@@ -113,8 +122,10 @@ and respect the unit limit. Intern entries must resolve to matching retained
 literal contents. Pure string intrinsics cannot appear as suspended frames,
 because they complete within one instruction.
 
-Effect IDs must be unique, capability names must contain 1–128 UTF-8 bytes, and
-request and completed response references must resolve to managed strings.
+Effect IDs must be unique, capability/model names must be valid 1–128 byte ASCII
+identifiers, and
+request, captured content, and completed response references must resolve to
+managed strings. A request's final content must match its legacy request reference.
 Recovery exposes saved in-flight records as outcome unknown: there is no saved
 response proving whether the external provider accepted the request. Restoration
 never invokes a provider.
@@ -129,9 +140,10 @@ code version. Return offsets must follow the saved call sites. Pending
 constructor results must have the allocated type. The active frame must point at
 an executable instruction or a valid capability call awaiting an effect.
 An effect waiter must match the waiting execution's effect ID and an unfinished
-outbox record, including the prompt reference and local.echo capability. Its
-call must target the exact Model.Complete intrinsic, its next offset must follow
-that call, and its stack must match the call position after removing the prompt.
+outbox record, including its final user content. Its call must target the exact
+Model.Complete or Model.Chat intrinsic; Complete additionally requires the
+default binding and single user message. Its next offset must follow that call,
+and its stack must match the call position after removing the arguments.
 Completion status requires an empty stack of frames and a result matching the
 entry signature.
 
@@ -207,4 +219,4 @@ its process during the first and second submissions and after completion, then
 resume with exact instruction and provider-operation accounting. Missing receipts
 leave a waiting guest without resubmission. Budget stops and guest fault
 diagnostics are saved, and a stale waiting driver cannot invoke a provider.
-The driver adds no persistent state and continues to write payload format 4.
+The driver adds no persistent state of its own.

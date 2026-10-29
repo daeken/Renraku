@@ -1,14 +1,18 @@
 # Durable model-request outbox
 
 The current implementation connects CIL callers, a host API, and CLI delivery
-to the durable `local.echo` capability. The provider returns `echo: ` followed
-by the exact UTF-16 request. A real model connection is later work.
+to the durable `local.echo` capability and `echo-v1` model. The provider returns
+`echo: ` followed by the exact UTF-16 content of the final user message. The
+selected first real provider is OpenAI Responses with subscription-backed ChatGPT
+OAuth; its adapter and sign-in flow are still future work.
 
 ## Guest calls and waiting frames
 
-CoreLib declares `Renraku.Model.Complete(string) -> string` as an explicitly
-whitelisted InternalCall. Its exact owner, name, and signature are checked by
-the loader. It accepts a non-null managed string. The host must opt in through
+CoreLib declares `Renraku.Model.Complete(string) -> string` and
+`Renraku.Model.Chat(ModelBinding, ChatMessage) -> string` as explicitly
+whitelisted InternalCalls. Their exact owner, names, and signatures are checked by
+the loader. Complete accepts a non-null managed string and captures a single user
+message with the default local binding. The host must opt in through
 `Vm::set_model_calls_enabled(true)` or the trailing `--allow-model-calls` flag
 on `run`, `run-persistent`, or `resume`. This policy is disabled on every fresh
 VM and restore; a saved guest universe cannot grant host authorization.
@@ -16,7 +20,7 @@ VM and restore; a saved guest universe cannot grant host authorization.
 The call performs one guest transition: remove the prompt from the evaluation
 stack, create a prepared outbox record, install `AwaitEffect` in the active
 frame, and mark the execution `Waiting` for that effect ID. The continuation
-stores the call site, return offset, effect ID, and prompt object ID. Older
+stores the call site, return offset, effect ID, and final user content ID. Older
 callers remain ordinary `AwaitReturn` frames. No native stack represents a
 suspended guest call.
 
@@ -33,14 +37,39 @@ restores the original waiting context in memory and keeps the effect uncertain.
 Completing an unrelated host request does not wake the guest.
 
 Recovery checks that the waiting status and active continuation name the same
-unfinished effect, prompt, and capability, that the call targets Model.Complete,
+unfinished effect and final user content, that the call targets Complete or Chat,
 and that offsets and the post-argument stack shape are valid. Only the active
 frame may await an effect. Intrinsic methods themselves never have saved frames.
 
+## Captured conversation and model binding
+
+`Renraku.ModelBinding` has Capability and Model string fields.
+`Renraku.ChatMessage` has Role (0 system, 1 user, 2 assistant), Content (string),
+and Next (ChatMessage) fields. These are ordinary mutable managed objects,
+allocated and linked through ordinary CIL. Chat requires non-null arguments,
+non-null content, an acyclic chain of 1–128 messages, and a final user message.
+The aggregate content limit is one million UTF-16 units. Unsupported roles,
+cycles, oversized requests, and malformed bindings fault with the original
+call operands intact and no published effect.
+
+Capability and model identifiers contain 1–128 ASCII letters, digits, or
+`._-/:` characters. Capturing copies these identifiers and the ordered roles
+into the effect record and retains each immutable content string by logical ID.
+The effect's legacy request reference identifies the final user content.
+Changing links, roles, content fields, or the model binding later cannot change
+a captured request. Retained content strings participate in checkpoint tracing
+and GC until the effect is forgotten or another guest root retains them.
+
+The host `queue_chat_request` API accepts the same binding and message references.
+`ModelProvider::supports_model` is checked before submission or receipt lookup;
+the default and local implementation accept only `echo-v1`. The transport receives
+a `ModelRequest` with the captured capability, model, and full ordered contents.
+No credentials or native provider resources enter the managed request.
+
 ## Request state and commits
 
-Each effect has a stable opaque `EffectId`, a capability name, a managed request
-string reference, and one of these states:
+Each effect has a stable opaque `EffectId`, capability and model names, captured
+message references, a final user content reference, and one of these states:
 
 | State | Meaning | Permitted delivery action |
 | --- | --- | --- |
@@ -50,14 +79,14 @@ string reference, and one of these states:
 | Completed | Managed response string committed with the effect record | Return the saved response |
 
 `Vm::queue_model_request` creates an in-memory prepared record bound to
-`local.echo`. `CheckpointStore::save` persists it along with heap, code,
+`local.echo` / `echo-v1`. `CheckpointStore::save` persists it along with heap, code,
 roots, statics, and guest frames. The outbox retains its request and completed
 response as GC roots. The host must save queued work before expecting it to
 survive a crash.
 
-`Vm::dispatch_model` checks the provider capability, changes prepared to
+`Vm::dispatch_model` checks the provider capability and model support, changes prepared to
 in flight, and saves the complete universe **before invoking the provider**.
-A save failure prevents submission. The provider receives the immutable prompt
+A save failure prevents submission. The provider receives the immutable request
 and the stable effect ID. A successful response becomes a new managed string;
 the completed record and response commit in one universe transaction before
 the caller receives the result.
@@ -125,13 +154,24 @@ call. The CLI does not connect to a remote model.
 
 `LocalModelProvider` stores receipts in a separate SQLite database using WAL
 and full synchronization. Its application ID is `0x52454d4f` and schema version
-is 1. It rejects foreign or nonempty unmarked databases.
+is 2. It rejects foreign or nonempty unmarked databases.
 
-Each receipt holds the effect ID, exact UTF-16 request and response bytes, and
-the number of submission attempts. Repeating a submission with the same ID and
+Each receipt holds the effect ID, versioned request bytes, exact UTF-16 response
+bytes, and the number of submission attempts. Repeating a submission with the same ID and
 request returns the existing response; reusing the ID for a different request
 fails. Reconciliation validates the request against the receipt and does not
 increment the submission count.
+
+Request format 2 contains canonical body version 1: one version byte, length-
+prefixed UTF-8 capability and model names, a 32-bit message count, then each
+role byte, 32-bit UTF-16 unit count, and little endian units. Lengths are little
+endian. The effect ID remains the separate receipt key. This binds all roles,
+contents, and order, including earlier messages with the same final prompt.
+
+Opening a schema 1 ledger upgrades it transactionally by adding a request-format
+column. Existing receipts stay format 1, retaining their original raw UTF-16
+prompt bytes. They match only the legacy single-user local.echo / echo-v1 request.
+They cannot be reinterpreted as a different model or structured conversation.
 
 The ledger deliberately commits outside the universe transaction. Losing a
 universe process after provider acceptance leaves a receipt that a fresh
@@ -152,6 +192,7 @@ The CLI commands are `queue-model`, `dispatch-model`, `reconcile-model`, and
 and persistent representation preserve arbitrary UTF-16 units, including
 embedded NULs and lone surrogates. Requests and responses share the current
 one-million-unit string limit.
+Structured requests additionally enforce that limit across all message contents.
 
 `Simulation.ModelHarness` stores conversation history in ordinary linked
 `ModelMessage` objects, makes two requests through three nested CIL frames,
@@ -160,6 +201,11 @@ prompt with the same managed object ID. Static guest storage retains all four
 messages after completed outbox records are forgotten and collected. The
 CoreCLR reference uses an echo shim; it is excluded from the persistent guest
 assemblies.
+
+`Simulation.ChatHarnessScore` extends and edits a linked conversation between
+two Chat calls, then changes the source binding after completion. It returns 11,
+matching CoreCLR. The first captured history retains its original system text
+and binding, and the next request includes the first response by the same ID.
 
 There is no real model connection, credential storage, streaming, tool
 execution, cancellation, or automatic retry yet.
@@ -190,7 +236,12 @@ The integration suite checks:
   are rejected even with recomputed checksums.
 - Capability mismatch, idempotency-key reuse with changed data, duplicate effect
   IDs, malformed state tags, and missing payload objects fail explicitly.
-- Original format 1, 2, and 3 checkpoints restore and upgrade to format 4.
+- Original format 1 through 4 checkpoints restore and upgrade to format 5.
+- A format 4 waiting call and its schema 1 accepted receipt upgrade together
+  and reconcile without resubmission.
+- Structured histories restore at every instruction and through process kills;
+  receipts reject changed earlier content, roles, message order, or models.
+- A fixed golden encoding covers the canonical request body and arbitrary UTF-16.
 - The driver obeys independent instruction and operation budgets across fresh
   invocations, including zero budgets, and leaves unrelated outbox records alone.
 - Actual process kills during the driver's first and second submissions recover

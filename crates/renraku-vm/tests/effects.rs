@@ -413,7 +413,7 @@ fn format_three_outbox_and_active_frames_restore_and_upgrade_together() {
         .unwrap()
         .query_row("SELECT format FROM checkpoint", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(format, 4);
+    assert_eq!(format, 5);
 }
 
 #[test]
@@ -574,7 +574,7 @@ impl ModelProvider for CheckingProvider {
         assert!(matches!(effect.state, EffectState::OutcomeUnknown { .. }));
         assert_eq!(
             vm.heap().object(effect.request)?.string_units().unwrap(),
-            request.prompt
+            request.messages.last().unwrap().content
         );
         Ok(vec![111, 107])
     }
@@ -870,21 +870,11 @@ fn provider_bindings_and_idempotency_keys_cannot_be_reinterpreted() {
     );
     assert_eq!(vm.effect(id).unwrap().state, EffectState::Prepared);
     let mut provider = LocalModelProvider::open(&databases.provider).unwrap();
-    let request = ModelRequest {
-        id,
-        prompt: vec![7],
-    };
+    let request = ModelRequest::echo(id, vec![7]);
     let first = provider.submit(&request).unwrap();
     assert_eq!(provider.submit(&request).unwrap(), first);
     assert_eq!(provider.submission_attempts(id).unwrap(), 2);
-    assert!(
-        provider
-            .submit(&ModelRequest {
-                id,
-                prompt: vec![8]
-            })
-            .is_err()
-    );
+    assert!(provider.submit(&ModelRequest::echo(id, vec![8])).is_err());
     assert_eq!(provider.submission_attempts(id).unwrap(), 2);
 }
 
@@ -922,9 +912,17 @@ fn recovery_rejects_malformed_effect_records_even_with_a_repaired_checksum() {
                     u32::from_le_bytes(bytes[start - 4..start].try_into().unwrap()),
                     1
                 );
-                let duplicate = bytes[start..state + 1].to_vec();
+                let metadata = state + 1;
+                let model_length =
+                    u32::from_le_bytes(bytes[metadata..metadata + 4].try_into().unwrap()) as usize;
+                let count_offset = metadata + 4 + model_length;
+                let messages =
+                    u32::from_le_bytes(bytes[count_offset..count_offset + 4].try_into().unwrap())
+                        as usize;
+                let end = count_offset + 4 + messages * 17;
+                let duplicate = bytes[start..end].to_vec();
                 bytes[start - 4..start].copy_from_slice(&2u32.to_le_bytes());
-                bytes.splice(state + 1..state + 1, duplicate);
+                bytes.splice(end..end, duplicate);
             }
             3 => {
                 bytes.drain(start + 36..state);

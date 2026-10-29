@@ -540,10 +540,43 @@ impl<'a> Vm<'a> {
                                 self.model_calls_enabled,
                                 "model capability calls are disabled by the host",
                             )?;
-                            let Value::Reference(request) = arguments[0] else {
-                                return Err(Error("model prompt must be a non-null string".into()));
+                            let effect = match intrinsic {
+                                Intrinsic::ModelComplete => {
+                                    let Value::Reference(request) = arguments[0] else {
+                                        return Err(Error(
+                                            "model prompt must be a non-null string".into(),
+                                        ));
+                                    };
+                                    self.prepare_model_request(request)?
+                                }
+                                Intrinsic::ModelChat => {
+                                    let [Value::Reference(binding), Value::Reference(head)] =
+                                        arguments[..]
+                                    else {
+                                        return Err(Error(
+                                            "model binding and message head must be non-null"
+                                                .into(),
+                                        ));
+                                    };
+                                    let [
+                                        SlotType::Reference(binding_type),
+                                        SlotType::Reference(message_type),
+                                    ] = callee.signature.parameters[..]
+                                    else {
+                                        return Err(Error(
+                                            "invalid chat intrinsic parameters".into(),
+                                        ));
+                                    };
+                                    self.prepare_guest_chat(
+                                        binding,
+                                        head,
+                                        binding_type,
+                                        message_type,
+                                    )?
+                                }
+                                Intrinsic::String(_) => unreachable!(),
                             };
-                            let effect = self.prepare_model_request(request)?;
+                            let request = effect.request;
                             frame.continuation = Continuation::AwaitEffect {
                                 call_site: offset,
                                 next: instruction.next,

@@ -39,6 +39,7 @@ pub(crate) enum StringIntrinsic {
 pub(crate) enum Intrinsic {
     String(StringIntrinsic),
     ModelComplete,
+    ModelChat,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -508,17 +509,38 @@ impl Program {
                             }
                             "Renraku.Model" => {
                                 let string = SlotType::Reference(program.string_type()?);
+                                let (intrinsic, parameters) =
+                                    match name.as_str() {
+                                        "Complete" => (Intrinsic::ModelComplete, vec![string]),
+                                        "Chat" => (
+                                            Intrinsic::ModelChat,
+                                            vec![
+                                                SlotType::Reference(resolver.named(
+                                                    "Renraku.CoreLib",
+                                                    "Renraku.ModelBinding",
+                                                )?),
+                                                SlotType::Reference(resolver.named(
+                                                    "Renraku.CoreLib",
+                                                    "Renraku.ChatMessage",
+                                                )?),
+                                            ],
+                                        ),
+                                        _ => {
+                                            return Err(Error(
+                                                "invalid model intrinsic signature".into(),
+                                            ));
+                                        }
+                                    };
                                 require(
-                                    name == "Complete"
-                                        && signature
-                                            == Signature {
-                                                instance: false,
-                                                parameters: vec![string],
-                                                result: Some(string),
-                                            },
+                                    signature
+                                        == Signature {
+                                            instance: false,
+                                            parameters,
+                                            result: Some(string),
+                                        },
                                     "invalid model intrinsic signature",
                                 )?;
-                                Intrinsic::ModelComplete
+                                intrinsic
                             }
                             _ => return Err(Error("unrecognized InternalCall method".into())),
                         })

@@ -13,6 +13,7 @@ use crate::{
         AssemblyId, CodeVersionId, EffectId, ExecutionId, FieldId, MethodId, ObjectId, TypeId,
         UniverseId,
     },
+    model::{DEFAULT_MODEL, MAX_MESSAGES, MessageReference, MessageRole},
     program::{AssemblyBindings, Program},
     runtime::{RunOutcome, Vm},
     value::Value,
@@ -22,7 +23,7 @@ use sha2::{Digest, Sha256};
 use std::{cell::Cell, collections::BTreeMap, path::Path, time::Duration};
 
 const MAGIC: &[u8; 8] = b"RENRAKU\0";
-const FORMAT: u32 = 4;
+const FORMAT: u32 = 5;
 const APPLICATION_ID: i64 = 0x52454e52;
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_ITEMS: usize = 1_000_000;
@@ -234,7 +235,7 @@ impl CheckpointStore {
             payload,
         } = row.ok_or_else(|| Error("no committed checkpoint".into()))?;
         require(
-            generation > 0 && matches!(format, 1..=4),
+            generation > 0 && matches!(format, 1..=5),
             "unsupported checkpoint format or generation",
         )?;
         require(
@@ -412,6 +413,12 @@ fn encode(vm: &Vm<'_>) -> Result<Vec<u8>> {
                 w.bytes(reason.as_bytes())?;
             }
         }
+        w.bytes(effect.model.as_bytes())?;
+        w.count(effect.messages.len())?;
+        for message in &effect.messages {
+            w.byte(message.role.tag());
+            w.id(message.content.as_bytes());
+        }
     }
     w.id(vm.context.id.as_bytes());
     match &vm.context.status {
@@ -563,7 +570,7 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
     require(r.take(8)? == MAGIC, "unsupported checkpoint payload format")?;
     let format = r.u32()?;
     require(
-        matches!(format, 1..=4),
+        matches!(format, 1..=5),
         "unsupported checkpoint payload format",
     )?;
     let universe = UniverseId::from_bytes(id(&mut r)?);
@@ -681,6 +688,32 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
                 },
                 _ => return Err(Error("unknown effect state".into())),
             };
+            let (model, messages) = if format >= 5 {
+                let model = std::str::from_utf8(bytes(&mut r)?)
+                    .map_err(|_| Error("invalid model identifier UTF-8".into()))?
+                    .into();
+                let length = count(&mut r, 17)?;
+                require(
+                    length <= MAX_MESSAGES,
+                    "model message count exceeds its limit",
+                )?;
+                let mut messages = Vec::new();
+                for _ in 0..length {
+                    messages.push(MessageReference {
+                        role: MessageRole::from_tag(r.u8()?)?,
+                        content: ObjectId::from_bytes(id(&mut r)?),
+                    });
+                }
+                (model, messages)
+            } else {
+                (
+                    DEFAULT_MODEL.into(),
+                    vec![MessageReference {
+                        role: MessageRole::User,
+                        content: request,
+                    }],
+                )
+            };
             require(
                 effects
                     .insert(
@@ -689,6 +722,8 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
                             id: effect,
                             capability,
                             request,
+                            model,
+                            messages,
                             state,
                         },
                     )

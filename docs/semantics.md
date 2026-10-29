@@ -213,7 +213,7 @@ The effect protocol uses a durable outbox:
 5. Resumption consumes the stored result; it does not repeat a completed effect.
 
 The current [effect outbox](effects.md) implements this protocol for
-`Renraku.Model.Complete` using the deterministic local echo provider. Receipts
+`Renraku.Model.Complete` and `Renraku.Model.Chat` using the deterministic local echo provider. Receipts
 commit outside the universe transaction. A linked C# conversation makes two
 requests through portable waiting frames; response storage and guest wakeup
 commit together. The CLI can queue, dispatch, inspect, and reconcile requests.
@@ -222,7 +222,14 @@ The bounded host driver now coordinates execution and local delivery, counting
 guest instructions and provider submissions or lookups independently. It stops
 on a missing receipt and does not drain unrelated host requests. Its limits are
 per-invocation host policy; they are not durable spending quotas. Real providers,
-streaming, tools, and explicit retry policies remain later work.
+streaming, tools, and explicit retry policies remain later work. The selected
+first real adapter is OpenAI Responses.
+
+Chat captures a capability/model binding and ordered role/content messages from
+ordinary linked guest objects. Captured identifiers and roles are values; content
+strings retain their logical IDs and immutable UTF-16 payloads. Later guest
+mutations cannot alter a saved request. Provider receipts compare the full
+versioned request body, and unsupported saved models fail before external code.
 
 An in-flight record recovered without a committed response has an unknown
 outcome: the provider may have accepted and charged for the request. The runtime
@@ -239,8 +246,10 @@ each window deterministically; connect a real provider after these cases pass.
 
 This minimal effect protocol follows the core crash-and-resume proof, before the
 broader native integration phase in the architecture draft. Branches used for
-experimentation must default to effects disabled. Provider selection and the
-credential mechanism are later harness decisions.
+experimentation must default to effects disabled. Model selection and the
+credential mechanism remain host configuration decisions. The user has selected
+the OpenAI Responses API using their ChatGPT subscription through OAuth for the
+first real provider adapter.
 
 ## Acceptance criteria
 
@@ -251,7 +260,7 @@ and references held across nested frames and pending constructor results.
 The initial executable acceptance test now compiles real C# with Roslyn against
 the custom CoreLib and interprets its emitted method bodies. The simulation
 allocates an object, mutates a field, executes nested calls and a loop, writes
-static storage, and returns 48. Nineteen guest cases are compared with CoreCLR,
+static storage, and returns 48. Twenty guest cases are compared with CoreCLR,
 including the linked conversation harness with a local echo reference shim.
 Instruction-level pause/resume, frame and instruction budgets, static roots, and
 unsupported capabilities have additional tests. This establishes the initial

@@ -16,6 +16,12 @@ instruction 30 and a completed host effect for `legacy`, with the managed
 response `echo: legacy`. The execution must finish with 48 at instruction 155
 and preserve the completed effect and its object IDs.
 
+`checkpoint-v4.bin` contains a waiting ModelHarness call at instruction 44 with
+an in-flight effect. `local-provider-v1.db` is the matching original schema 1
+receipt ledger, captured after provider acceptance and before the response was
+committed to the universe. Upgrading both must reconcile the first response
+without another submission, then complete the old guest with result 417.
+
 All fixtures must stay unchanged. They test reading earlier formats and
 upgrading on the next successful commit; regenerating them with the current
 writer would lose that coverage.

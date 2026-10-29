@@ -12,7 +12,7 @@ fn real_csharp_matches_coreclr_for_objects_branches_arithmetic_and_calls() {
     let program = program();
     for (name, expected) in &fixtures().reference {
         // The effects suite drives and compares the model harness through its outbox.
-        if name == "ModelHarness" {
+        if name == "ModelHarness" || name == "ChatHarnessScore" {
             continue;
         }
         let mut vm = Vm::new(&program);

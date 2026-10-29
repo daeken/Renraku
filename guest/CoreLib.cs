@@ -81,5 +81,20 @@ namespace Renraku
     {
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
         public static extern string Complete(string prompt);
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern string Chat(ModelBinding binding, ChatMessage messages);
+    }
+    public sealed class ModelBinding
+    {
+        public string Capability;
+        public string Model;
+        public ModelBinding(string capability, string model) { Capability = capability; Model = model; }
+    }
+    public sealed class ChatMessage
+    {
+        public int Role; // 0 = system, 1 = user, 2 = assistant.
+        public string Content;
+        public ChatMessage Next;
+        public ChatMessage(int role, string content) { Role = role; Content = content; }
     }
 }

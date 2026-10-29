@@ -201,6 +201,45 @@ namespace Renraku.Guest
             return conversation.Count * 100 + reply.Length;
         }
         public static string NullModelPrompt() { return Renraku.Model.Complete(null); }
+        public static Renraku.ChatMessage LastChat;
+        public static Renraku.ModelBinding LastBinding;
+        public static string ChatHarness()
+        {
+            Renraku.ModelBinding binding = new Renraku.ModelBinding("local.echo", "echo-v1");
+            Renraku.ChatMessage system = new Renraku.ChatMessage(0, System.String.Concat("be ", "brief"));
+            Renraku.ChatMessage user = new Renraku.ChatMessage(1, "hi\0\ud800");
+            system.Next = user;
+            LastChat = system;
+            LastBinding = binding;
+            string first = Renraku.Model.Chat(binding, system);
+            // Reuse and extend ordinary linked objects after the first request.
+            system.Content = "new instruction";
+            Renraku.ChatMessage assistant = new Renraku.ChatMessage(2, first);
+            user.Next = assistant;
+            assistant.Next = new Renraku.ChatMessage(1, "again");
+            string second = Renraku.Model.Chat(binding, system);
+            binding.Model = "changed-after-completion";
+            return second;
+        }
+        public static int ChatHarnessScore() { LastText = ChatHarness(); return LastText.Length; }
+        public static string BadChat(int kind)
+        {
+            Renraku.ModelBinding binding = new Renraku.ModelBinding("local.echo", "echo-v1");
+            Renraku.ChatMessage message = new Renraku.ChatMessage(1, "prompt");
+            if (kind == 0) message.Next = message;
+            if (kind == 1) message.Role = 9;
+            if (kind == 2) message.Content = null;
+            if (kind == 3) binding.Model = "bad model";
+            if (kind == 4) message.Role = 2;
+            if (kind == 5) binding = null;
+            if (kind == 6) message = null;
+            if (kind == 7)
+            {
+                Renraku.ChatMessage head = message;
+                for (int i = 0; i < 128; i++) { head.Next = new Renraku.ChatMessage(1, "x"); head = head.Next; }
+            }
+            return Renraku.Model.Chat(binding, message);
+        }
     }
     public sealed class ModelMessage
     {
