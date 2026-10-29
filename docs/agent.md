@@ -3,8 +3,9 @@
 The coding loop connects model-selected search, code inspection, C# compilation,
 installation, invocation, and completion. Its conversation and action journal are
 ordinary linked CIL objects inside the universe. A deterministic provider exercises
-the whole sequence and recovery. The foreground subscription command is ready;
-actual autonomous model acceptance has not yet been live-tested.
+the whole sequence and recovery. A [live GPT-6.1 Sol acceptance run](acceptance/live-agent-2026-10-29.md)
+also completed discovery, inspection, compilation, installation, and invocation
+against the existing counter, changing 19 to 26 across process restarts.
 
 ## Try it in the foreground
 
@@ -25,14 +26,16 @@ model; they are not defaults:
 ```sh
 RENRAKU_PROFILE="<profile-id>"
 RENRAKU_MODEL="<model-slug>"
+RENRAKU_RECEIPTS="$HOME/.local/share/renraku/agent-demo/receipts"
 cargo run -p renraku-openai -- models "$RENRAKU_PROFILE"
 ```
 
-Start with an unused universe path. This command authorizes model calls and
+Use a private receipt directory outside Git checkouts, as shown above, and an
+unused universe path. This command authorizes model calls and
 managed compilation/execution within the stated budgets:
 
 ```sh
-cargo run -p renraku-openai -- agent target/agent-demo.db target/agent-receipts target/agent-compiler.db target/compiler/Renraku.Compiler.dll target/guest/Renraku.CoreLib.dll target/guest/Renraku.Simulation.dll "$RENRAKU_PROFILE" "$RENRAKU_MODEL" "Discover Counter and inspect Counter.Add. Compile a new static Generated.Entry.Run(Counter counter) method that adds 7 and returns the result. Install it, invoke it on Renraku.Guest.Simulation::Saved, then finish with the result." 10000 8 16 --allow-model-calls
+cargo run -p renraku-openai -- agent target/agent-demo.db "$RENRAKU_RECEIPTS" target/agent-compiler.db target/compiler/Renraku.Compiler.dll target/guest/Renraku.CoreLib.dll target/guest/Renraku.Simulation.dll "$RENRAKU_PROFILE" "$RENRAKU_MODEL" "Discover Counter and inspect Counter.Add. Compile a new static Generated.Entry.Run(Counter counter) method that adds 7 and returns the result. Install it, invoke it on Renraku.Guest.Simulation::Saved, then finish with the result." 10000 8 16 --allow-model-calls
 ```
 
 The initial saved Counter has value 19. The scripted acceptance sequence reaches
@@ -48,15 +51,17 @@ cargo run -p renraku-vm -- inspect-checkpoint target/agent-demo.db
 Continue the same session with fresh per-invocation budgets:
 
 ```sh
-cargo run -p renraku-openai -- agent-drive target/agent-demo.db target/agent-receipts target/agent-compiler.db target/compiler/Renraku.Compiler.dll "$RENRAKU_PROFILE" "$RENRAKU_MODEL" 10000 8 16 --allow-model-calls
+cargo run -p renraku-openai -- agent-drive target/agent-demo.db "$RENRAKU_RECEIPTS" target/agent-compiler.db target/compiler/Renraku.Compiler.dll "$RENRAKU_PROFILE" "$RENRAKU_MODEL" 10000 8 16 --allow-model-calls
 ```
 
 Keep the same universe, model receipt directory, compiler ledger, and profile
 identity across recovery. Published compilation results and completed managed
 calls need no compiler process to replay. A prepared compiler request still needs
 its exact pinned toolchain. Finishing the session permits no additional turns.
-The CLI requires explicit `--allow-model-calls` on both commands. Recurring
-development uses local fixtures and does not initiate subscription inference.
+The CLI requires explicit `--allow-model-calls` on both commands. The user has
+authorized bounded live subscription inference, including recurring development.
+Local fixtures remain the regression suite; use live runs for meaningful model
+acceptance checks and retain their transcripts and receipts.
 
 ## Text action protocol
 
@@ -186,8 +191,8 @@ with seven-instruction budgets. The fixture selects actions from actual request
 history and tool results; its determinism does not establish autonomous model
 intelligence. Foreground CLI tests enforce opt-in and budget preflight. Existing
 component tests additionally exercise real process kills around compiler,
-installation, invocation, and inference commits. No new live inference was run
-for this milestone.
+installation, invocation, and inference commits. These automated fixtures use no
+live inference. The separately recorded live acceptance used ten real model turns.
 
 Four additional local HTTP integration tests run the actual asynchronous
 subscription adapter through the coding loop. The fixture chooses nine actions

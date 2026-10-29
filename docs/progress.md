@@ -2,8 +2,9 @@
 
 As of October 29, 2026, the core process crash-and-resume demonstration, managed
 strings, persistent model harness, subscription Responses adapter, and bounded
-coding-agent loop work. The loop has deterministic acceptance/recovery coverage;
-actual autonomous model acceptance awaits a foreground subscription run.
+coding-agent loop work. The loop has deterministic acceptance/recovery coverage
+and live GPT-6.1 Sol acceptance across process restarts: model-selected discovery,
+inspection, generated C#, compilation, installation, and one invocation reach 26.
 CIL is the execution foundation for all
 persistent guest computation. External programs will require explicit capabilities
 and do not inherit persistence.
@@ -155,6 +156,15 @@ and do not inherit persistence.
   whole-controller SIGKILL retain their original action/execution identities.
   Provisional delta text and native function calls cannot become agent actions.
   Production wire/protocol/checkpoint/ledger behavior is unchanged; no live calls.
+- Live coding-agent acceptance with user-authorized subscription inference:
+  GPT-6.1 Sol chose ten actions, compiled its own caller successfully on the first
+  attempt, installed it, advanced the existing Counter 19 -> 26 once, and inspected
+  its saved CIL/source. Provider budgets stopped after turns 3/6/9; fresh processes
+  resumed the same universe. Finished recovery used zero instructions/operations;
+  invoke-once replay retained its execution ID and returned 26 again. See the
+  [live report](acceptance/live-agent-2026-10-29.md). Corrected the agent guide's
+  receipt path to a private directory outside Git after a pre-inference rejection.
+  The user explicitly permits bounded live inference in future development.
 
 ## Validation
 
@@ -267,8 +277,11 @@ specifically requiring OAuth. Sign-in, discovery, a live one-prompt CIL demo,
 and zero-operation restore are verified. GPT-6 Luna was selected explicitly for
 the smoke test, not made a default; continue selecting models from account
 discovery. Keep subscription access as the intended path, with no API-key billing
-fallback. Do not start login or more real inference in an unattended heartbeat.
-Existing local fixtures allow independent progress.
+fallback. The user's latest instruction explicitly authorizes bounded live
+subscription inference, including recurring development. Use local fixtures for
+routine regression, and real calls when they advance model acceptance. Preserve
+transcripts/receipts and uncertainty; do not repeat a completed live demo without
+a new reason. Use the stored sign-in and surface any required reauthentication.
 
 The latest user direction includes website hosting and runtime compilation, with
 Roslyn explicitly allowed to remain external and return a DLL. The reusable host
@@ -329,11 +342,13 @@ an explicit wire/result representation and receipt compatibility work.
 
 The subscription-adapter loop now has local HTTP coverage for full-history JSON
 actions, corrective compiler diagnostics, uncertain streams, durable receipts,
-and a whole-controller crash. The foreground command is ready for the user to
-try a real model. Do not run live subscription inference or login unattended, and
-do not claim a scripted fixture proves actual model intelligence.
+and a whole-controller crash. A live GPT-6.1 Sol run now completes the user's
+acceptance target in ten model-selected turns, including caller source inspection
+and zero-operation recovery. Distinguish this evidence from the deterministic
+fixtures, which do not prove real-model autonomy. The user authorizes bounded
+live inference; use it when it resolves a meaningful acceptance question.
 
-**Next improve foreground feedback and recovery ergonomics for that live trial.**
+**Next improve foreground feedback and recovery ergonomics for continued use.**
 The command currently reports only its final stop; expose bounded committed-turn
 progress and useful stop/recovery guidance while retaining the managed journal as
 the authority. Cover error/correction feedback and restart behavior with the local

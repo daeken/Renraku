@@ -104,9 +104,11 @@ the SDK. The [persistent coding agent](docs/agent.md) now connects these tools:
 assistant actions and tool results live in linked CIL objects, and stable turn
 IDs reconcile compilation, installation, and invocation after a lost result.
 A scripted provider discovers Counter, inspects its code, writes and installs a
-caller, then changes the same persistent object from 19 to 26. A foreground
-subscription command is available; actual autonomous model acceptance still
-needs a live foreground run. Local HTTP fixtures now exercise the actual
+caller, then changes the same persistent object from 19 to 26. A
+[live GPT-6.1 Sol run](docs/acceptance/live-agent-2026-10-29.md) now completes the
+same acceptance target using its own selected actions and generated source,
+retaining the conversation across process restarts. A finished restore returns
+the saved result with zero model operations. Local HTTP fixtures exercise the actual
 subscription adapter through compiler-error correction, full-history turns,
 lost results, and controller SIGKILL recovery without repeating the mutation.
 

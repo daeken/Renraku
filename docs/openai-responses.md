@@ -154,6 +154,11 @@ results, and preserve a committed invocation across SIGKILL. Interrupted or nati
 function-call streams cannot become actions; a saved completion receipt recovers
 offline into one action and mutation. These fixtures do not establish autonomous
 model intelligence or perform live inference.
+On October 29, 2026, a separately authorized [live coding-agent run](acceptance/live-agent-2026-10-29.md)
+used GPT-6.1 Sol to discover and inspect the Counter API, write/compile/install a
+caller, invoke it once to reach 26, and inspect its retained source. Ten real
+model turns survived planned process stops; finished recovery used zero model
+operations. The invocation receipt replayed the same result and execution ID.
 Live validation on October 28, 2026 verified user-completed sign-in, granted plan
 permission, account-specific discovery, and a GPT-6 Luna request through the CIL
 harness returning `Persistent CIL is alive.` in 49 guest instructions and one
