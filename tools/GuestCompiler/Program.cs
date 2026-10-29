@@ -82,11 +82,14 @@ try
         new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(guest) });
     File.WriteAllBytes(Path.Combine(output, "Renraku.ShiftTests.dll"), shiftTests);
     ShiftReference.WriteRawFixture(shiftTests, Path.Combine(output, "Renraku.RawShiftTests.dll"));
+    string negation = File.ReadAllText(Path.Combine(root, "guest/IntegerNegation.cs"));
+    File.WriteAllBytes(Path.Combine(output, "Renraku.NegationTests.dll"), Compile("Renraku.NegationTests", negation,
+        new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(guest) }));
 
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
+    byte[] reference = Compile("Renraku.Reference", negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
@@ -146,6 +149,7 @@ try
     ConversionReference.Write(assembly, output);
     BitwiseReference.Write(assembly, output);
     ShiftReference.Write(assembly, output);
+    NegationReference.Write(assembly, output);
     StringMapReference.Write(assembly, output);
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))
         File.WriteAllBytes(Path.Combine(output, Path.GetFileNameWithoutExtension(path) + ".dll"),

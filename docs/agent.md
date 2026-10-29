@@ -407,6 +407,10 @@ portable Renraku policy where ECMA leaves results unspecified. Signed right shif
 preserves sign; unsigned right shift inserts zeros. Native/checked operations
 remain unsupported.
 
+Unary integer `-value` is supported: unchecked CIL negation preserves width, and
+signed minimum remains unchanged. C# uint unary minus first widens to Int64.
+This differs from the terminal signed-minimum division/remainder fault policy.
+
 After an operator installs the [managed integer text library](integer-text.md),
 search/describe `Renraku.Text.IntegerText` before compiling callers against its
 frozen type view. `FormatInt32`/`FormatInt64` return canonical decimal strings;

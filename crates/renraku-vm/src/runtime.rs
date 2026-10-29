@@ -500,6 +500,14 @@ impl<'a> Vm<'a> {
                 };
                 frame.evaluation_stack.push(result);
             }
+            Op::Negate => {
+                let result = match pop(&mut frame)? {
+                    Value::I32(value) => Value::I32(value.wrapping_neg()),
+                    Value::I64(value) => Value::I64(value.wrapping_neg()),
+                    _ => return Err(Error("neg requires an integer".into())),
+                };
+                frame.evaluation_stack.push(result);
+            }
             Op::ShiftLeft | Op::ShiftRight { .. } => {
                 let count = pop(&mut frame)?;
                 let value = pop(&mut frame)?;

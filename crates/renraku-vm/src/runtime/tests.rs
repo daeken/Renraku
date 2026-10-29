@@ -167,7 +167,7 @@ fn bitwise_operands_reject_references_and_mixed_widths_without_consuming_the_sta
         assert_eq!(vm.instructions_executed(), 2);
         assert!(vm.heap().object(id).is_ok());
     }
-    for opcode in [0x65, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb] {
+    for opcode in [0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb] {
         assert!(
             decode(&[opcode])
                 .unwrap_err()
@@ -289,6 +289,47 @@ fn shifts_use_an_explicit_raw_count_mask_and_reject_invalid_types_without_consum
             assert_eq!(vm.context().frames, before.frames);
             assert_eq!(vm.instructions_executed(), 2);
         }
+    }
+}
+
+#[test]
+fn integer_negation_wraps_minima_and_preserves_invalid_reference_operands() {
+    for (input, expected, slot) in [
+        (Value::I32(i32::MIN), Value::I32(i32::MIN), SlotType::I32),
+        (Value::I32(i32::MAX), Value::I32(-i32::MAX), SlotType::I32),
+        (Value::I32(-1), Value::I32(1), SlotType::I32),
+        (Value::I64(i64::MIN), Value::I64(i64::MIN), SlotType::I64),
+        (Value::I64(i64::MAX), Value::I64(-i64::MAX), SlotType::I64),
+        (Value::I64(0), Value::I64(0), SlotType::I64),
+    ] {
+        assert_eq!(
+            eval(&[2, 0x65, 0x2a], vec![input], vec![], slot).unwrap(),
+            RunOutcome::Completed(Some(expected))
+        );
+    }
+    for object in [false, true] {
+        let (program, method) = program(&[0x14, 0x65, 0x2a], vec![], vec![], Some(SlotType::I32));
+        let mut vm = Vm::new(&program);
+        vm.start(method, vec![]).unwrap();
+        vm.run(1).unwrap();
+        if object {
+            let id = ObjectId::fresh();
+            vm.heap
+                .allocate(
+                    id,
+                    program.method(method).unwrap().owner,
+                    1,
+                    crate::heap::AllocationDomain::Managed,
+                )
+                .unwrap();
+            vm.context.frames[0].evaluation_stack[0] = Value::Reference(id);
+        }
+        let before = vm.context().clone();
+        let error = vm.run(1).unwrap_err();
+        assert!(error.0.contains("neg requires an integer"));
+        assert!(error.0.contains("IL_0001"));
+        assert_eq!(vm.context().frames, before.frames);
+        assert_eq!(vm.instructions_executed(), 1);
     }
 }
 

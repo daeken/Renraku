@@ -467,6 +467,11 @@ fn stack_shapes(program: &Program, method: &Method) -> Result<BTreeMap<u32, Vec<
                 require(!reference(ty), "invalid not operand")?;
                 stack.push(ty);
             }
+            Op::Negate => {
+                let ty = pop(&mut stack)?;
+                require(!reference(ty), "invalid neg operand")?;
+                stack.push(ty);
+            }
             Op::ShiftLeft | Op::ShiftRight { .. } => {
                 require(pop(&mut stack)? == Kind::I32, "invalid shift count type")?;
                 let value = pop(&mut stack)?;

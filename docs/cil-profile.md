@@ -77,6 +77,7 @@ IL byte offsets remain byte offsets after decoding.
 | `add`, `sub`, `mul` | Wrapping arithmetic on matching integer stack types |
 | `and`, `or`, `xor` | Bitwise operations on matching I32 or I64 stacks; preserve operand width |
 | `not` | Bitwise complement of one I32 or I64; preserve operand width |
+| `neg` | Two's-complement negation of one I32 or I64; signed minimum remains unchanged |
 | `shl`, `shr`, `shr.un` | Shift an I32/I64 value using an I32 count; retain value width |
 | `div`, `div.un`, `rem`, `rem.un` | Signed or unsigned division/remainder on matching Int32 or Int64 stack types |
 | `conv.i8` | Sign extend Int32 or preserve Int64 |
@@ -129,6 +130,23 @@ operands fault without consuming their original stack or continuation. This
 implements the fixed-width subset of ECMA-335 III.3.3, III.3.52–53 and III.3.67,
 [Table 5 and instruction definitions](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=352).
 Native integer operations remain unsupported.
+
+Unchecked `neg` preserves the operand width and negates its integer bits modulo
+2^32 or 2^64. Zero stays zero; signed minimum stays signed minimum. It does not
+take the signed division/remainder overflow-fault path. References fault with
+the original operand and continuation intact; floating/native operands and
+checked arithmetic remain unsupported. The implementation uses explicit wrapping
+negation independently of Rust debug/release overflow checks. See ECMA-335
+III.3.50/Table 3 in the [primary negation specification](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=402).
+
+CIL has no separate unsigned negation opcode. C# variable unary minus on uint
+widens to Int64 before negation; an explicit signed cast supplies the unchecked
+UInt64 bit-pattern case. `guest/IntegerNegation.cs` compiles unchanged against
+both cores, with 584 boundary/seeded CoreCLR comparisons. Twelve cases checkpoint
+each instruction with GC and original IDs. A durable nested Counter update
+recovers 19 to -19, later returns to 19, then replays its first -19 receipt without
+another mutation. Four SDK-free native resumes retain minimum-value results and
+pinned execution IDs. These pure operations add no capability or checkpoint field.
 
 `guest/IntegerBitwise.cs` compiles unchanged against both cores in a separate
 test module. Its 4,128-case CoreCLR oracle covers signed/unsigned declarations,

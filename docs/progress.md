@@ -496,6 +496,23 @@ and do not inherit persistence.
   checkpoint format 7, original fixtures and demos are unchanged. See
   [hexadecimal text](hex-text.md); no inference was needed.
 
+- Fixed-width unary neg is implemented for I32/I64 with explicit wrapping
+  two's-complement behavior and width preservation. Zero remains zero; signed
+  minimum remains signed minimum, distinct from the existing signed-minimum
+  division/remainder fault policy. Reference operands retain their failing stack
+  and byte offset. Checkpoint abstract stacks preserve the operand width; there
+  is no new tag, capability, wait or format. Floating/native values and checked
+  arithmetic/conversion remain unsupported. guest/IntegerNegation.cs compiles
+  unchanged against both cores. Its 584 actual emitted C#/CoreCLR cases cover
+  minima/maxima/high bits/seeds, C# uint-to-Int64 negation and explicit UInt64
+  bit-pattern casts. Twelve cases recover each instruction with GC and original
+  method/code/execution IDs. A nested invoke-once mutation changes Counter 19 to
+  -19, later returns to 19, and replays its original -19 receipt without another
+  mutation or changed Mutations=2 after unrelated work/GC. Four fresh SDK-free
+  native processes preserve minimum results and pinned execution IDs. CoreLib,
+  managed libraries, checkpoint format 7/original fixtures and both idle demos
+  remain unchanged. See [CIL profile](cil-profile.md); no inference was needed.
+
 
 ## Validation
 
@@ -503,7 +520,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 257 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 262 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -772,22 +789,24 @@ typed target roots, shallow views, immutable committed history, and explicit new
 observations after an unappended read is lost. More host tools are not required
 before the next core-runtime/library step.
 
-**Next implement fixed-width unary negation (neg).** This ordinary CIL
-foundation enables common C# variable negation without requiring a helper. Follow
-primary ECMA-335 III.3.50/Table 3 for I32/I64 results and minimum-value behavior:
-use an explicit portable two's-complement implementation rather than Rust debug
-overflow/panics. Preserve raw bits, width, byte offsets, failing reference operands
-and checkpoint abstract stacks. Compare actual emitted C# with CoreCLR over
-min/max/high-bit/seeded inputs, cut execution at each instruction with GC/recovery,
-and verify a small durable negation-driven mutation/receipt across later state
-changes and SDK-free native resumes. Keep existing signed-min division/remainder
-fault policy distinct from unchecked negation. Floating/native values, checked
-arithmetic/conversions and EH stay unsupported; the checked-addition negative
-fixtures retain their purpose. No host formatter, new module replacement,
-capability, checkpoint field or live inference is needed. Preserve the new hex
-module/foreign result bindings, all old libraries/CoreLib, source/compile/install/
-invoke provenance, reference sets, managed transcripts, capabilities, demos and
-all legacy readers/fixtures. Update model guidance only for implemented behavior.
+**Next implement small-width integer conversions: conv.i1/conv.u1/conv.i2/conv.u2.**
+Follow primary ECMA-335 III.3.27/Table 8 for truncation and signed/unsigned
+extension into I32 stack results from I32/I64 operands. Make bit widths and
+extension explicit rather than inheriting native casts accidentally. Keep this
+separate from enabling Byte/SByte/Int16/UInt16 storage: those signatures/fields/
+locals remain unsupported unless separately designed, while existing Char slots
+can consume valid conv.u2 results. Use real C# methods with supported I32/I64
+signatures and explicit small-width casts, plus Char return/store cases, against
+CoreCLR. Include boundaries/high bits, negative values and exact surrogate units;
+verify invalid reference operands preserve their failing frame, checkpoint
+abstract stack widths, per-instruction GC/recovery and SDK-free invocation replay
+without repeated mutations. CoreLib already declares the primitive type names;
+do not replace its image or add broad BCL/value-type claims. Checked/native/
+floating conversions, arbitrary small-width storage and EH remain unsupported.
+Preserve neg/division distinctions, all existing modules/foreign result IDs,
+reference sets, receipts/provenance/transcripts, capabilities, demos and legacy
+fixtures. Update guidance only after implementation; no live inference is needed
+for this pure runtime milestone.
 
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
