@@ -11,6 +11,7 @@ pub mod cil;
 pub mod compiler;
 pub mod driver;
 pub mod effects;
+pub mod endowment;
 pub mod error;
 pub mod execution;
 pub mod heap;

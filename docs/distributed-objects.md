@@ -3,7 +3,9 @@
 This is the next development direction selected by the user on October 29,
 2026. It specifies the implementation sequence and acceptance boundaries;
 a narrow imported-method handle and portable CIL wait are now implemented,
-while general foreign references, graph copying and child security remain ahead. [Fixed-owner placement and method-grant preflight](placement.md)
+and an opt-in [closed child profile](child-endowments.md) now enforces explicit
+endowments. General foreign references, graph copying and dynamic child security
+remain ahead. [Fixed-owner placement and method-grant preflight](placement.md)
 now persists and validates explicit policies, but does not enforce placement on
 all local execution or execute remote calls. The existing localhost website is an HTTP
 application edge, not object-level network transparency.
@@ -114,8 +116,12 @@ even for handcrafted CIL. Same-process universes must not share an unrestricted
 registry or static table. Keep the existing trusted workbench separate from any
 untrusted child inspector/controller.
 
-The current coding agent controls trusted computation and is **not** a hostile
-code sandbox. That claim cannot change until runtime enforcement and adversarial
+The [closed child endowment profile](child-endowments.md) now enforces fixed
+code/class/object/member/effect permissions at admission, execution and scoped
+inspection. It has no ambient parent or sibling controller. It supports opaque
+remote-method endowments and explicitly authorized local data, without privileged
+local implementation frames or dynamic installation. The existing coding agent
+still controls trusted computation and is **not** a hostile code sandbox. That claim cannot change until runtime enforcement and adversarial
 escape tests exist. ObjectMap is a useful container of endowed references, not
 an enforcement boundary by itself.
 

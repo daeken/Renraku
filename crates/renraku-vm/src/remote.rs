@@ -239,6 +239,7 @@ pub fn import_method(
     let ovm = saved.snapshot.restore()?;
     let cs = caller.load()?;
     let mut vm = cs.snapshot.restore()?;
+    crate::endowment::require_unsealed(&vm)?;
     require(
         matches!(
             vm.context.status,

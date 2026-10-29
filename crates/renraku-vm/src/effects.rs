@@ -88,12 +88,15 @@ impl Vm<'_> {
             units.len() <= MAX_STRING_UNITS,
             "string exceeds the UTF-16 unit limit",
         )?;
+        crate::endowment::text(self, units.len())?;
         let mut id = ObjectId::fresh();
         while self.heap.object(id).is_ok() {
             id = ObjectId::fresh();
         }
+        let allocation = crate::endowment::allocation(self, id, self.program.string_type()?)?;
         self.heap
             .allocate_string(id, self.program.string_type()?, units)?;
+        crate::endowment::allocated(self, allocation)?;
         Ok(id)
     }
     pub fn effects(&self) -> impl Iterator<Item = &EffectRecord> {
@@ -139,10 +142,14 @@ impl Vm<'_> {
     ) -> Result<EffectRecord> {
         validate_identifier(&capability)?;
         validate_identifier(&model)?;
+        crate::endowment::effect(self, &capability, &model)?;
         require(
             !messages.is_empty() && messages.len() <= MAX_MESSAGES,
             "invalid model message count",
         )?;
+        for message in &messages {
+            crate::endowment::value(self, Value::Reference(message.content))?;
+        }
         let request = messages.last().unwrap().content;
         let body = self.materialize_request(EffectId::fresh(), &capability, &model, &messages)?;
         body.validate()?;
@@ -170,6 +177,7 @@ impl Vm<'_> {
         name: &str,
         ty: SlotType,
     ) -> Result<Value> {
+        crate::endowment::value(self, Value::Reference(object))?;
         let object = self.heap.object(object)?;
         require(
             object.type_id() == owner,
@@ -180,11 +188,14 @@ impl Vm<'_> {
             .fields()
             .find(|f| f.owner == owner && f.name == name && f.value_type == ty && !f.is_static)
             .ok_or_else(|| Error(format!("invalid model argument field {name}")))?;
-        object
+        crate::endowment::field(self, field.id, false)?;
+        let value = object
             .fields()
             .get(&field.id)
             .copied()
-            .ok_or_else(|| Error("missing model argument field".into()))
+            .ok_or_else(|| Error("missing model argument field".into()))?;
+        crate::endowment::value(self, value)?;
+        Ok(value)
     }
     pub(crate) fn prepare_guest_chat(
         &self,

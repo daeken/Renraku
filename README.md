@@ -95,8 +95,11 @@ atomic grant acceptance and durable reply reconciliation after revocation.
 and caller universes with durable caller intent and lost-reply recovery.
 [Imported contract handles](docs/remote-calls.md) now route ordinary C# instance
 calls through durable guest waits and atomic reply/wakeup recovery. General
-foreign references, copying/mobility and hostile-code child isolation remain
-ahead; the initial contract allows one object/method per fieldless local type.
+foreign references and copying/mobility remain ahead; the initial contract allows
+one object/method per fieldless local type. [Closed child endowments](docs/child-endowments.md)
+now enforce explicit code/class/object/field/effect rights and a filtered child
+tool surface. Dynamic child compilation, delegation and a general hostile-agent
+sandbox remain future work.
 
 ## Run the demonstration
 

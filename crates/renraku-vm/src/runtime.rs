@@ -41,6 +41,10 @@ pub struct Vm<'a> {
     pub(crate) model_calls_enabled: bool,
 }
 enum Mutation {
+    Literal {
+        id: ObjectId,
+        type_id: TypeId,
+    },
     String {
         id: ObjectId,
         type_id: TypeId,
@@ -95,6 +99,7 @@ impl<'a> Vm<'a> {
         Ok(vm)
     }
     pub(crate) fn rebind_program<'b>(self, program: &'b Program) -> Result<Vm<'b>> {
+        crate::endowment::unchanged(&self, program)?;
         program.extends(self.program)?;
         let mut statics = self.statics;
         for field in program
@@ -232,6 +237,7 @@ impl<'a> Vm<'a> {
                 && (!method.signature.instance || !method.name.starts_with('.')),
             "entry requires a matching ordinary non-constructor method",
         )?;
+        crate::endowment::execution(self, method)?;
         Ok(method)
     }
     pub(crate) fn check_entry_arguments(&self, method: &Method, arguments: &[Value]) -> Result<()> {
@@ -246,6 +252,9 @@ impl<'a> Vm<'a> {
                 self.heap.object(receiver)?.domain() == crate::heap::AllocationDomain::Managed,
                 "durable instance entry requires a managed receiver",
             )?;
+        }
+        for value in arguments {
+            crate::endowment::value(self, *value)?;
         }
         self.check_parameters(method, &arguments[offset..])
     }
@@ -336,6 +345,7 @@ impl<'a> Vm<'a> {
     fn receiver(&self, value: Value, owner: TypeId) -> Result<ObjectId> {
         match value {
             Value::Reference(id) => {
+                crate::endowment::value(self, value)?;
                 require(
                     self.program
                         .is_assignable(self.heap.object(id)?.type_id(), owner),
@@ -370,6 +380,7 @@ impl<'a> Vm<'a> {
             _ => return Err(Error("active frame is waiting for a missing callee".into())),
         };
         let method = self.current_method(active)?;
+        crate::endowment::execution(self, method)?;
         let name = format!(
             "{}::{}",
             self.program.types[&method.owner].name, method.name
@@ -381,8 +392,17 @@ impl<'a> Vm<'a> {
         // Every fallible guest operation has been checked against a cloned frame.
         // Publish heap effects and the complete continuation transition together
         // before allowing the next safe point.
+        let allocation = match &mutation {
+            Some(
+                Mutation::String { id, type_id, .. }
+                | Mutation::Allocate { id, type_id, .. }
+                | Mutation::Literal { id, type_id },
+            ) => crate::endowment::allocation(self, *id, *type_id)?,
+            _ => None,
+        };
         if let Some(mutation) = mutation {
             match mutation {
+                Mutation::Literal { .. } => {}
                 Mutation::String {
                     id,
                     type_id,
@@ -411,6 +431,7 @@ impl<'a> Vm<'a> {
                 }
             }
         }
+        crate::endowment::allocated(self, allocation)?;
         match transition {
             Transition::Remote { frame, prepared } => {
                 crate::remote::park(self, frame, prepared)?;
@@ -464,6 +485,10 @@ impl<'a> Vm<'a> {
             Op::Constant(value) => frame.evaluation_stack.push(value),
             Op::ReferenceCast { token, test } => {
                 let target = self.program.reference_cast_target(method.assembly, token)?;
+                crate::endowment::ty(self, target)?;
+                if let Some(v) = frame.evaluation_stack.last() {
+                    crate::endowment::value(self, *v)?;
+                }
                 let value = match pop(&mut frame)? {
                     Value::Null => Value::Null,
                     Value::Reference(id) => {
@@ -701,6 +726,7 @@ impl<'a> Vm<'a> {
             Op::LoadField { token, is_static } => {
                 let field =
                     &self.program.fields[&self.program.field_tokens[&(method.assembly, token)]];
+                crate::endowment::field(self, field.id, false)?;
                 let value = if is_static {
                     self.statics[&field.id]
                 } else {
@@ -712,12 +738,15 @@ impl<'a> Vm<'a> {
                         .get(&field.id)
                         .ok_or_else(|| Error("object field is missing".into()))?
                 };
+                crate::endowment::value(self, value)?;
                 frame.evaluation_stack.push(value);
             }
             Op::StoreField { token, is_static } => {
                 let field =
                     &self.program.fields[&self.program.field_tokens[&(method.assembly, token)]];
+                crate::endowment::field(self, field.id, true)?;
                 let value = pop(&mut frame)?;
+                crate::endowment::value(self, value)?;
                 self.check_value(value, field.value_type)?;
                 mutation = Some(if is_static {
                     Mutation::Static {
@@ -747,6 +776,7 @@ impl<'a> Vm<'a> {
                 let mut arguments = frame
                     .evaluation_stack
                     .split_off(frame.evaluation_stack.len() - count);
+                crate::endowment::call(self, callee, &arguments, constructing)?;
                 if let Some(prepared) =
                     crate::remote::prepare(self, callee, &arguments, constructing)?
                 {
@@ -896,6 +926,9 @@ impl<'a> Vm<'a> {
                     frame.evaluation_stack.is_empty(),
                     "return has extra evaluation stack values",
                 )?;
+                if let Some(value) = result {
+                    crate::endowment::value(self, value)?;
+                }
                 let caller = if self.context.frames.len() > 1 {
                     let mut caller = self.context.frames[self.context.frames.len() - 2].clone();
                     let Continuation::AwaitReturn {
@@ -939,8 +972,15 @@ impl Vm<'_> {
             units.len() <= MAX_STRING_UNITS,
             "string exceeds the UTF-16 unit limit",
         )?;
+        crate::endowment::text(self, units.len())?;
         if intern && let Some(id) = self.interned_strings.get(&units) {
-            return Ok((Value::Reference(*id), None));
+            return Ok((
+                Value::Reference(*id),
+                Some(Mutation::Literal {
+                    id: *id,
+                    type_id: self.program.string_type()?,
+                }),
+            ));
         }
         let mut id = ObjectId::fresh();
         while self.heap.object(id).is_ok() {

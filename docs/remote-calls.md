@@ -8,7 +8,9 @@ independent core/type IDs, caller and owner crashes, GC and lost replies.
 
 This is a narrow method-call contract. It does not supply arbitrary foreign
 classes, remote fields, returned object references, graph copying, migration,
-cross-machine transport or a hostile child-universe security boundary.
+cross-machine transport. The separate [closed child profile](child-endowments.md)
+now enforces static endowments around this path; a general dynamic hostile-child
+sandbox remains future work.
 
 ## Type and identity contract
 

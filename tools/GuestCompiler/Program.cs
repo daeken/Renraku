@@ -76,6 +76,11 @@ try
     File.WriteAllBytes(Path.Combine(output, "Renraku.RemoteOwnerTests.dll"), Compile("Renraku.RemoteOwnerTests",
         File.ReadAllText(Path.Combine(root, "guest/RemoteOwner.cs")), new[] { MetadataReference.CreateFromImage(core) }));
 
+    byte[] childTests=Compile("Renraku.ChildTests",File.ReadAllText(Path.Combine(root,"guest/ChildHarness.cs")),new[]{MetadataReference.CreateFromImage(core)});
+    File.WriteAllBytes(Path.Combine(output,"Renraku.ChildTests.dll"),childTests);
+    ChildFixture.WriteRaw(childTests,Path.Combine(output,"Renraku.RawChildTests.dll"));
+    ChildFixture.WriteLargeStack(childTests,Path.Combine(output,"Renraku.LargeStackChildTests.dll"));
+
     // Real metadata dependency/collision fixtures, never executed by the host.
     var coreReference = MetadataReference.CreateFromImage(core);
     byte[] cycleStub = Compile("Cycle.Left", "namespace Cycle.Left { public class Node { } }", new[] { coreReference });

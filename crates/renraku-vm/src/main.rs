@@ -32,6 +32,7 @@ fn execute() -> Result<()> {
         "       renraku-vm inspect-checkpoint <universe.db>\n",
         "       renraku-vm agent-inspect <universe.db>\n",
         "       renraku-vm agent-input <universe.db> <input-ID> <goal> [instruction-budget]\n",
+        "       renraku-vm child-tool <child.db> <request.json>\n",
         "       renraku-vm remote-import <owner.db> <caller.db> <owner-ID> <node-ID> <epoch> <address:port> <grant-ID> <contract-method>\n",
         "       renraku-vm remote-drive <caller.db> [key-file]\n",
         "       renraku-vm peer-serve <owner.db> <node-ID> <epoch> <loopback-address:port> <caller-ID> <key-file> [instruction-budget] [connection-limit]\n",
@@ -90,6 +91,15 @@ fn execute() -> Result<()> {
             } else {
                 print_json(&renraku_vm::web::inspect_publications(&mut store)?)?;
             }
+            return Ok(());
+        }
+        Some("child-tool") if args.len() == 3 => {
+            if !std::path::Path::new(&args[1]).is_file() {
+                return Err(Error("child checkpoint does not exist".into()));
+            }
+            let request = bounded_read(&args[2], renraku_vm::endowment::MAX_TOOL_BYTES as u64)?;
+            let mut store = CheckpointStore::open(&args[1])?;
+            print_json(&renraku_vm::endowment::tool(&mut store, &request)?)?;
             return Ok(());
         }
         Some("remote-import") if args.len() == 9 => {

@@ -837,13 +837,63 @@ and do not inherit persistence.
   [remote CIL calls](remote-calls.md). No live inference was used.
 
 
+
+- Opt-in closed child endowments now enforce selected code/class/object/member/
+  effect authority at admission, runtime and a separate child tool surface.
+  A trusted seal pins the complete registry images/logical bindings and remote
+  import identities; types/bases/reference slots, calls/constructors, field read/
+  write and casts require explicit IDs. Every selected method is checked,
+  including unreachable instructions and hand-encoded private tokens. All local
+  code has the same declared rights, with no implicit private helper/field
+  privilege. Opaque services remain behind remote handles; type grants alone do
+  not grant construction, fields/statics, source or the containing module.
+  Existing object references require exact endowment membership; reachability,
+  a matching type, casts and method results do not confer another object. Unknown
+  and unendowed IDs deny before lookup. Endowed objects retain original IDs and
+  typed roots; no parent/sibling registry/controller or graph copy is created.
+  New permitted objects and bounded immutable text get durable allocation/type
+  provenance. Its textual ID ledger does not retain unreachable allocations or freeze
+  target fields, and never resets its 256-record lifetime cap after GC/restart/
+  new goals. Literal interning preserves IDs for admitted literal data. Scope
+  checks precede heap effects and metadata/frame updates commit together.
+  Model capture checks exact capability/model pairs and every linked argument
+  object/field/value, preventing an endowed message head from smuggling private
+  content/next nodes. Host authorization/credentials remain separately transient;
+  existing uncertain-effect receipts and no-resubmission behavior are unchanged.
+  Host peer bookkeeping is not guest data or an allocation grant. Remote response
+  and caller wakeup still commit atomically under the scope. This adds no stored
+  value/frame tag and keeps format7/readers1..6/all original fixtures/CoreLib/
+  old module bodies unchanged. Seal requires completed idle bootstrap with no
+  invocation/effect history or owner/peer work; existing counters/IDs are retained.
+  Source/CIL/compiler views, registry/root enumeration, installation, generic
+  effects, host paths and scope mutation are absent from child-tool requests.
+  Allowed search/type/object/static/invoke responses are filtered/bounded, hide
+  private fields/counts/edges and sanitize faults; raw operator tools stay trusted.
+  Registry rebinding/import expansion rejects after seal. Limits include 16 KiB
+  requests/12 KiB replies, 128 types/256 code versions/16384 instructions, 256
+  readable/writable fields each, 64 endowed objects, 16 effect pairs, 4096-unit
+  text, 64 frames/256 locals and stack slots/64 fields per allocatable layout,
+  and 150000 instructions per child invocation. Thirteen integrations cover
+  normal/adversarial/handcrafted CIL, graph/result/source/metadata denial,
+  constructor-cycle instruction-cut GC, allocation collection/exhaustion,
+  failed seals/terminal saves, repaired-digest corruption, exact local effect
+  bindings and intrinsic graph denial. A sealed SDK-free native child uses only
+  its opaque remote Counter handle to return27 after original owner19->26, then
+  replays without keys/network/mutation while private-parent search stays empty.
+  This is fixed-code/per-child uniform authority, not scoped dynamic compilation,
+  per-reference attenuation, privileged local frames or a general hostile-agent
+  sandbox. See [closed child endowments](child-endowments.md). No inference used.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 365 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 378 tests pass. One concurrent local authentication fixture hit an auth-store
+lock error on an earlier run; isolated and full default reruns passed without
+authentication/retry changes or live inference. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -1156,11 +1206,16 @@ distinct local/authoritative identity bindings. Both native processes can die in
 the commit-before-reply window without repeating the original mutation. This
 first contract is one object/method per fieldless local type; arbitrary foreign
 references, returned object grants and hostile child isolation remain absent.
-Next enforce explicit child object/class/effect endowments across loading,
-resolution, execution and inspection, with adversarial parent/sibling-escape
-fixtures. Keep the trusted workbench separate from child-facing views. Then
-extend attenuated returned references, bounded method sets/multiple referents,
-graph copies, fenced mobility and cross-machine execution in verified steps.
+[Closed child endowments](child-endowments.md) now enforce fixed class/code/
+object/field/effect rights at admission, runtime and scoped tools, with real
+adversarial CIL and native remote-call evidence. The trusted workbench remains
+separate. Next build scope-filtered frozen compiler views and real C# bootstrap
+compilation against only endowed APIs/opaque handles, preserving original IDs,
+source and receipts without full-module/source fallback. Keep version-1 registry
+seals immutable; later dynamic child installation needs an explicit versioned
+atomic admission contract. Then extend per-reference/returned grants, privileged
+local code compartments, bounded method sets/multiple referents, graph copies,
+fenced mobility and cross-machine execution in verified steps.
 Preserve legacy readers and all current runtime,
 compiler, receipt, model/publication, library and demo contracts.
 

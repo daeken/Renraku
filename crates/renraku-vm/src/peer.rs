@@ -640,7 +640,16 @@ fn named(kind: &str, operation: &str) -> String {
 }
 fn put(vm: &mut Vm<'_>, name: String, bytes: &[u8]) -> Result<()> {
     let text = std::str::from_utf8(bytes).map_err(|_| Error("invalid peer journal UTF8".into()))?;
-    let object = vm.new_string(text.encode_utf16().collect())?;
+    // Host protocol metadata is not a guest data allocation or an object grant.
+    let mut object = ObjectId::fresh();
+    while vm.heap.object(object).is_ok() {
+        object = ObjectId::fresh();
+    }
+    vm.heap.allocate_string(
+        object,
+        vm.program.string_type()?,
+        text.encode_utf16().collect(),
+    )?;
     vm.set_root(name, object)
 }
 fn root_bytes(vm: &Vm<'_>, name: &str) -> Result<Option<Vec<u8>>> {

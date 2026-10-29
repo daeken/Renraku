@@ -376,6 +376,7 @@ fn drive(
         !crate::remote::has_imports(&vm),
         "owner universes cannot import remote contracts in this profile",
     )?;
+    crate::endowment::require_unsealed(&vm)?;
     let records = journal(&vm)?;
     placement::check_owner_context(&vm, context, call.owner, call.epoch, call.object)?;
     let arguments = if let Some(record) = records.get(&id) {
