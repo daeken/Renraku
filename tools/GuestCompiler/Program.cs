@@ -109,10 +109,16 @@ try
     File.WriteAllBytes(Path.Combine(output, "Renraku.CheckedConversionTests.dll"), checkedConversionTests);
     CheckedConversionReference.WriteRawFixture(checkedConversionTests, Path.Combine(output, "Renraku.RawCheckedConversionTests.dll"));
 
+    string smallCheckedConversions = File.ReadAllText(Path.Combine(root, "guest/SmallCheckedIntegerConversions.cs"));
+    byte[] smallCheckedTests = Compile("Renraku.SmallCheckedConversionTests", smallCheckedConversions,
+        new[] { MetadataReference.CreateFromImage(core), MetadataReference.CreateFromImage(guest) });
+    File.WriteAllBytes(Path.Combine(output, "Renraku.SmallCheckedConversionTests.dll"), smallCheckedTests);
+    SmallCheckedConversionReference.WriteRawFixture(smallCheckedTests, Path.Combine(output, "Renraku.RawSmallCheckedConversionTests.dll"));
+
     // Compile the identical source against the real BCL for differential tests.
     var framework = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
         .Split(Path.PathSeparator).Select(path => MetadataReference.CreateFromFile(path));
-    byte[] reference = Compile("Renraku.Reference", checkedConversions + Environment.NewLine + checkedArithmetic + Environment.NewLine + switches + Environment.NewLine + ordinalText + Environment.NewLine + smallConversions + Environment.NewLine + negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
+    byte[] reference = Compile("Renraku.Reference", smallCheckedConversions + Environment.NewLine + checkedConversions + Environment.NewLine + checkedArithmetic + Environment.NewLine + switches + Environment.NewLine + ordinalText + Environment.NewLine + smallConversions + Environment.NewLine + negation + Environment.NewLine + hexText + Environment.NewLine + shifts + Environment.NewLine + bitwise + Environment.NewLine + collections + Environment.NewLine + unsignedText + Environment.NewLine + conversions + Environment.NewLine + integerText + Environment.NewLine + source + Environment.NewLine +
         File.ReadAllText(Path.Combine(root, "guest/ReferenceModel.cs")), framework);
     using var referenceStream = new MemoryStream(reference);
     var assembly = AssemblyLoadContext.Default.LoadFromStream(referenceStream);
@@ -178,6 +184,7 @@ try
     SwitchReference.Write(assembly, output);
     CheckedArithmeticReference.Write(assembly, output);
     CheckedConversionReference.Write(assembly, output);
+    SmallCheckedConversionReference.Write(assembly, output);
     StringMapReference.Write(assembly, output);
     foreach (string path in Directory.GetFiles(Path.Combine(root, "guest/Rejected"), "*.cs"))
         File.WriteAllBytes(Path.Combine(output, Path.GetFileNameWithoutExtension(path) + ".dll"),

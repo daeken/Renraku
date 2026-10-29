@@ -167,9 +167,7 @@ fn bitwise_operands_reject_references_and_mixed_widths_without_consuming_the_sta
         assert_eq!(vm.instructions_executed(), 2);
         assert!(vm.heap().object(id).is_ok());
     }
-    for opcode in [
-        0xb3, 0xb4, 0xb5, 0xb6, 0x82, 0x83, 0x86, 0x87, 0xd4, 0xd5, 0x8a, 0x8b,
-    ] {
+    for opcode in [0xd4, 0xd5, 0x8a, 0x8b] {
         assert!(
             decode(&[opcode])
                 .unwrap_err()
@@ -902,6 +900,54 @@ fn checked_conversion_source_interpretation_is_separate_from_target_and_referenc
         );
     }
     for opcode in [0x84, 0x85, 0x88, 0x89, 0xb7, 0xb8, 0xb9, 0xba] {
+        for object in [false, true] {
+            let (program, method) =
+                program(&[0x14, opcode, 0x2a], vec![], vec![], Some(SlotType::I32));
+            let mut vm = Vm::new(&program);
+            vm.start(method, vec![]).unwrap();
+            vm.run(1).unwrap();
+            if object {
+                let id = ObjectId::fresh();
+                vm.heap
+                    .allocate(
+                        id,
+                        program.method(method).unwrap().owner,
+                        1,
+                        crate::heap::AllocationDomain::Managed,
+                    )
+                    .unwrap();
+                vm.context.frames[0].evaluation_stack[0] = Value::Reference(id);
+            }
+            let before = vm.context().clone();
+            let error = vm.run(1).unwrap_err();
+            assert!(
+                error.0.contains("checked conversion requires an integer")
+                    && error.0.contains("IL_0001")
+            );
+            assert_eq!(vm.context().frames, before.frames);
+            assert_eq!(vm.instructions_executed(), 1);
+        }
+    }
+}
+
+#[test]
+fn small_checked_conversions_enforce_ranges_extend_into_i32_and_keep_invalid_frames() {
+    for (opcode, input, expected) in [
+        (0xb3, Value::I32(-128), -128),
+        (0xb4, Value::I32(255), 255),
+        (0xb5, Value::I64(-32768), -32768),
+        (0xb6, Value::I64(65535), 65535),
+        (0x82, Value::I32(127), 127),
+        (0x86, Value::I64(255), 255),
+        (0x83, Value::I64(32767), 32767),
+        (0x87, Value::I32(0xd800), 0xd800),
+    ] {
+        assert_eq!(
+            eval(&[2, opcode, 0x2a], vec![input], vec![], SlotType::I32).unwrap(),
+            completed(expected)
+        );
+    }
+    for opcode in [0xb3, 0xb4, 0xb5, 0xb6, 0x82, 0x83, 0x86, 0x87] {
         for object in [false, true] {
             let (program, method) =
                 program(&[0x14, opcode, 0x2a], vec![], vec![], Some(SlotType::I32));

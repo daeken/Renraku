@@ -85,6 +85,7 @@ IL byte offsets remain byte offsets after decoding.
 | `conv.u8` | Zero extend Int32 or preserve Int64 bits |
 | `conv.i4`, `conv.u4` | Preserve Int32 or truncate Int64 to its low 32 bits, producing Int32 storage |
 | `conv.ovf.i4/u4/i8/u8` and each `.un` form | Range-checked I32/I64 conversions; source interpretation and target signedness are independent |
+| `conv.ovf.i1/u1/i2/u2` and each `.un` form | Check 8/16-bit target range, then sign/zero-extend into I32 |
 | `conv.i1`, `conv.i2` | Keep low 8/16 bits and sign-extend to I32 |
 | `conv.u1`, `conv.u2` | Keep low 8/16 bits and zero-extend to I32 |
 | `br`, `br.s` | Branch to an instruction boundary |
@@ -153,8 +154,7 @@ method/offset and the original operand stack. They are terminal invocation
 receipts, rather than catchable guest exceptions. Retrying a saved fault does
 not execute the call again or repeat a preceding mutation. Pure arithmetic uses
 ordinary instruction safe points and does not suspend for host work. Floating
-point, native integers, small-width checked conversions and exception handling
-remain unsupported.
+point, native integers and exception handling remain unsupported.
 
 Bitwise instructions operate on all 32 or 64 storage bits. Signed and unsigned
 source declarations use the same instructions and produce identical bits.
@@ -182,8 +182,8 @@ original frame/stack/continuation. Overflow uses a terminal durable VM/invocatio
 diagnostic; it is not a catchable guest exception and does not roll back earlier
 instructions. Signed minimum times -1 faults in checked multiplication; ordinary
 `neg` still leaves signed minimum unchanged. No value tag, host capability, CoreLib
-change or checkpoint field is introduced. Small-width checked conversions, native/floating conversions,
-native/floating arithmetic, small-width storage and EH remain unsupported.
+change or checkpoint field is introduced. Native/floating conversions and arithmetic, small-width storage and EH remain
+unsupported.
 
 `guest/CheckedIntegerArithmetic.cs` compiles unchanged against both cores. Its
 4,608-case real CoreCLR matrix also checks an independent BigInteger range oracle,
@@ -201,8 +201,8 @@ were implemented.
 Unchecked `neg` preserves the operand width and negates its integer bits modulo
 2^32 or 2^64. Zero stays zero; signed minimum stays signed minimum. It does not
 take the signed division/remainder overflow-fault path. References fault with
-the original operand and continuation intact; floating/native operands and
-small-width checked conversions remain unsupported. The implementation uses explicit wrapping
+the original operand and continuation intact; floating/native values remain
+unsupported. The implementation uses explicit wrapping
 negation independently of Rust debug/release overflow checks. See ECMA-335
 III.3.50/Table 3 in the [primary negation specification](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=402).
 
@@ -259,7 +259,7 @@ unchecked, pure guest instructions; narrowing does not fault on lost high bits.
 C# chooses the appropriate emitted sequence for its source cast: an unchecked
 negative `int` to `ulong` uses `conv.i8`, while `uint` to `ulong` uses `conv.u8`.
 Reference operands fault with their original stack/continuation intact. Native,
-floating and small-width checked conversions remain unsupported. See ECMA-335
+floating conversions remain unsupported. See ECMA-335
 III.3.27 and Table 8 in the
 [primary conversion specification](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=378).
 `guest/IntegerConversions.cs` and 1,764 real CoreCLR comparisons cover narrowing,
@@ -282,8 +282,8 @@ These are pure single CIL steps. Unsupported references and overflow preserve
 the failing stack/continuation, and checkpoint validation tracks the target
 width. Existing terminal VM fault/invocation receipts retain prior mutations;
 there is no guest EH or rollback. No new value tag, CoreLib image/body, capability
-or checkpoint field is required. Small-width checked conversions, native/floating
-inputs/targets, arbitrary small-width storage and EH remain unsupported.
+or checkpoint field is required. Native/floating inputs/targets, arbitrary
+small-width storage and EH remain unsupported.
 
 `guest/CheckedIntegerConversions.cs` compiles unchanged against both cores. Its
 5,024-case CoreCLR/BigInteger comparison covers sixteen actual C# cast shapes
@@ -297,6 +297,39 @@ retain arguments after context/static replacement and GC. Six injected terminal
 save failures recover original committed operands, and twenty-five SDK-free
 native resumes/replays cover every raw conversion and all raw mutating overflow
 paths. Loader/compiler/install negative fixtures now reject boxing (`box`).
+
+The small checked conversions `conv.ovf.i1/u1/i2/u2` and all four `.un` forms
+also take I32/I64 input. They validate the independent source interpretation
+and target range before extending into an I32 result: signed targets permit
+[-128,127] or [-32768,32767], unsigned targets [0,255] or [0,65535]. No high bits
+are discarded on overflow. Signed results sign-extend; unsigned results zero-extend.
+Checked Char casts use the unsigned 16-bit target, preserving every valid UTF-16
+unit, including NUL and lone surrogates; this is not Unicode scalar validation.
+The [same ECMA-335 checked-conversion contract](https://www.ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf#page=379)
+applies. Unsupported references and overflow keep the original operand and
+continuation; errors use existing terminal durable faults without rolling back
+earlier instructions. Checkpoint stacks record I32, not a new small-integer tag.
+
+These opcodes support casts inside existing I32/I64 signatures and Char storage.
+Byte/SByte/Int16/UInt16 signatures, locals and fields remain unsupported, as the
+unchanged byte-signature rejection fixture verifies. CoreLib and saved module
+bodies remain unchanged. Native/floating values, EH and boxing remain unsupported.
+
+`guest/SmallCheckedIntegerConversions.cs` compiles unchanged against both cores.
+A 6,192-case CoreCLR/BigInteger comparison covers twenty actual C# cast/Char shapes
+and sixteen raw opcode/input-width combinations using independent DynamicMethods
+and a test-only PE variant. All eight opcodes, boundaries/high bits, sign/zero
+extension and exact surrogate units are checked. A total of 116 success/fault
+cases restore each instruction with GC and original IDs, including high/low
+surrogate results from every source type. Thirty-six mutating fault paths retain
+prior mutations/typed arguments through static/context replacement and GC. Eight
+injected terminal-save failures recover original committed operands.
+A durable Char store retains d800, then dfff, then faults on 65536: Counter=22,
+Mutations=3 and dfff survive replay of both the original d800 success and the
+later fault. Thirty-seven saved operations resume/replay in SDK-free native
+processes, including all raw forms, four surrogate Char returns and a paused
+Char store whose old receipt preserves the later dfff store. The existing
+wide-conversion recovery tests remain unchanged and passing.
 
 The smaller unchecked conversions also accept I32/I64 operands and produce I32
 stack values. Signed forms truncate to 8/16 bits then sign-extend; unsigned forms

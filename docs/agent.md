@@ -393,7 +393,7 @@ The model controls trusted managed computation in this universe. It is not a
 security sandbox for hostile generated code. No shell, file, or general network
 tools are exposed. Generated invocations run with model capabilities disabled;
 only the coordinator's owned model turn enables submission. Existing CIL limits
-still apply, including no arrays, generics, exception handling, small-width checked conversions, arbitrary
+still apply, including no arrays, generics, exception handling, arbitrary
 host BCL, or C# async/await. Cancellation and in-place conversation editing are not
 implemented. A budget-paused invocation remains pending until explicitly resumed.
 Int32/UInt32/Int64/UInt64 division and remainder are supported. Zero divisors and
@@ -404,8 +404,7 @@ unsigned declarations. Binary operands must have matching widths. They execute a
 ordinary CIL, with no capability grant or host wait. Fixed-width `<<`, `>>` and `>>>` accept I32 counts. Raw CIL counts use their
 low 5/6 bits for I32/I64 values, including negative/high counts; this is a
 portable Renraku policy where ECMA leaves results unspecified. Signed right shift
-preserves sign; unsigned right shift inserts zeros. Native arithmetic and small-width checked conversions
-remain unsupported.
+preserves sign; unsigned right shift inserts zeros. Native arithmetic remains unsupported.
 
 Unary integer `-value` is supported: unchecked CIL negation preserves width, and
 signed minimum remains unchanged. C# uint unary minus first widens to Int64.
@@ -438,10 +437,13 @@ is included automatically. Stored I32/I64 bits still carry unsigned values.
 Checked fixed-width signed/unsigned addition, subtraction and multiplication are
 supported. Overflow is a terminal VM fault with retained operands and prior
 mutations; it does not roll back a tool invocation or enable guest exception
-handling. Checked fixed-width conv.ovf.i4/u4/i8/u8 and their .un forms are also
-supported on I32/I64 input. Source signedness (.un) and target range are separate;
-results keep raw I32/I64 bits and overflow retains the failing frame. Native/floating
-arithmetic and conversions, and small-width checked conversions remain unsupported.
+handling. Checked conv.ovf.i1/u1/i2/u2/i4/u4/i8/u8 and their .un forms are
+supported on I32/I64 input. Small targets check 8/16-bit ranges before sign/zero
+extension into I32; overflow never truncates. Existing Char slots preserve every
+UTF-16 unit including lone surrogates. Source signedness (.un) and target range
+are separate; overflow retains the failing frame. Native/floating
+arithmetic and conversions remain unsupported. Byte/SByte/Int16/UInt16 storage
+signatures/locals/fields remain unsupported.
 
 Integer/Int32-enum switch dispatch is supported under the [CIL profile](cil-profile.md),
 with I32 indices, validated targets and at most 4,096 entries per table. Dispatch

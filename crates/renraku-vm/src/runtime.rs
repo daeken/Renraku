@@ -491,7 +491,20 @@ impl<'a> Vm<'a> {
                 let value = pop(&mut frame)?;
                 frame.evaluation_stack.push(checked_conversion(
                     value,
-                    wide,
+                    if wide { 64 } else { 32 },
+                    unsigned,
+                    source_unsigned,
+                )?);
+            }
+            Op::ConvertSmallChecked {
+                sixteen,
+                unsigned,
+                source_unsigned,
+            } => {
+                let value = pop(&mut frame)?;
+                frame.evaluation_stack.push(checked_conversion(
+                    value,
+                    if sixteen { 16 } else { 8 },
                     unsigned,
                     source_unsigned,
                 )?);
@@ -1004,7 +1017,7 @@ fn bitwise(left: Value, right: Value, op: &Op) -> Result<Value> {
 
 fn checked_conversion(
     value: Value,
-    wide: bool,
+    width: u32,
     unsigned: bool,
     source_unsigned: bool,
 ) -> Result<Value> {
@@ -1017,17 +1030,22 @@ fn checked_conversion(
         (Value::I64(n), true) => i128::from(n as u64),
         _ => return Err(Error("checked conversion requires an integer".into())),
     };
-    let result = match (wide, unsigned) {
-        (false, false) => i32::try_from(number).map(Value::I32),
-        (false, true) => u32::try_from(number).map(|n| Value::I32(n as i32)),
-        (true, false) => i64::try_from(number).map(Value::I64),
-        (true, true) => u64::try_from(number).map(|n| Value::I64(n as i64)),
+    let result = match (width, unsigned) {
+        (8, false) => i8::try_from(number).map(|n| Value::I32(i32::from(n))),
+        (8, true) => u8::try_from(number).map(|n| Value::I32(i32::from(n))),
+        (16, false) => i16::try_from(number).map(|n| Value::I32(i32::from(n))),
+        (16, true) => u16::try_from(number).map(|n| Value::I32(i32::from(n))),
+        (32, false) => i32::try_from(number).map(Value::I32),
+        (32, true) => u32::try_from(number).map(|n| Value::I32(n as i32)),
+        (64, false) => i64::try_from(number).map(Value::I64),
+        (64, true) => u64::try_from(number).map(|n| Value::I64(n as i64)),
+        _ => unreachable!("unsupported internal checked conversion width"),
     };
     result.map_err(|_| {
         Error(format!(
             "conv.ovf.{}{}{} overflow",
             if unsigned { "u" } else { "i" },
-            if wide { "8" } else { "4" },
+            width / 8,
             if source_unsigned { ".un" } else { "" }
         ))
     })
