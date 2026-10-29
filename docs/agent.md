@@ -174,6 +174,7 @@ history, `store: false`, and streamed final text follow the subscription route's
 | Install an earlier build | `{"op":"install","compilationTurn":3}` |
 | Invoke a static entry | `{"op":"invoke","method":"Generated.Entry::Run","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]}` |
 | Inspect website publication and authority | `{"op":"web_status"}` |
+| Preview the published handler locally | `{"op":"preview_web","method":"GET","target":"/page","body":""}` |
 | Publish an installed HTTP handler | `{"op":"publish_web","method":"Generated.Website::Handle"}` |
 | Finish | `{"op":"finish","message":"The saved counter is now 26."}` |
 
@@ -248,6 +249,58 @@ has been removed, recovery returns a denied result without publishing. Storage
 failures leave the turn pending; they do not become a success or a new action ID.
 The actual frozen inputs and publication results stay in linked managed history.
 This adds no native checkpoint fields or HTTP wire changes.
+
+## Preview and correct a published page
+
+`preview_web` executes the current universe's published handler under the same
+HTTP-v1 argument and response contract as the localhost host. It opens no socket,
+accepts no URL, and grants no external network authority. Its result explicitly
+identifies `transport: "managed_handler"` and `socketTested: false`. Independently
+verify the HTTP edge with its TCP fixtures or a browser.
+
+The action accepts only `method` (GET or POST), `target` (an ASCII origin-form
+target of at most 1,024 bytes), and optional UTF-8 `body` (default empty, at most
+8,192 bytes). Request IDs and publication selection are host-owned; extra fields,
+URLs, or a model-supplied `publication` reject. Preview needs an existing saved
+publication. It requires no new host grant beyond the model's existing authority
+to run managed code; publication itself still requires its separate explicit opt-in.
+
+Preview can mutate managed state, including when the handler chooses to mutate
+on GET. Each saved turn derives client ID `agent.<universe>.<turn>.preview` and
+inbox ID `http-v1/<universe>/<client-ID>`. Freeze retains the exact method/target/body
+and full selected publication in the managed turn before acceptance. If that
+publication changes before an inbox receipt commits, the action returns a saved
+conflict error and a new turn must select again. After acceptance, retries resume
+or return the original pinned code, argument references, execution, and immutable
+response, even after another handler is published.
+
+The response projection is:
+
+```json
+{"ok":true,"requestId":"http-v1/...","preview":{"transport":"managed_handler","socketTested":false,"status":200,"state":"completed","body":"<h1>Page</h1>","bodyBytes":13,"truncated":false,"execution":"...","publicationId":"...","method":"...","codeVersion":"..."}}
+```
+
+`bodyBytes` measures the full original UTF-8 body. The displayed body contains at
+most 8,192 bytes of JSON-escaped content (excluding its quotes); it is cut only at
+a complete Unicode scalar. This keeps control characters and quotes within the
+existing 16 KiB tool-result limit. `truncated` is explicit. The complete immutable
+string remains rooted by the invocation receipt. A terminal fault or invalid
+handler response returns the existing HTTP-v1 500/state mapping with `ok: false`.
+Storage failures keep the frozen action pending instead of appending an unsaved
+result.
+
+A preview uses the existing instruction/tool budgets and at most 1,024 guest
+instructions per attempt. A paused preview has one durable execution and receives
+more quanta on explicit drive resumption; no second context or extra model call
+is started to retry it. Instructions include the handler's nested calls. All
+handler model capabilities are disabled, including for the public Rust
+`web::preview_handler` API when given a previously enabled VM. The managed journal
+and receipt arguments retain request data through GC and process recovery.
+
+Models can inspect the returned body, compile a corrected caller, install and
+publish it, then preview the new page. Keep new mutation IDs for genuinely new
+requests. Replaying a committed preview never repeats its mutation. This adds no
+native checkpoint fields or HTTP wire changes.
 
 ## Durable ownership and recovery
 
@@ -328,7 +381,7 @@ cargo test -p renraku-openai --test cli
 cargo test -p renraku-openai --lib inference::tests::agent
 ```
 
-Eighteen agent tests cover the selected search/read/compile/install/invoke/finish
+Twenty-two agent tests cover the selected search/read/compile/install/invoke/finish
 sequence, lost results around every tool, SDK-free published replay, frozen
 static arguments and pre-invocation GC roots, uncertain inference with and without
 receipts, strict inputs and budgets, generated-code capability denial, compiler
@@ -340,7 +393,7 @@ component tests additionally exercise real process kills around compiler,
 installation, invocation, and inference commits. These automated fixtures use no
 live inference. The separately recorded live acceptance used ten real model turns.
 
-Six additional local HTTP integration tests run the actual asynchronous
+Seven additional local HTTP integration tests run the actual asynchronous
 subscription adapter through the coding loop. The fixture chooses nine actions
 from the received full history: search, read CIL, describe a contract, compile an
 intentional type error, correct it using the saved CS1503 diagnostic, install,
@@ -389,3 +442,25 @@ A [live two-goal website acceptance](acceptance/live-website-2026-10-29.md) used
 HTTP visits retained their managed state; an older request kept its original page
 after the new publication. Finished recovery used zero operations. Publication
 authority was explicitly enabled for that run.
+
+Preview tests freeze before acceptance, change the publication, and recover
+accepted calls at zero/small instruction budgets with GC between restores. They
+retain the same execution and one visit, reject new selection conflicts and strict
+input violations, disable handler model calls, preserve fault/invalid-response
+receipts, and bound Unicode/NUL/control-character output while retaining the full
+string. A failed terminal checkpoint leaves the original inbox/action pending.
+The socket host can replay a preview-created receipt under the same client ID.
+
+A twelve-turn subscription HTTP fixture previews a draft page, selects a correction
+from the actual response, publishes it, and previews the corrected page with the
+original visit intact. Lost preview and compiler results reconcile offline after
+restores; published replay needs no SDK. Every model history equals the linked CIL
+transcript prefix. Separate TCP delivery confirms the corrected handler, and an
+old preview still returns the draft response without repeating its mutation.
+
+A [live preview/correction run](acceptance/live-preview-2026-10-29.md) used ten
+real GPT-6.1 Sol turns to observe the existing page, write its own correction,
+publish it, and verify the returned body and retained visit. The first preview
+resumed from paused portable frames in fresh seven-instruction processes.
+Independent TCP delivery matched the corrected preview; old-preview replay kept
+its original page/execution. Finished recovery used zero operations.

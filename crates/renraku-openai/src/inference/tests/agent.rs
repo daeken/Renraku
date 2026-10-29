@@ -50,6 +50,9 @@ fn host(directory: &Path, compiler: &Path) -> AgentHost {
     }
 }
 fn initialize(host: &AgentHost, profile: Uuid) {
+    initialize_goal(host, profile, GOAL);
+}
+fn initialize_goal(host: &AgentHost, profile: Uuid, goal: &str) {
     let program = common::program();
     let mut vm = Vm::new(&program);
     let mut store = CheckpointStore::open(&host.universe).unwrap();
@@ -58,7 +61,7 @@ fn initialize(host: &AgentHost, profile: Uuid) {
         &mut store,
         &OpenAIProvider::capability_for(profile),
         "chosen-model",
-        GOAL,
+        goal,
     )
     .unwrap();
 }
@@ -733,7 +736,11 @@ async fn http_website_authoring_publication_recovery_and_followup_preserve_manag
     let id = profile(&directory.0.join("auth"), "coding", "coding-token");
     let mut host = host(&directory.0, compiler());
     host.allow_web_publication = true;
-    initialize(&host, id);
+    initialize_goal(
+        &host,
+        id,
+        "Discover Website, inspect and compile a new handler, install and publish it, then finish.",
+    );
     let server = Server::with_responder(
         |request| {
             assert_eq!(request.bearer, "Bearer coding-token");
@@ -955,4 +962,216 @@ async fn http_website_authoring_publication_recovery_and_followup_preserve_manag
         ),
         (0, 0, 0)
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_agent_previews_and_corrects_its_page_using_durable_results_and_original_request_code()
+{
+    use renraku_vm::web::{WebHost, WebServer};
+    const DRAFT: &str = "public static class DraftPage { public static string Handle(string id,string method,string target,string body) { return string.Concat(\"<h1>draft heading</h1>\",Renraku.Guest.Website.Handle(id,method,target,body)); } }";
+    const FIXED: &str = "public static class CorrectedPage { public static string Handle(string id,string method,string target,string body) { return string.Concat(\"<h1>verified heading</h1>\",Renraku.Guest.Website.Handle(id,method,target,body)); } }";
+    let directory = Directory::new();
+    let id = profile(&directory.0.join("auth"), "coding", "coding-token");
+    let mut host = host(&directory.0, compiler());
+    host.allow_web_publication = true;
+    initialize_goal(
+        &host,
+        id,
+        "Inspect Website and publish a draft handler, preview a visit, then use the observed body to correct the heading to verified heading. Preview the corrected page and finish, preserving the recorded visit.",
+    );
+    let server = Server::with_responder(
+        |request| {
+            assert_eq!(request.bearer, "Bearer coding-token");
+            let count = assistant_count(&request.body);
+            let result = if count > 0 {
+                last_result(&request.body)
+            } else {
+                Value::Null
+            };
+            let action = match count {
+                0 => object!({"op":"search","query":"Website","limit":30}),
+                1 => object!({"op":"read_code","method":"Renraku.Guest.Website::Handle"}),
+                2 => {
+                    assert_eq!(result["output"]["name"], "Handle");
+                    object!({"op":"describe","type":"Renraku.Guest.Website"})
+                }
+                3 => {
+                    assert_eq!(result["ok"], true);
+                    object!({"op":"compile","assembly":"Preview.Draft","source":DRAFT,"referenceTypes":["Renraku.Guest.Website"]})
+                }
+                4 => {
+                    assert_eq!(result["output"]["state"], "compiled");
+                    object!({"op":"install","compilationTurn":4})
+                }
+                5 => object!({"op":"publish_web","method":"DraftPage::Handle"}),
+                6 => {
+                    assert_eq!(result["ok"], true);
+                    object!({"op":"preview_web","method":"POST","target":"/visit"})
+                }
+                7 => {
+                    assert_eq!(result["preview"]["status"], 200);
+                    assert_eq!(result["preview"]["socketTested"], false);
+                    assert_eq!(result["preview"]["truncated"], false);
+                    assert!(
+                        result["preview"]["body"]
+                            .as_str()
+                            .unwrap()
+                            .contains("draft heading")
+                    );
+                    assert!(
+                        result["preview"]["body"]
+                            .as_str()
+                            .unwrap()
+                            .contains(".7.preview")
+                    );
+                    object!({"op":"compile","assembly":"Preview.Corrected","source":FIXED,"referenceTypes":["Renraku.Guest.Website"]})
+                }
+                8 => {
+                    assert_eq!(result["output"]["state"], "compiled");
+                    object!({"op":"install","compilationTurn":8})
+                }
+                9 => object!({"op":"publish_web","method":"CorrectedPage::Handle"}),
+                10 => object!({"op":"preview_web","method":"GET","target":"/page","body":""}),
+                11 => {
+                    assert_eq!(result["ok"], true);
+                    let body = result["preview"]["body"].as_str().unwrap();
+                    assert!(
+                        body.contains("verified heading")
+                            && body.contains(".7.preview")
+                            && !body.contains("draft heading")
+                    );
+                    object!({"op":"finish","message":"Observed and corrected the page; one visit preserved."})
+                }
+                _ => panic!("unexpected extra preview model call"),
+            };
+            FixtureReply::completed(&action.to_string())
+        },
+        false,
+    );
+    let mut lost = BTreeSet::new();
+    let mut original = None;
+    let mut finished = false;
+    for _ in 0..20 {
+        let mut provider = async_adapter(&directory.0, id, &server.base).await;
+        let result = host
+            .drive_with_observer(&mut provider, budgets(1), |stage| {
+                if let AgentStage::ToolCompleted(turn @ (7 | 8 | 11)) = stage
+                    && lost.insert(turn)
+                {
+                    return Err(VmError("lost preview workflow result".into()));
+                }
+                Ok(())
+            })
+            .await;
+        match result {
+            Err(error) => {
+                assert!(error.0.contains("lost preview workflow result"));
+                let mut store = CheckpointStore::open(&host.universe).unwrap();
+                let saved = store.load().unwrap();
+                let mut vm = saved.snapshot.restore().unwrap();
+                let preview = vm
+                    .invocations()
+                    .find(|(id, _)| id.ends_with(".7.preview"))
+                    .unwrap()
+                    .1
+                    .clone();
+                if let Some(record) = &original {
+                    assert_eq!(record, &preview);
+                } else {
+                    original = Some(preview);
+                }
+                vm.collect_garbage().unwrap();
+                store.save(&vm).unwrap();
+                if lost.contains(&8) {
+                    host.compiler_driver = directory.0.join("missing-compiler.dll");
+                }
+                let mut offline = async_adapter(&directory.0, id, "http://127.0.0.1:1").await;
+                let recovered = host.drive(&mut offline, budgets(0)).await.unwrap();
+                assert_eq!(recovered.provider_operations, 0);
+                assert_eq!(recovered.stop, AgentStop::ProviderBudget);
+            }
+            Ok(report) if matches!(report.stop, AgentStop::Finished(_)) => {
+                finished = true;
+                break;
+            }
+            Ok(report) => assert_eq!(report.stop, AgentStop::ProviderBudget),
+        }
+    }
+    assert!(finished);
+    assert_eq!(server.posts(), 12);
+    assert_eq!(lost, BTreeSet::from([7, 8, 11]));
+    let mut store = CheckpointStore::open(&host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.invocations().count(), 2);
+    assert_eq!(vm.installations().count(), 2);
+    assert_eq!(
+        vm.invocations()
+            .find(|(id, _)| id.ends_with(".7.preview"))
+            .unwrap()
+            .1,
+        original.as_ref().unwrap()
+    );
+    let status = vm.agent_status().unwrap();
+    assert_eq!(status["turn"], 12);
+    assert_http_history(&server, &status);
+    // Independent socket evidence: preview itself never claims to test framing.
+    let edge = WebServer::bind(
+        WebHost::open_published(&host.universe).unwrap(),
+        "127.0.0.1:0".parse().unwrap(),
+        10000,
+    )
+    .unwrap();
+    let address = edge.address().unwrap();
+    let worker = std::thread::spawn(move || edge.serve_one());
+    use std::io::{Read, Write};
+    let mut socket = std::net::TcpStream::connect(address).unwrap();
+    socket
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    socket.write_all(b"GET /page HTTP/1.1\r\nHost: localhost\r\nX-Renraku-Request-Id: after-preview-correction\r\n\r\n").unwrap();
+    socket.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut reply = String::new();
+    socket.read_to_string(&mut reply).unwrap();
+    worker.join().unwrap().unwrap();
+    assert!(
+        reply.starts_with("HTTP/1.1 200")
+            && reply.contains("verified heading")
+            && reply.contains(".7.preview")
+    );
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let owner = saved
+        .snapshot
+        .program
+        .find_type("Renraku.Guest.Website")
+        .unwrap();
+    let visits = saved
+        .snapshot
+        .program
+        .fields()
+        .find(|f| f.owner == owner && f.name == "Visits")
+        .unwrap();
+    assert_eq!(vm.static_fields()[&visits.id], GuestValue::I32(1));
+    let record = vm
+        .invocations()
+        .find(|(id, _)| id.ends_with(".7.preview"))
+        .unwrap();
+    let client = record.0.rsplit('/').next().unwrap();
+    let replay = WebHost::open_published(&host.universe)
+        .unwrap()
+        .process(
+            &renraku_vm::web::WebRequest {
+                id: client.into(),
+                method: "POST".into(),
+                target: "/visit".into(),
+                body: String::new(),
+            },
+            10000,
+        )
+        .unwrap();
+    assert_eq!(replay.instructions, 0);
+    assert!(replay.body.contains("draft heading") && !replay.body.contains("verified heading"));
+    assert_eq!(replay.execution, original.unwrap().execution.to_string());
+    assert_eq!(receipt_counts(&directory.0), (12, 12));
 }

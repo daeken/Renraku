@@ -24,6 +24,7 @@ pub use publication::{
     MAX_PUBLICATIONS, PublicationRecord, find_publication, inspect_publications, publish_handler,
     publish_handler_with_observer,
 };
+pub(crate) use publication::{current_publication, validate_publication};
 
 const MAX_HEADERS: usize = 8192;
 const MAX_BODY: usize = 8192;
@@ -108,6 +109,20 @@ fn validate_target(target: &str) -> WebResult<()> {
     }
     Ok(())
 }
+pub(crate) fn validate_request(request: &WebRequest, budget: u64) -> WebResult<()> {
+    validate_id(&request.id)?;
+    validate_target(&request.target)?;
+    if !matches!(request.method.as_str(), "GET" | "POST") {
+        return Err(fail(405, "only GET and POST are supported"));
+    }
+    if request.body.len() > MAX_BODY {
+        return Err(fail(413, "request body exceeds 8192 bytes"));
+    }
+    if budget > 1_000_000 {
+        return Err(fail(400, "guest instruction budget exceeds policy"));
+    }
+    Ok(())
+}
 pub(crate) fn handler(program: &Program, name: &str) -> Result<MethodId> {
     let id = program.entry(name)?;
     let method = program.method(id)?;
@@ -168,19 +183,9 @@ impl WebHost {
         &self,
         request: &WebRequest,
         budget: u64,
-        mut observer: impl FnMut(WebStage) -> Result<()>,
+        observer: impl FnMut(WebStage) -> Result<()>,
     ) -> WebResult<WebReply> {
-        validate_id(&request.id)?;
-        validate_target(&request.target)?;
-        if !matches!(request.method.as_str(), "GET" | "POST") {
-            return Err(fail(405, "only GET and POST are supported"));
-        }
-        if request.body.len() > MAX_BODY {
-            return Err(fail(413, "request body exceeds 8192 bytes"));
-        }
-        if budget > 1_000_000 {
-            return Err(fail(400, "guest instruction budget exceeds policy"));
-        }
+        validate_request(request, budget)?;
         let mut store = CheckpointStore::open(&self.database)?;
         let saved = store.load()?;
         let mut vm = saved.snapshot.restore()?;
@@ -188,77 +193,136 @@ impl WebHost {
             vm.universe_id() == self.universe,
             "website universe changed; reopen the host explicitly",
         )?;
-        let request_id = format!("http-v1/{}/{}", self.universe, request.id);
-        let texts = [&request.id, &request.method, &request.target, &request.body];
-        let (entry, arguments) = if let Some(record) = vm.invocation(&request_id) {
-            let entry = handler(vm.program, &record.method.method.to_string())?;
+        process_request(
+            &mut vm,
+            &mut store,
+            request,
+            budget,
+            Selection::Current(self.handler.as_deref()),
+            observer,
+        )
+    }
+}
+enum Selection<'a> {
+    Current(Option<&'a str>),
+    Frozen(&'a PublicationRecord),
+}
+/// Execute a saved handler directly, without a socket or external HTTP request.
+/// Before acceptance the publication must still be current. Once accepted, its
+/// original receipt owns execution even after a newer publication is selected.
+/// After a storage error, reload the committed VM before retrying.
+pub fn preview_handler(
+    vm: &mut Vm<'_>,
+    store: &mut CheckpointStore,
+    request: &WebRequest,
+    selected: &PublicationRecord,
+    budget: u64,
+) -> WebResult<WebReply> {
+    vm.set_model_calls_enabled(false);
+    validate_publication(vm, selected)?;
+    process_request(
+        vm,
+        store,
+        request,
+        budget,
+        Selection::Frozen(selected),
+        |_| Ok(()),
+    )
+}
+fn process_request(
+    vm: &mut Vm<'_>,
+    store: &mut CheckpointStore,
+    request: &WebRequest,
+    budget: u64,
+    selection: Selection<'_>,
+    mut observer: impl FnMut(WebStage) -> Result<()>,
+) -> WebResult<WebReply> {
+    validate_request(request, budget)?;
+    let request_id = format!("http-v1/{}/{}", vm.universe_id(), request.id);
+    let texts = [&request.id, &request.method, &request.target, &request.body];
+    let (entry, arguments) = if let Some(record) = vm.invocation(&request_id) {
+        let entry = handler(vm.program, &record.method.method.to_string())?;
+        require(
+            record.method == vm.program.method(entry)?.binding && record.arguments.len() == 4,
+            "invalid HTTP receipt binding",
+        )?;
+        if let Selection::Frozen(selected) = &selection {
             require(
-                record.method == vm.program.method(entry)?.binding && record.arguments.len() == 4,
-                "invalid HTTP receipt binding",
+                record.method.method.to_string() == selected.method
+                    && record.method.code.to_string() == selected.code,
+                "preview receipt differs from its frozen publication",
             )?;
-            for (value, expected) in record.arguments.iter().zip(texts) {
-                if string(&vm, *value)? != *expected {
-                    return Err(fail(
-                        409,
-                        "request ID is already bound to different method, target, or body",
-                    ));
-                }
-            }
-            (entry, record.arguments.clone())
-        } else {
-            if !matches!(
-                vm.context().status,
-                ExecutionStatus::Completed { .. } | ExecutionStatus::Faulted { .. }
-            ) {
+        }
+        for (value, expected) in record.arguments.iter().zip(texts) {
+            if string(vm, *value)? != *expected {
                 return Err(fail(
-                    503,
-                    "another execution is active; finish its accepted request first",
+                    409,
+                    "request ID is already bound to different method, target, or body",
                 ));
             }
-            // Reload the publication from this request's checkpoint, including
-            // publications made after the host opened. Receipts above never
-            // consult it: they continue their original pinned execution.
-            let entry = match publication::published_method(&vm)? {
+        }
+        (entry, record.arguments.clone())
+    } else {
+        if !matches!(
+            vm.context().status,
+            ExecutionStatus::Completed { .. } | ExecutionStatus::Faulted { .. }
+        ) {
+            return Err(fail(
+                503,
+                "another execution is active; finish its accepted request first",
+            ));
+        }
+        // Reload the publication from this request's checkpoint, including
+        // publications made after the host opened. Receipts above never
+        // consult it: they continue their original pinned execution.
+        let entry = match selection {
+            Selection::Frozen(selected) => {
+                if current_publication(vm)?.as_ref() != Some(selected) {
+                    return Err(fail(
+                        409,
+                        "website publication changed before preview acceptance; use a new turn",
+                    ));
+                }
+                handler(vm.program, &selected.method)?
+            }
+            Selection::Current(fallback) => match publication::published_method(vm)? {
                 Some(entry) => entry,
                 None => handler(
                     vm.program,
-                    self.handler
-                        .as_deref()
-                        .ok_or_else(|| Error("website has no published handler".into()))?,
+                    fallback.ok_or_else(|| Error("website has no published handler".into()))?,
                 )?,
-            };
-            let arguments = texts
-                .into_iter()
-                .map(|s| {
-                    vm.new_string(s.encode_utf16().collect())
-                        .map(Value::Reference)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            (entry, arguments)
+            },
         };
-        let before = vm.instructions_executed();
-        // Durable intent precedes every handler instruction, even at budget 0.
-        let mut receipt =
-            vm.invoke_once(&mut store, &request_id, entry, arguments.clone(), 0, 100)?;
-        observer(WebStage::Accepted)?;
-        if receipt.state == InvocationState::Running && budget > 0 {
-            receipt = vm.invoke_once(&mut store, &request_id, entry, arguments, budget, 100)?;
-        }
-        let (status, body, state) = response(&vm, &receipt);
-        observer(if receipt.state == InvocationState::Running {
-            WebStage::Paused
-        } else {
-            WebStage::Completed
-        })?;
-        Ok(WebReply {
-            status,
-            body,
-            state,
-            execution: receipt.execution.to_string(),
-            request_id,
-            instructions: vm.instructions_executed() - before,
-        })
+        let arguments = texts
+            .into_iter()
+            .map(|s| {
+                vm.new_string(s.encode_utf16().collect())
+                    .map(Value::Reference)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        (entry, arguments)
+    };
+    let before = vm.instructions_executed();
+    // Durable intent precedes every handler instruction, even at budget 0.
+    let mut receipt = vm.invoke_once(store, &request_id, entry, arguments.clone(), 0, 100)?;
+    observer(WebStage::Accepted)?;
+    if receipt.state == InvocationState::Running && budget > 0 {
+        receipt = vm.invoke_once(store, &request_id, entry, arguments, budget, 100)?;
     }
+    let (status, body, state) = response(vm, &receipt);
+    observer(if receipt.state == InvocationState::Running {
+        WebStage::Paused
+    } else {
+        WebStage::Completed
+    })?;
+    Ok(WebReply {
+        status,
+        body,
+        state,
+        execution: receipt.execution.to_string(),
+        request_id,
+        instructions: vm.instructions_executed() - before,
+    })
 }
 fn response(vm: &Vm<'_>, receipt: &InvocationRecord) -> (u16, String, &'static str) {
     match receipt.state {

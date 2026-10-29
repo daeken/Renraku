@@ -52,6 +52,9 @@ preserve a newer handler selection.
 The coding agent can publish under a separate explicit opt-in. A
 [live two-goal run](docs/acceptance/live-website-2026-10-29.md) authored and
 published two website versions while preserving saved visits and old responses.
+Its bounded local preview can inspect handler output and drive a correction;
+[live acceptance](docs/acceptance/live-preview-2026-10-29.md) verified this loop
+with paused-frame recovery and independent TCP delivery.
 
 ## Run the demonstration
 

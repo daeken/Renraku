@@ -176,6 +176,14 @@ publication receipt live in the managed action history. A
 [live two-goal run](acceptance/live-website-2026-10-29.md) authored two handlers and
 retained HTTP visits and old-response replay across publication and host restarts.
 
+The agent's [local preview](agent.md#preview-and-correct-a-published-page) freezes
+a selected publication and executes it through the same HTTP-v1 inbox without
+opening a socket. A preview-created request can later be replayed through HTTP
+using its exact client ID/data. A route change before acceptance rejects; accepted
+calls retain their original code. The public Rust `preview_handler` also clears
+model authority on the supplied VM. Preview reports explicitly distinguish managed
+execution from socket verification; no general network tools are exposed.
+
 ## Supported HTTP profile and bounds
 
 The dedicated blocking host binds only loopback IP addresses and processes one
@@ -205,7 +213,7 @@ host seam; it does not persist a native networking stack inside CIL.
 cargo test -p renraku-vm --test web
 ```
 
-Twelve tests exercise real TCP and native CLI delivery, immutable old-page replay
+Thirteen tests exercise real TCP and native CLI delivery, immutable old-page replay
 after later mutations, changed-data conflicts, every handler instruction with
 GC/restore, pending-work exclusion, disabled model calls, terminal fault/invalid
 text receipts, malformed and unsupported HTTP, failed checkpoint recovery, and

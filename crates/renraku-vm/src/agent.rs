@@ -39,6 +39,7 @@ pub const SYSTEM_PROMPT: &str = r#"You control a persistent CIL runtime. Reply w
 {"op":"install","compilationTurn":3} installs the artifact compiled in that earlier numbered turn. Assembly names must be new; this does not replace existing bodies.
 {"op":"invoke","method":"logical method ID or Type::Method","arguments":[{"kind":"static","field":"Renraku.Guest.Simulation::Saved"}]} invokes a static entry with <=8 arguments. Other arguments: {"kind":"i32","value":7}, {"kind":"i64","value":"9007199254740993"}, {"kind":"object","id":"logical object ID"}, {"kind":"null"}. Calls have bounded instructions and cannot submit model requests. Static selectors freeze to their current values before execution.
 {"op":"web_status"} inspects the saved default website publication, current host publication authority, and supported handler ABI. It performs no publication or HTTP request.
+{"op":"preview_web","method":"GET","target":"/page","body":""} executes the current universe's published handler locally. GET/POST only, ASCII origin-form target <=1024 bytes, UTF-8 body <=8192 bytes (default empty). The selected publication and exact request are frozen; a route change before acceptance returns an error, while an accepted call resumes its original code. This can mutate managed state, once per saved turn-derived request ID, and runs under guest instruction budgets with model calls disabled. It opens no socket and does not test HTTP transport. Results include status/state/body, execution ID, original body byte length, and explicit truncation (at most 8192 JSON-encoded body bytes). Do not include a request ID, publication, URL, host path, or compiler path.
 {"op":"publish_web","method":"logical method ID or Type::Method"} publishes an already installed static string handler with four string arguments (id, method, target, body). Optional codeVersion pins an exact installed code ID. Requires separate host publication opt-in, disabled by default. New HTTP request IDs select the publication; accepted requests keep their pinned code/response. Compilation, installation, and publication are separate operations. Handler HTML is bounded to 32768 UTF-8 bytes, with fixed HTTP-v1 status 200/content type. The handler owns application routing and uses ordinary persistent objects/statics. No host paths, sockets, or extra capabilities are granted. Only one guest context can execute; HTTP work must wait while the agent is active. Do not invent formatting/collection APIs: inspect supported CIL and core methods first.
 {"op":"finish","message":"short result"} ends the session.
 Search and inspect before coding. The initial test object is Renraku.Guest.Simulation::Saved, a persistent Counter (created with Value=19 only if absent). Use normal managed fields/methods and supported CIL: integers, references, strings, constructors, calls, branches. Arrays, generics, exceptions, division, .NET host BCL, native I/O and C# async/await are unsupported. Source/compiler/host paths are not accepted. Do not redefine live types: compile callers using referenceTypes. Examine errors and use a new turn to correct code. Tool outcomes and request identities are durable; no hidden retries or remote inference permissions are granted. Maximum 32 assistant turns, bounded transcript/tool output. Return finish when the goal is satisfied. A later user message may provide a follow-up goal in the same universe; retain the prior history and existing objects/code, and use new turns rather than replaying earlier mutations."#;
@@ -151,6 +152,15 @@ enum Action {
         arguments: Vec<Argument>,
     },
     WebStatus {},
+    PreviewWeb {
+        method: String,
+        target: String,
+        #[serde(default)]
+        body: String,
+        // Host-only frozen state, rejected in actual model action text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        publication: Option<crate::web::PublicationRecord>,
+    },
     PublishWeb {
         method: String,
         #[serde(
@@ -519,7 +529,13 @@ fn parse_action(units: &[u16]) -> Result<Action> {
     let text = String::from_utf16(units)
         .map_err(|_| Error("action must be well-formed Unicode JSON".into()))?;
     require(text.len() <= MAX_ACTION, "action exceeds 64 KiB")?;
-    serde_json::from_str(&text).map_err(|_| {
+    let value: Json =
+        serde_json::from_str(&text).map_err(|_| Error("invalid action JSON".into()))?;
+    require(
+        !(value["op"] == "preview_web" && value.get("publication").is_some()),
+        "preview publication is host-owned frozen state; omit it from the action",
+    )?;
+    serde_json::from_value(value).map_err(|_| {
         Error("invalid action schema; return one supported JSON object with no extra fields".into())
     })
 }
@@ -562,6 +578,9 @@ fn action_summary(action: Option<&Action>) -> (&'static str, String) {
             "web_status",
             "inspect website publication and authority".into(),
         ),
+        Some(Action::PreviewWeb { method, target, .. }) => {
+            ("preview_web", format!("preview {method} {target}"))
+        }
         Some(Action::PublishWeb { method, .. }) => {
             ("publish_web", format!("publish website handler {method}"))
         }
@@ -572,6 +591,18 @@ fn action_summary(action: Option<&Action>) -> (&'static str, String) {
 fn result_summary(result: &Json) -> String {
     if let Some(error) = result["error"].as_str() {
         return error.into();
+    }
+    if let Some(status) = result["preview"]["status"].as_u64() {
+        return format!(
+            "managed preview {status} {}; {} body bytes{}",
+            result["preview"]["state"].as_str().unwrap_or("unknown"),
+            result["preview"]["bodyBytes"],
+            if result["preview"]["truncated"] == true {
+                " (view truncated)"
+            } else {
+                ""
+            }
+        );
     }
     if result["output"]["state"] == "rejected" {
         if let Some(diagnostic) = result["output"]["report"]["diagnostics"]
@@ -794,6 +825,38 @@ fn freeze(vm: &Vm<'_>, action: Action, count: u32) -> Result<Action> {
             }
         }
         Action::WebStatus {} => Action::WebStatus {},
+        Action::PreviewWeb {
+            method,
+            target,
+            body,
+            publication,
+        } => {
+            crate::web::validate_request(
+                &crate::web::WebRequest {
+                    id: "preview".into(),
+                    method: method.clone(),
+                    target: target.clone(),
+                    body: body.clone(),
+                },
+                0,
+            )
+            .map_err(|e| Error(e.to_string()))?;
+            let publication = match publication {
+                Some(record) => {
+                    crate::web::validate_publication(vm, &record)?;
+                    record
+                }
+                None => crate::web::current_publication(vm)?.ok_or_else(|| {
+                    Error("no published website handler; publish one before previewing".into())
+                })?,
+            };
+            Action::PreviewWeb {
+                method,
+                target,
+                body,
+                publication: Some(publication),
+            }
+        }
         Action::PublishWeb {
             method,
             code_version,
@@ -1190,6 +1253,26 @@ struct ToolResult {
     instructions: u64,
     pending: bool,
 }
+fn preview_body(text: &str) -> (String, bool) {
+    // Bound the JSON representation as well as UTF-8. Control characters can
+    // expand sixfold; cutting encoded JSON itself could split an escape or scalar.
+    let mut body = String::new();
+    let mut encoded = 0;
+    for c in text.chars() {
+        let bytes = match c {
+            '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+            '\0'..='\u{1f}' => 6,
+            _ => c.len_utf8(),
+        };
+        if encoded + bytes > 8192 {
+            break;
+        }
+        encoded += bytes;
+        body.push(c);
+    }
+    let truncated = body.len() != text.len();
+    (body, truncated)
+}
 fn execute(
     host: &AgentHost,
     session_id: &str,
@@ -1399,6 +1482,34 @@ fn execute(
                 "publicationLimit":crate::web::MAX_PUBLICATIONS,"publicationEnabled":host.allow_web_publication,
                 "handlerAbi":"static string Handle(string id, string method, string target, string body)",
                 "httpProfile":"http-v1","oneContext":true}})
+        }
+        Action::PreviewWeb {
+            method,
+            target,
+            body,
+            publication,
+        } => {
+            let selected =
+                publication.ok_or_else(|| Error("preview input was not frozen".into()))?;
+            let request = crate::web::WebRequest {
+                id: format!("agent.{session_id}.{turn}.preview"),
+                method,
+                target,
+                body,
+            };
+            match crate::web::preview_handler(&mut vm, &mut store, &request, &selected, budget) {
+                Ok(reply) => {
+                    instructions = reply.instructions;
+                    pending = reply.state == "pending";
+                    let (body, truncated) = preview_body(&reply.body);
+                    json!({"ok":reply.status==200,"requestId":reply.request_id,"preview":{
+                        "transport":"managed_handler","socketTested":false,"status":reply.status,
+                        "state":reply.state,"body":body,"bodyBytes":reply.body.len(),"truncated":truncated,
+                        "execution":reply.execution,"publicationId":selected.id,"method":selected.method,"codeVersion":selected.code}})
+                }
+                Err(error) if error.status == 503 => return Err(Error(error.to_string())),
+                Err(error) => failed(Error(error.to_string())),
+            }
         }
         Action::PublishWeb {
             method,

@@ -234,6 +234,25 @@ and do not inherit persistence.
   used zero operations. A separate browser demo is at http://127.0.0.1:59177/
   against `target/live-website-20261029-01/universe.db`; preserve its state and
   the original website demo. See [live report](acceptance/live-website-2026-10-29.md).
+- Bounded `preview_web` agent action, restricted to the current universe's saved
+  handler with no URLs/sockets/network authority. Freeze records exact HTTP data
+  and selected publication in the managed turn; before-acceptance route changes
+  reject, while accepted calls keep their original code. Turn-derived HTTP-v1
+  inbox IDs own string arguments, frames, full response, and execution through
+  GC/recovery. Pauses resume under the same guest/tool budgets, with no handler
+  model authority. Results project status/body/execution and explicit truncation
+  at 8,192 JSON-escaped body bytes, under the 16 KiB tool limit. The public Rust
+  `preview_handler` shares the socket host's core inbox and clears transient
+  model permission on its supplied VM. No snapshot or wire fields changed.
+- Live preview/correction acceptance: GPT-6.1 Sol recorded and observed a visit,
+  wrote/compiled/installed/published a handler with the requested heading, and
+  previewed the corrected page while retaining that visit. Ten turns and terminal
+  model receipts span seven-instruction/fresh-process recovery of the first
+  paused preview and subsequent model-budget resumes. Independent TCP GET matched
+  the corrected preview; POST replay of its original request retained the original
+  baseline response/execution after publication. Finished recovery used zero
+  operations. See [live report](acceptance/live-preview-2026-10-29.md) and
+  `target/live-preview-20261029-01/`; both prior demo universes remain unchanged.
 
 ## Validation
 
@@ -241,7 +260,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 200 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 206 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -306,7 +325,7 @@ inputs and compiler identity, failed preparation/publication, lost post-commit
 replies, foreign/corrupt ledgers, successful compilation with unsupported CIL,
 and actual SIGKILL at prepared, child-started, captured, written, and committed
 boundaries. Terminal replay is tested with an observer that fails if invoked.
-Eighteen coding-agent tests cover full action selection from actual saved request
+Twenty-two coding-agent tests cover full action selection from actual saved request
 history, lost results after all tools, SDK-free terminal replay, frozen static
 arguments, pre-invocation GC roots, uncertain inference without resubmission,
 strict inputs and all budgets, generated-code capability denial, compiler worker
@@ -314,7 +333,7 @@ yielding to another universe, and partial journal recovery with seven-instructio
 budgets. A foreground CLI test rejects missing opt-in and oversized budgets before
 touching universe/auth state. Existing field-name test lookups now include owners,
 so valid same-named fields in different managed classes cannot make tests flaky.
-Six further agent tests exercise the actual subscription adapter with local
+Seven further agent tests exercise the actual subscription adapter with local
 HTTP: the nine-turn correction/installation/source-inspection sequence, interrupted
 and unsupported native-call streams without resubmission, signed-out receipt
 recovery into a single action/mutation, and actual controller SIGKILL after the
@@ -338,7 +357,7 @@ and completes the original pre-input-schema agent under a local provider. A seco
 goal reuses installed source/code without an SDK and preserves the first mutation
 receipt. The HTTP fixture sends both complete histories plus the new user message
 and reaches Counter 33 using only three new model requests and one installation.
-Twelve website tests cover actual TCP/CLI serving, SDK-free CLI delivery, exact
+Thirteen website tests cover actual TCP/CLI serving, SDK-free CLI delivery, exact
 old-response replay after newer mutations and handler selection, all handler
 instruction cuts with GC/recovery, paused-call exclusion, denied model authority,
 fault/null/surrogate/oversized terminal responses, malformed framing and bounds,
@@ -361,6 +380,16 @@ transcript, replaying a lost publication result offline without permission, and
 using the same Website history through real TCP. The second goal needs no compiler.
 Native CLI tests accept both opt-in flag orders, preserve the flag in resume
 arguments, and reject unrelated/duplicate grants or missing model authorization.
+Four additional VM preview tests reject invalid inputs and model-owned selection,
+recover after pre/post-acceptance route changes and zero/small budgets with GC,
+reconcile lost results, preserve model-denied/null/surrogate/oversized receipts,
+bound escaped Unicode/NUL output while retaining full strings, and recover a failed
+response save into the original execution. A socket/preview interoperability test
+also proves explicit model permission removal on a supplied enabled VM. The new
+twelve-turn subscription fixture observes draft output, compiles/publishes a
+correction, and verifies both the new body and retained visit. Lost preview/compiler
+results reconcile offline, every model history matches the managed transcript,
+and independent TCP confirms new output plus immutable old-preview replay.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -479,22 +508,32 @@ The coding agent now authors and publishes website handlers under explicit host
 authority, with durable results and local/live two-goal acceptance. Preserve its
 default denial and read-only committed-receipt recovery after authority changes.
 
-**Next let the agent test its published handler through a bounded local preview.**
-Add a strict action for the current universe's saved handler, without arbitrary
-URLs, sockets, or external network authority. Reuse the HTTP-v1 request/response
-contract and durable inbox with a stable turn-derived client ID; freeze request
-data and the selected publication before acceptance. Keep actual inputs/results
-in managed history, exact old-code recovery, and model-disabled handler execution.
-Return bounded response text/status with explicit truncation. Model-visible preview
-is execution of the managed handler, not evidence that the socket/HTTP edge was
-tested. Preserve independent TCP fixtures for that boundary. A paused preview must
-be owned/resumed by the agent without starting a second context, and its instruction
-cost must fit existing budgets. Test lost results, route changes before/after
-acceptance, GC/recovery, one mutation per saved request, faults, strict arguments,
-and model-selected correction from the observed body. Use live inference only to
-answer the new acceptance question of testing and correcting a published page.
-Preserve both demo universes, the HTTP-v1 profile, compiler boundaries, and all
-existing receipts. Do not add general shell/network tools or native function calls.
+The coding agent can now preview and correct a published page, with local recovery
+fixtures and real-model acceptance. Preserve the distinction between direct managed
+preview and transport verification, exact frozen selection, and the same HTTP-v1
+inbox/response semantics across both paths.
+
+**Next add bounded read-only inspection of persistent object and static state.**
+The workbench describes declarations and source; the model should also be able to
+observe actual field values without writing a helper or invoking mutable code.
+Start with one object by logical ID and one static field by logical ID/qualified
+selector. Return declared owner/type/field identities, scalar values or reference
+IDs, and the observed checkpoint generation. Do not recursively expand graphs.
+Freeze selectors to logical identities and retain an inspected object with the
+existing typed managed argument roots before host execution so GC cannot drop it
+while a result is pending. Treat reference IDs in historical projections as
+observations, not a promise that every target will remain live forever. Make
+field-count/string-preview/output bounds and truncation explicit, preserve exact
+UTF-16 storage (including lone surrogates), and reject unsupported/transient or
+missing/ambiguous selectors clearly. Keep actual inputs/results in managed history,
+with no heap mutation, model grant, host paths, or implicit network authority.
+Test cycles/shared references, inherited field owners, GC between Freeze and
+inspection, bounded Unicode, missing IDs, stable logical identity after restart,
+and read-only state preservation. Local fixtures should discover a static root,
+inspect its object, perform an existing managed mutation, and inspect the changed
+value without an extra invocation. Use live inference only for a new state-inspection
+acceptance question. Preserve all demos, receipts, legacy checkpoints, one-context
+limits, and compiler/publication/preview contracts.
 The compiler service ledger is outside the guest and must not replace managed
 conversation/action state. It serializes one bounded worker per ledger and may
 rerun explicitly resumed prepared pure jobs; inference uncertainty remains a

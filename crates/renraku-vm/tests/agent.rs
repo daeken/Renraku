@@ -93,6 +93,9 @@ enum Mode {
     WebDenied,
     WebPublish,
     WebStrict,
+    Preview,
+    PreviewEcho,
+    PreviewStrict,
 }
 impl Script {
     fn open(path: &Path) -> Self {
@@ -113,6 +116,23 @@ impl Script {
             .count();
         let last = String::from_utf16(&request.messages.last().unwrap().content).unwrap();
         match self.mode {
+            Mode::Preview | Mode::PreviewEcho => return Ok(if assistants==0 {
+                json!({"op":"preview_web","method":"POST","target":"/visit","body":if matches!(self.mode,Mode::PreviewEcho){"\0🦀\"\\\n".repeat(700)}else{String::new()}})
+            } else { json!({"op":"finish","message":"preview inspected"}) }.to_string()),
+            Mode::PreviewStrict => {
+                if assistants>0 { let result:Json=serde_json::from_str(&last).unwrap(); assert_eq!(result["ok"],false); }
+                return Ok(match assistants {
+                    0=>json!({"op":"preview_web","method":"GET","target":"/","url":"https://example.com"}),
+                    1=>json!({"op":"preview_web","method":"PUT","target":"/page"}),
+                    2=>json!({"op":"preview_web","method":"GET","target":"http://example.com/page"}),
+                    3=>json!({"op":"preview_web","method":"GET","target":"/page","body":"x".repeat(8193)}),
+                    4=>json!({"op":"preview_web","method":"GET","target":format!("/{}","x".repeat(1024))}),
+                    5=>json!({"op":"preview_web","method":"GET","target":"/page","id":"chosen-by-model"}),
+                    6=>json!({"op":"preview_web","method":"GET","target":"/page","publication":null}),
+                    7=>json!({"op":"finish","message":"invalid preview inputs rejected"}),
+                    _=>return Err(Error("unexpected strict preview turn".into())),
+                }.to_string());
+            }
             Mode::WebDenied => return Ok(match assistants {
                 0 => json!({"op":"web_status"}),
                 1 => { let r:Json=serde_json::from_str(&last).unwrap(); assert_eq!(r["output"]["publicationEnabled"],false); assert!(r["output"]["current"].is_null()); json!({"op":"publish_web","method":"Renraku.Guest.Website::Handle"}) },
@@ -646,6 +666,292 @@ fn limits() -> AgentLimits {
         provider_operations: 10,
         tool_actions: 20,
     }
+}
+
+fn first_preview_result(host: &AgentHost) -> Json {
+    let mut store = CheckpointStore::open(&host.universe).unwrap();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    serde_json::from_str(
+        vm.agent_status().unwrap()["transcript"][3]["content"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap()
+}
+#[tokio::test(flavor = "current_thread")]
+async fn preview_rejects_unknown_paths_bindings_and_bounds_without_an_inbox_mutation() {
+    for strict in [false, true] {
+        let test = Test::new();
+        let mut provider = test.provider();
+        provider.mode = if strict {
+            Mode::PreviewStrict
+        } else {
+            Mode::Preview
+        };
+        assert!(matches!(
+            test.host.drive(&mut provider, limits()).await.unwrap().stop,
+            AgentStop::Finished(_)
+        ));
+        let result = first_preview_result(&test.host);
+        assert_eq!(result["ok"], false);
+        if !strict {
+            assert!(result["error"].as_str().unwrap().contains("no published"));
+        }
+        let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+        let saved = store.load().unwrap();
+        let vm = saved.snapshot.restore().unwrap();
+        assert_eq!(vm.invocations().count(), 0);
+    }
+}
+#[tokio::test(flavor = "current_thread")]
+async fn preview_freezes_publication_and_recovers_paused_or_lost_results_without_repeating_mutations()
+ {
+    use renraku_vm::web::{inspect_publications, publish_handler};
+    for cut in [
+        None,
+        Some(0),
+        Some(1),
+        Some(7),
+        Some(29),
+        Some(100),
+        Some(1000),
+    ] {
+        let mut test = Test::new();
+        test.host.compiler_driver = test.directory.join("missing-compiler.dll");
+        let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+        let first = publish_handler(&mut store, "first", "Renraku.Guest.Website::Handle").unwrap();
+        let mut provider = test.provider();
+        provider.mode = Mode::Preview;
+        test.host
+            .drive_with_observer(&mut provider, limits(), |stage| {
+                if stage == AgentStage::ToolStarted(1) {
+                    Err(Error("frozen preview".into()))
+                } else {
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap_err();
+        let saved = store.load().unwrap();
+        let vm = saved.snapshot.restore().unwrap();
+        let state = vm.agent_status().unwrap();
+        let input: Json = serde_json::from_str(state["pendingInput"].as_str().unwrap()).unwrap();
+        assert_eq!(input["publication"], serde_json::to_value(&first).unwrap());
+        if let Some(cut) = cut {
+            let report = test
+                .host
+                .drive(
+                    &mut provider,
+                    AgentLimits {
+                        instructions: cut,
+                        provider_operations: 0,
+                        tool_actions: 1,
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(report.instructions <= cut);
+            assert_eq!(report.provider_operations, 0);
+            let saved = store.load().unwrap();
+            let vm = saved.snapshot.restore().unwrap();
+            assert_eq!(vm.invocations().count(), 1);
+        }
+        publish_handler(&mut store, "newer", "Renraku.Guest.Website::Alternate").unwrap();
+        let saved = store.load().unwrap();
+        let mut vm = saved.snapshot.restore().unwrap();
+        vm.collect_garbage().unwrap();
+        store.save(&vm).unwrap();
+        assert!(matches!(
+            test.host.drive(&mut provider, limits()).await.unwrap().stop,
+            AgentStop::Finished(_)
+        ));
+        assert_eq!(provider.receipts(), 2);
+        let result = first_preview_result(&test.host);
+        let saved = store.load().unwrap();
+        let vm = saved.snapshot.restore().unwrap();
+        if cut.is_none() {
+            assert_eq!(result["ok"], false);
+            assert!(
+                result["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("before preview acceptance")
+            );
+            assert_eq!(vm.invocations().count(), 0);
+        } else {
+            assert_eq!(result["ok"], true);
+            assert_eq!(result["preview"]["socketTested"], false);
+            assert_eq!(result["preview"]["publicationId"], "first");
+            let (id, record) = vm.invocations().next().unwrap();
+            assert!(id.starts_with("http-v1/"));
+            assert_eq!(record.method.method.to_string(), first.method);
+            assert_eq!(record.method.code.to_string(), first.code);
+            assert_eq!(record.execution.to_string(), result["preview"]["execution"]);
+            let owner = saved
+                .snapshot
+                .program
+                .find_type("Renraku.Guest.Website")
+                .unwrap();
+            let visits = saved
+                .snapshot
+                .program
+                .fields()
+                .find(|f| f.owner == owner && f.name == "Visits")
+                .unwrap();
+            assert_eq!(vm.static_fields()[&visits.id], Value::I32(1));
+            let page = result["preview"]["body"].as_str().unwrap();
+            assert!(page.contains(&format!("agent.{}.1.preview", vm.universe_id())));
+        }
+        assert_eq!(
+            inspect_publications(&mut store).unwrap()["current"]["id"],
+            "newer"
+        );
+    }
+    // Lose the reply after the complete inbox receipt commits but before Apply.
+    let test = Test::new();
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    publish_handler(&mut store, "first", "Renraku.Guest.Website::Handle").unwrap();
+    let mut provider = test.provider();
+    provider.mode = Mode::Preview;
+    test.host
+        .drive_with_observer(&mut provider, limits(), |stage| {
+            if stage == AgentStage::ToolCompleted(1) {
+                Err(Error("lost preview result".into()))
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .unwrap_err();
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let original = vm.invocations().next().unwrap().1.clone();
+    publish_handler(&mut store, "newer", "Renraku.Guest.Website::Alternate").unwrap();
+    assert!(matches!(
+        test.host.drive(&mut provider, limits()).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    assert_eq!(vm.invocations().next().unwrap().1, &original);
+    assert_eq!(
+        first_preview_result(&test.host)["preview"]["publicationId"],
+        "first"
+    );
+}
+#[tokio::test(flavor = "current_thread")]
+async fn preview_faults_and_unicode_truncation_retain_terminal_receipts_and_full_strings() {
+    for (name, state) in [
+        ("Denied", "faulted"),
+        ("NullResponse", "invalid_response"),
+        ("SurrogateResponse", "invalid_response"),
+        ("LargeResponse", "invalid_response"),
+        ("Echo", "completed"),
+    ] {
+        let test = Test::new();
+        let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+        renraku_vm::web::publish_handler(
+            &mut store,
+            "test",
+            &format!("Renraku.Guest.Website::{name}"),
+        )
+        .unwrap();
+        let mut provider = test.provider();
+        provider.mode = if name == "Echo" {
+            Mode::PreviewEcho
+        } else {
+            Mode::Preview
+        };
+        assert!(matches!(
+            test.host.drive(&mut provider, limits()).await.unwrap().stop,
+            AgentStop::Finished(_)
+        ));
+        let result = first_preview_result(&test.host);
+        assert_eq!(result["preview"]["state"], state);
+        assert_eq!(result["ok"], name == "Echo");
+        assert!(result.to_string().len() <= 16384);
+        let saved = store.load().unwrap();
+        let vm = saved.snapshot.restore().unwrap();
+        assert_eq!(vm.invocations().count(), 1);
+        assert_eq!(vm.effects().count(), 2);
+        if name == "Echo" {
+            let original = "\0🦀\"\\\n".repeat(700);
+            let body = result["preview"]["body"].as_str().unwrap();
+            assert_eq!(result["preview"]["bodyBytes"], original.len());
+            assert_eq!(result["preview"]["truncated"], true);
+            assert!(original.starts_with(body));
+            assert!(serde_json::to_string(body).unwrap().len() <= 8194);
+            let record = vm.invocations().next().unwrap().1;
+            let renraku_vm::invocation::InvocationState::Completed {
+                result: Some(Value::Reference(object)),
+            } = record.state
+            else {
+                panic!()
+            };
+            assert_eq!(
+                String::from_utf16(vm.heap().object(object).unwrap().string_units().unwrap())
+                    .unwrap(),
+                original
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn preview_failed_response_save_leaves_the_frozen_action_and_original_execution_pending() {
+    let test = Test::new();
+    let mut store = CheckpointStore::open(&test.host.universe).unwrap();
+    renraku_vm::web::publish_handler(&mut store, "first", "Renraku.Guest.Website::Handle").unwrap();
+    let mut provider = test.provider();
+    provider.mode = Mode::Preview;
+    let failure=test.host.drive_with_observer(&mut provider,limits(),|stage| {
+        if stage==AgentStage::ToolStarted(1) {
+            let mut store=CheckpointStore::open(&test.host.universe)?;let generation=store.load()?.generation;
+            Connection::open(&test.host.universe)?.execute_batch(&format!("CREATE TRIGGER fail_preview_save BEFORE UPDATE ON checkpoint WHEN NEW.generation={} BEGIN SELECT RAISE(FAIL,'preview response save failed'); END;",generation+4))?;
+        }
+        Ok(())
+    }).await.unwrap_err();
+    assert!(failure.0.contains("preview response save failed"));
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let state = vm.agent_status().unwrap();
+    assert_eq!(state["phase"], 1);
+    assert_eq!(state["transcript"].as_array().unwrap().len(), 3);
+    let record = vm.invocations().next().unwrap().1;
+    assert_eq!(
+        record.state,
+        renraku_vm::invocation::InvocationState::Running
+    );
+    let execution = record.execution;
+    Connection::open(&test.host.universe)
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_preview_save;")
+        .unwrap();
+    assert!(matches!(
+        test.host.drive(&mut provider, limits()).await.unwrap().stop,
+        AgentStop::Finished(_)
+    ));
+    assert_eq!(
+        first_preview_result(&test.host)["preview"]["execution"],
+        execution.to_string()
+    );
+    let saved = store.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let owner = saved
+        .snapshot
+        .program
+        .find_type("Renraku.Guest.Website")
+        .unwrap();
+    let visits = saved
+        .snapshot
+        .program
+        .fields()
+        .find(|f| f.owner == owner && f.name == "Visits")
+        .unwrap();
+    assert_eq!(vm.static_fields()[&visits.id], Value::I32(1));
+    assert_eq!(vm.invocations().count(), 1);
+    assert_eq!(provider.receipts(), 2);
 }
 
 #[tokio::test(flavor = "current_thread")]

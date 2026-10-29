@@ -915,3 +915,56 @@ fn fragmented_utf8_and_nul_bodies_are_exact_receipt_inputs_and_response_bytes() 
     assert_eq!(state(&test.database).0, 0);
     assert_eq!(state(&test.database).1.len(), 1);
 }
+
+#[test]
+fn local_preview_shares_the_http_inbox_and_revokes_model_authority_on_the_supplied_vm() {
+    use renraku_vm::web::preview_handler;
+    let test = Test::new();
+    let mut store = CheckpointStore::open(&test.database).unwrap();
+    let selected = publish_handler(&mut store, "original", HANDLER).unwrap();
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    let pending = preview_handler(&mut vm, &mut store, &request("direct"), &selected, 0).unwrap();
+    assert_eq!((pending.status, pending.instructions), (202, 0));
+    publish_handler(&mut store, "newer", "Renraku.Guest.Website::Alternate").unwrap();
+    collect(&test.database);
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    let old = preview_handler(&mut vm, &mut store, &request("direct"), &selected, 10000).unwrap();
+    assert_eq!(old.execution, pending.execution);
+    assert_eq!(old.status, 200);
+    assert_eq!(state(&test.database).0, 1);
+    // Socket delivery of the same client ID sees exactly the same accepted call.
+    let host = WebHost::open_published(&test.database).unwrap();
+    let response = exchange(&host, 10000, &wire("POST", "/visit", Some("direct"), b""));
+    assert_eq!(body(&response), old.body);
+    assert!(response.contains(&old.execution));
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    let before = store.generation();
+    assert_eq!(
+        preview_handler(
+            &mut vm,
+            &mut store,
+            &request("not-yet-accepted"),
+            &selected,
+            10000
+        )
+        .unwrap_err()
+        .status,
+        409
+    );
+    assert_eq!(store.generation(), before);
+    let denied = publish_handler(&mut store, "denied", "Renraku.Guest.Website::Denied").unwrap();
+    let saved = store.load().unwrap();
+    let mut vm = saved.snapshot.restore().unwrap();
+    vm.set_model_calls_enabled(true);
+    let reply = preview_handler(&mut vm, &mut store, &request("denied"), &denied, 10000).unwrap();
+    assert_eq!((reply.status, reply.state), (500, "faulted"));
+    assert_eq!(vm.effects().count(), 0);
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    let replay = preview_handler(&mut vm, &mut store, &request("denied"), &denied, 10000).unwrap();
+    assert_eq!(replay.execution, reply.execution);
+    assert_eq!(replay.instructions, 0);
+}

@@ -103,6 +103,15 @@ pub(super) fn published_method(vm: &Vm<'_>) -> Result<Option<MethodId>> {
         .map(|record| pinned_method(vm, record))
         .transpose()
 }
+pub(crate) fn current_publication(vm: &Vm<'_>) -> Result<Option<PublicationRecord>> {
+    Ok(journal(vm)?.last().cloned())
+}
+pub(crate) fn validate_publication(vm: &Vm<'_>, record: &PublicationRecord) -> Result<()> {
+    require(
+        journal(vm)?.iter().any(|saved| saved == record),
+        "frozen website publication is not retained in this universe",
+    )
+}
 
 /// Read-only projection of the saved route and every immutable publication.
 pub fn inspect_publications(store: &mut CheckpointStore) -> Result<Json> {
