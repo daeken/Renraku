@@ -18,3 +18,8 @@ workspace = true
 name = "renraku-checkpoint-probe"
 path = "tests/support/checkpoint_probe.rs"
 test = false
+
+[[bin]]
+name = "renraku-effect-probe"
+path = "tests/support/effect_probe.rs"
+test = false

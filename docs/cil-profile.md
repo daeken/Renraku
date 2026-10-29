@@ -53,7 +53,9 @@ initializers are rejected until their resumable state is implemented.
 
 Floating point, small integer storage other than Boolean and Char, native integers,
 arbitrary structs, boxing, arrays, pointers, byrefs, generics, interfaces,
-virtual definitions, exception handling, and external capabilities are unsupported.
+virtual definitions, exception handling, and guest calls to external capabilities
+are unsupported. The host effect outbox is documented separately in
+[the effect contract](effects.md).
 
 ## Supported instructions
 

@@ -437,7 +437,7 @@ fn legacy_format_one_restores_active_frames_and_upgrades_on_commit() {
         .unwrap()
         .query_row("SELECT format FROM checkpoint", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(format, 2);
+    assert_eq!(format, 3);
     let current = store.load().unwrap();
     let vm = current.snapshot.restore().unwrap();
     assert_eq!(vm.universe_id(), universe);

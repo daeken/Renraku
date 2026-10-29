@@ -12,14 +12,15 @@ which introduces remote operations with uncertain outcomes.
 The Rust crate implements the initial CIL interpreter, identity and value model,
 heap lifetime rules, tracing collection, explicit frames, and atomic durable
 checkpoints. The [CIL profile](cil-profile.md) defines the executable subset and
-[checkpoint contract](checkpoints.md) defines recovery. Live dispatch replacement,
-type initialization, scheduling of multiple contexts, and external effects
-remain requirements for subsequent work.
+[checkpoint contract](checkpoints.md) defines recovery. A host outbox implements
+durable external request intent and reconciliation. Live dispatch replacement,
+type initialization, scheduling of multiple contexts, and guest calls waiting
+for external effects remain requirements for subsequent work.
 
 ## Identity and object records
 
 Every identity is an opaque 16-byte value. Rust types distinguish object, type,
-field, method, code version, execution, arena, and assembly IDs. IDs contain no addresses,
+field, method, code version, execution, effect, arena, and assembly IDs. IDs contain no addresses,
 file offsets, database row numbers, or assembly metadata tokens. Null is an
 explicit value, distinct from every object ID, including the all-zero ID.
 
@@ -41,7 +42,7 @@ initialize fields before invoking constructors. Schema migration is future work.
 ## Allocation domains and roots
 
 Ordinary allocation uses the managed domain. Reachability from named roots,
-retained execution contexts, and static storage
+retained execution contexts, static storage, interned literals, and effect records
 determines the durable object graph. Allocation alone does not retain an object
 forever. Sharing and cycles preserve logical identity.
 
@@ -155,7 +156,7 @@ A checkpoint pauses all guest execution and commits the following together:
 - Retained contexts, their continuations, and all referenced values.
 - Referenced code versions, type schemas, and logical dispatch bindings.
 - Static storage and type initialization state.
-- Scheduler state and, when supported, durable effect records.
+- Durable effect records and, when supported, scheduler state.
 
 The implementation uses SQLite in WAL mode with full synchronization. It commits
 a versioned, checksummed full snapshot and validates recovery before exposing an
@@ -203,6 +204,13 @@ The first effect protocol should use a durable outbox:
 4. The runtime commits the response and makes the waiting computation runnable
    in one transaction.
 5. Resumption consumes the stored result; it does not repeat a completed effect.
+
+The current [host outbox](effects.md) implements stable effect IDs, intent and
+dispatch commits, uncertain outcomes, durable managed response strings, and
+provider reconciliation. Its deterministic local echo provider keeps receipts
+outside the universe transaction. The CLI can queue, dispatch, inspect, and
+reconcile requests. CIL waiting continuations and atomic guest wakeup are still
+required before this is a complete persistent harness.
 
 An in-flight record recovered without a committed response has an unknown
 outcome: the provider may have accepted and charged for the request. The runtime

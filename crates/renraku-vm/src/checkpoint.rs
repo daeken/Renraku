@@ -3,13 +3,15 @@ mod validate;
 
 use crate::{
     cil::Reader,
+    effects::{EffectRecord, EffectState},
     error::{Error, Result, require},
     execution::{
         CallResult, Continuation, ExecutionContext, ExecutionStatus, Frame, MethodVersion,
     },
     heap::{AllocationDomain, Heap},
     identity::{
-        AssemblyId, CodeVersionId, ExecutionId, FieldId, MethodId, ObjectId, TypeId, UniverseId,
+        AssemblyId, CodeVersionId, EffectId, ExecutionId, FieldId, MethodId, ObjectId, TypeId,
+        UniverseId,
     },
     program::{AssemblyBindings, Program},
     runtime::{RunOutcome, Vm},
@@ -20,7 +22,7 @@ use sha2::{Digest, Sha256};
 use std::{cell::Cell, collections::BTreeMap, path::Path, time::Duration};
 
 const MAGIC: &[u8; 8] = b"RENRAKU\0";
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 const APPLICATION_ID: i64 = 0x52454e52;
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_ITEMS: usize = 1_000_000;
@@ -32,6 +34,7 @@ struct State {
     heap: Heap,
     statics: BTreeMap<FieldId, Value>,
     interned_strings: BTreeMap<Vec<u16>, ObjectId>,
+    effects: BTreeMap<EffectId, EffectRecord>,
     context: ExecutionContext,
     entry: Option<MethodVersion>,
     instructions: u64,
@@ -46,11 +49,24 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn restore(&self) -> Result<Vm<'_>> {
         let state = self.state.clone();
+        let effects = state
+            .effects
+            .into_iter()
+            .map(|(id, mut effect)| {
+                if effect.state == EffectState::InFlight {
+                    effect.state = EffectState::OutcomeUnknown {
+                        reason: "recovered without a committed response".into(),
+                    };
+                }
+                (id, effect)
+            })
+            .collect();
         let vm = Vm {
             program: &self.program,
             heap: state.heap,
             statics: state.statics,
             interned_strings: state.interned_strings,
+            effects,
             context: state.context,
             universe: state.universe,
             entry: state.entry,
@@ -217,7 +233,7 @@ impl CheckpointStore {
             payload,
         } = row.ok_or_else(|| Error("no committed checkpoint".into()))?;
         require(
-            generation > 0 && matches!(format, 1 | 2),
+            generation > 0 && matches!(format, 1..=3),
             "unsupported checkpoint format or generation",
         )?;
         require(
@@ -378,6 +394,24 @@ fn encode(vm: &Vm<'_>) -> Result<Vec<u8>> {
     for id in vm.interned_strings.values() {
         w.id(id.as_bytes());
     }
+    w.count(vm.effects.len())?;
+    for effect in vm.effects.values() {
+        w.id(effect.id.as_bytes());
+        w.id(effect.request.as_bytes());
+        w.bytes(effect.capability.as_bytes())?;
+        match &effect.state {
+            EffectState::Prepared => w.byte(0),
+            EffectState::InFlight => w.byte(1),
+            EffectState::Completed { response } => {
+                w.byte(2);
+                w.id(response.as_bytes());
+            }
+            EffectState::OutcomeUnknown { reason } => {
+                w.byte(3);
+                w.bytes(reason.as_bytes())?;
+            }
+        }
+    }
     w.id(vm.context.id.as_bytes());
     match &vm.context.status {
         ExecutionStatus::Runnable => w.byte(0),
@@ -512,7 +546,7 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
     require(r.take(8)? == MAGIC, "unsupported checkpoint payload format")?;
     let format = r.u32()?;
     require(
-        matches!(format, 1 | 2),
+        matches!(format, 1..=3),
         "unsupported checkpoint payload format",
     )?;
     let universe = UniverseId::from_bytes(id(&mut r)?);
@@ -609,6 +643,43 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
             )?;
         }
     }
+    let mut effects = BTreeMap::new();
+    if format >= 3 {
+        for _ in 0..count(&mut r, 37)? {
+            let effect = EffectId::from_bytes(id(&mut r)?);
+            let request = ObjectId::from_bytes(id(&mut r)?);
+            let capability = std::str::from_utf8(bytes(&mut r)?)
+                .map_err(|_| Error("invalid effect capability UTF-8".into()))?
+                .into();
+            let state = match r.u8()? {
+                0 => EffectState::Prepared,
+                1 => EffectState::InFlight,
+                2 => EffectState::Completed {
+                    response: ObjectId::from_bytes(id(&mut r)?),
+                },
+                3 => EffectState::OutcomeUnknown {
+                    reason: std::str::from_utf8(bytes(&mut r)?)
+                        .map_err(|_| Error("invalid effect diagnostic UTF-8".into()))?
+                        .into(),
+                },
+                _ => return Err(Error("unknown effect state".into())),
+            };
+            require(
+                effects
+                    .insert(
+                        effect,
+                        EffectRecord {
+                            id: effect,
+                            capability,
+                            request,
+                            state,
+                        },
+                    )
+                    .is_none(),
+                "duplicate effect identity",
+            )?;
+        }
+    }
     let execution = ExecutionId::from_bytes(id(&mut r)?);
     let status = match r.u8()? {
         0 => ExecutionStatus::Runnable,
@@ -683,6 +754,7 @@ fn decode(payload: &[u8]) -> Result<Snapshot> {
             heap,
             statics,
             interned_strings,
+            effects,
             context: ExecutionContext {
                 id: execution,
                 status,

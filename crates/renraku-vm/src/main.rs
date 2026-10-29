@@ -1,5 +1,6 @@
 use renraku_vm::{
     checkpoint::CheckpointStore,
+    effects::{EffectState, LocalModelProvider},
     error::{Error, Result},
     program::Program,
     runtime::{RunOutcome, Vm},
@@ -14,7 +15,16 @@ fn main() {
 }
 fn execute() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    const USAGE: &str = "usage: renraku-vm inspect <CoreLib.dll> <guest.dll>\n       renraku-vm run <CoreLib.dll> <guest.dll> <Type::Method> [instruction-budget]\n       renraku-vm run-persistent <universe.db> <CoreLib.dll> <guest.dll> <Type::Method> [budget] [checkpoint-interval]\n       renraku-vm resume <universe.db> [budget] [checkpoint-interval]\n       renraku-vm inspect-checkpoint <universe.db>";
+    const USAGE: &str = concat!(
+        "usage: renraku-vm inspect <CoreLib.dll> <guest.dll>\n",
+        "       renraku-vm run <CoreLib.dll> <guest.dll> <Type::Method> [instruction-budget]\n",
+        "       renraku-vm run-persistent <universe.db> <CoreLib.dll> <guest.dll> <Type::Method> [budget] [checkpoint-interval]\n",
+        "       renraku-vm resume <universe.db> [budget] [checkpoint-interval]\n",
+        "       renraku-vm inspect-checkpoint <universe.db>\n",
+        "       renraku-vm queue-model <universe.db> <prompt>\n",
+        "       renraku-vm dispatch-model <universe.db> <provider.db>\n",
+        "       renraku-vm reconcile-model <universe.db> <provider.db>",
+    );
     if args.as_slice() == ["--help"] || args.as_slice() == ["-h"] {
         println!("{USAGE}");
         return Ok(());
@@ -71,6 +81,76 @@ fn execute() -> Result<()> {
                 println!("{object:?}");
             }
             println!("statics: {:?}", vm.static_fields());
+            for effect in vm.effects() {
+                println!("effect: {effect:?}");
+            }
+            return Ok(());
+        }
+        Some("queue-model") if args.len() == 3 => {
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let mut vm = saved.snapshot.restore()?;
+            let request = vm.new_string(args[2].encode_utf16().collect())?;
+            let id = vm.queue_model_request(request)?;
+            store.save(&vm)?;
+            println!("queued model request: {id}");
+            return Ok(());
+        }
+        Some("dispatch-model" | "reconcile-model") if args.len() == 3 => {
+            let mut store = CheckpointStore::open(&args[1])?;
+            let saved = store.load()?;
+            let mut vm = saved.snapshot.restore()?;
+            let mut provider = LocalModelProvider::open(&args[2])?;
+            let reconcile = args[0] == "reconcile-model";
+            let ids: Vec<_> = vm
+                .effects()
+                .filter(|effect| {
+                    if reconcile {
+                        matches!(
+                            effect.state,
+                            EffectState::InFlight | EffectState::OutcomeUnknown { .. }
+                        )
+                    } else {
+                        effect.state == EffectState::Prepared
+                    }
+                })
+                .map(|effect| effect.id)
+                .collect();
+            if !reconcile {
+                let uncertain = vm
+                    .effects()
+                    .filter(|effect| matches!(effect.state, EffectState::OutcomeUnknown { .. }))
+                    .count();
+                if uncertain > 0 {
+                    eprintln!(
+                        "{uncertain} model request(s) have uncertain outcomes; use reconcile-model"
+                    );
+                }
+            }
+            if ids.is_empty() {
+                println!(
+                    "no {} model requests",
+                    if reconcile { "uncertain" } else { "prepared" }
+                );
+            }
+            for id in ids {
+                let response = if reconcile {
+                    vm.reconcile_model(&mut store, id, &mut provider)?
+                } else {
+                    Some(vm.dispatch_model(&mut store, id, &mut provider)?)
+                };
+                if let Some(response) = response {
+                    let units = vm.heap().object(response)?.string_units().unwrap();
+                    match String::from_utf16(units) {
+                        Ok(text) => println!("effect {id}: {text:?}"),
+                        Err(_) => println!("effect {id} UTF-16: {units:x?}"),
+                    }
+                } else {
+                    return Err(Error(format!(
+                        "effect {id} still has an uncertain outcome; no receipt available"
+                    )));
+                }
+            }
             return Ok(());
         }
         _ => {}

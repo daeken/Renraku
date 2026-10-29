@@ -1,5 +1,6 @@
 use crate::{
     cil::{Comparison, Op},
+    effects::EffectRecord,
     error::{Error, Result, require},
     execution::{CallResult, Continuation, ExecutionContext, ExecutionStatus, Frame},
     heap::{Heap, MAX_STRING_UNITS},
@@ -31,6 +32,7 @@ pub struct Vm<'a> {
     pub(crate) entry: Option<crate::execution::MethodVersion>,
     pub(crate) checkpoint_generation: Cell<u64>,
     pub(crate) interned_strings: BTreeMap<Vec<u16>, ObjectId>,
+    pub(crate) effects: BTreeMap<crate::identity::EffectId, EffectRecord>,
 }
 enum Mutation {
     String {
@@ -77,6 +79,7 @@ impl<'a> Vm<'a> {
         Self {
             program,
             interned_strings: BTreeMap::new(),
+            effects: BTreeMap::new(),
             universe: UniverseId::fresh(),
             entry: None,
             checkpoint_generation: Cell::new(0),
@@ -123,7 +126,8 @@ impl<'a> Vm<'a> {
             self.context
                 .references()
                 .chain(self.statics.values().filter_map(Value::referenced_object))
-                .chain(self.interned_strings.values().copied()),
+                .chain(self.interned_strings.values().copied())
+                .chain(self.effects.values().flat_map(EffectRecord::references)),
         )?)
     }
     pub fn set_frame_limit(&mut self, limit: usize) -> Result<()> {

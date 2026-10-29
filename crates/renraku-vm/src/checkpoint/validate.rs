@@ -106,6 +106,20 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
             "interned string is not a retained literal",
         )?;
     }
+    for (id, effect) in &vm.effects {
+        require(
+            !effect.capability.is_empty() && effect.capability.len() <= 128,
+            "invalid effect capability name",
+        )?;
+        require(*id == effect.id, "effect record identity mismatch")?;
+        for object in effect.references() {
+            let object = vm.heap.object(object)?;
+            require(
+                object.type_id() == program.string_type()? && object.string_units().is_some(),
+                "effect request or response is not a managed string",
+            )?;
+        }
+    }
     require(
         vm.max_frames > 0 && vm.context.frames.len() <= vm.max_frames,
         "saved frame limit is inconsistent",

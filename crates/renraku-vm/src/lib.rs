@@ -6,6 +6,7 @@
 
 pub mod checkpoint;
 pub mod cil;
+pub mod effects;
 pub mod error;
 pub mod execution;
 pub mod heap;

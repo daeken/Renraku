@@ -8,8 +8,9 @@ restart logic.
 ## Commit contract
 
 `CheckpointStore::save` runs at a complete instruction boundary. It traverses
-named roots, static storage, active frames, pending constructor results, and
-retained completion results. Unreachable objects are omitted. Transient or
+named roots, static storage, active frames, pending constructor results,
+retained completion results, interned literals, and effect requests and responses.
+Unreachable objects are omitted. Transient or
 dangling references cause an error before the transaction starts.
 
 The store encodes one complete universe and commits it as one SQLite row in a
@@ -42,7 +43,7 @@ row contains a generation, universe ID, payload format version, SHA-256 checksum
 and binary payload. The checksum detects damaged payloads; it is not an
 authentication mechanism.
 
-The writer emits payload format version 2 and still reads version 1. Both start
+The writer emits payload format version 3 and still reads versions 1 and 2. All start
 with the eight bytes `RENRAKU\0` followed by a
 32-bit little endian version number and a 16-byte universe ID. It then records:
 
@@ -52,9 +53,10 @@ with the eight bytes `RENRAKU\0` followed by a
 3. Reachable objects with object ID, type ID, schema version, and payload.
 4. Named roots and static fields.
 5. Interned literal string identities.
-6. Execution identity, status, optional result, and original entry method version.
-7. The cumulative instruction count and configured frame limit.
-8. Frames with pinned method versions, continuations, arguments, locals, and
+6. Durable effect records.
+7. Execution identity, status, optional result, and original entry method version.
+8. The cumulative instruction count and configured frame limit.
+9. Frames with pinned method versions, continuations, arguments, locals, and
    evaluation stacks.
 
 IDs are opaque 16-byte values. Counts, byte lengths, IL offsets, schema versions,
@@ -71,9 +73,15 @@ a 32-bit unit count followed by little endian 16-bit units. It also adds the
 interned string ID registry after static storage. Version 1 has field maps
 directly after the schema and no intern registry.
 
-Recovery reads either format and the next successful commit writes version 2.
-A checked-in fixture captured from the previous writer verifies restoration of
-three active version 1 frames and upgrade without changing their identities.
+Version 3 adds the outbox after the intern registry. Each record has a 16-byte
+effect ID, a 16-byte managed request string ID, a length-prefixed UTF-8 capability
+name, and a state tag. Tag 0 is prepared; tag 1 is in flight; tag 2 is completed
+and adds a response string ID; tag 3 is outcome unknown and adds a length-prefixed
+UTF-8 diagnostic. Versions 1 and 2 have no outbox and restore with it empty.
+
+The next successful commit writes version 3. Unmodified fixtures captured from
+the earlier writers verify restoration of active version 1 frames and exact
+version 2 strings, then upgrade without changing their identities.
 
 Encoding orders identity maps deterministically. Decoding rejects duplicate
 bindings, fields, roots, and object identities, unknown tags or versions,
@@ -97,6 +105,12 @@ String payloads must belong to System.String, have no ordinary instance fields,
 and respect the unit limit. Intern entries must resolve to matching retained
 literal contents. Pure string intrinsics cannot appear as suspended frames,
 because they complete within one instruction.
+
+Effect IDs must be unique, capability names must contain 1–128 UTF-8 bytes, and
+request and completed response references must resolve to managed strings.
+Recovery exposes saved in-flight records as outcome unknown: there is no saved
+response proving whether the external provider accepted the request. Restoration
+never invokes a provider.
 
 For each retained method, control flow analysis reconstructs evaluation stack
 shapes, including nominal reference types and common base types at merges.
@@ -122,8 +136,9 @@ Fault diagnostics and their original frames can also be checkpointed.
 
 Instructions and heap changes after the last commit may run again on recovery.
 That is safe for the current managed instruction set because their saved heap
-and stack state roll back together. External operations require their own durable
-effect protocol and are not available yet.
+and stack state roll back together. The host [effect outbox](effects.md) commits
+its dispatch marker before calling a provider and records responses in the same
+universe snapshot. Guest calls waiting for external results are not yet supported.
 
 `Vm::collect_garbage` traces the same object roots and removes unreachable
 objects from the live heap. Checkpoints also omit them. Current snapshots retain
@@ -157,3 +172,9 @@ physical power-loss testing have not yet been performed.
 String tests repeat checkpoint recovery at every guest instruction, preserve
 literal identity across later executions, collect temporary concatenations,
 retain exact NUL and surrogate units, and kill processes during checkpoint writes.
+
+Outbox tests verify dispatch cannot precede a committed marker, a stale VM cannot
+submit, and a failed response commit cannot expose an uncommitted cached result.
+Process kills before and after local provider acceptance recover as uncertain;
+receipt lookup completes accepted requests without submitting again. Malformed
+outbox records are rejected even if their checksum has been recomputed.

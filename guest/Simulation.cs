@@ -186,6 +186,11 @@ namespace Renraku.Guest
             for (int i = 0; i < 21; i++) value = System.String.Concat(value, value);
             return value.Length;
         }
+        public static int ConsumeModelReply(string reply)
+        {
+            LastText = reply;
+            return reply.Length;
+        }
     }
     public sealed class Conversation
     {

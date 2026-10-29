@@ -48,3 +48,4 @@ identity!(ExecutionId);
 identity!(ArenaId);
 identity!(AssemblyId);
 identity!(UniverseId);
+identity!(EffectId);
