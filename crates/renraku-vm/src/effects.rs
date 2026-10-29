@@ -16,7 +16,7 @@ use crate::{
     value::Value,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use std::{collections::BTreeSet, path::Path, time::Duration};
+use std::{collections::BTreeSet, future::Future, path::Path, time::Duration};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectState {
@@ -59,6 +59,27 @@ pub trait ModelProvider {
     }
     fn submit(&mut self, request: &ModelRequest) -> Result<Vec<u16>>;
     fn reconcile(&mut self, request: &ModelRequest) -> Result<Option<Vec<u16>>>;
+}
+
+/// Host futures are transient. Dropping delivery after its dispatch checkpoint
+/// leaves InFlight/OutcomeUnknown; a later invocation must reconcile, not resend.
+/// Implementations must yield while waiting rather than block an executor worker.
+pub trait AsyncModelProvider: Send {
+    fn capability(&self) -> &str;
+    fn supports_model(&self, model: &str) -> bool {
+        model == DEFAULT_MODEL
+    }
+    fn validate_request(
+        &mut self,
+        _request: &ModelRequest,
+    ) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
+    fn submit(&mut self, request: &ModelRequest) -> impl Future<Output = Result<Vec<u16>>> + Send;
+    fn reconcile(
+        &mut self,
+        request: &ModelRequest,
+    ) -> impl Future<Output = Result<Option<Vec<u16>>>> + Send;
 }
 
 impl Vm<'_> {
@@ -276,16 +297,59 @@ impl Vm<'_> {
         id: EffectId,
         provider: &mut impl ModelProvider,
     ) -> Result<ObjectId> {
+        self.check_model_provider(
+            id,
+            provider.capability(),
+            provider.supports_model(&self.effect(id)?.model),
+        )?;
+        let Some(request) = self.dispatch_request(id)? else {
+            let EffectState::Completed { response } = self.effect(id)?.state else {
+                unreachable!()
+            };
+            return Ok(response);
+        };
+        provider.validate_request(&request)?;
+        self.mark_model_in_flight(store, id)?;
+        let result = provider.submit(&request);
+        self.finish_model_delivery(store, id, result)
+    }
+    pub async fn dispatch_model_async(
+        &mut self,
+        store: &mut CheckpointStore,
+        id: EffectId,
+        provider: &mut impl AsyncModelProvider,
+    ) -> Result<ObjectId> {
+        self.check_model_provider(
+            id,
+            provider.capability(),
+            provider.supports_model(&self.effect(id)?.model),
+        )?;
+        let Some(request) = self.dispatch_request(id)? else {
+            let EffectState::Completed { response } = self.effect(id)?.state else {
+                unreachable!()
+            };
+            return Ok(response);
+        };
+        provider.validate_request(&request).await?;
+        self.mark_model_in_flight(store, id)?;
+        let result = provider.submit(&request).await;
+        self.finish_model_delivery(store, id, result)
+    }
+    fn check_model_provider(
+        &self,
+        id: EffectId,
+        capability: &str,
+        model_supported: bool,
+    ) -> Result<()> {
         require(
-            self.effect(id)?.capability == provider.capability(),
+            self.effect(id)?.capability == capability,
             "provider does not match the effect capability",
         )?;
-        require(
-            provider.supports_model(&self.effect(id)?.model),
-            "provider does not support the saved model",
-        )?;
+        require(model_supported, "provider does not support the saved model")
+    }
+    fn dispatch_request(&self, id: EffectId) -> Result<Option<ModelRequest>> {
         match self.effect(id)?.state {
-            EffectState::Completed { response } => return Ok(response),
+            EffectState::Completed { .. } => return Ok(None),
             EffectState::Prepared => {}
             _ => {
                 return Err(Error(
@@ -293,12 +357,20 @@ impl Vm<'_> {
                 ));
             }
         }
-        let request = self.model_request(id)?;
-        provider.validate_request(&request)?;
+        self.model_request(id).map(Some)
+    }
+    fn mark_model_in_flight(&mut self, store: &mut CheckpointStore, id: EffectId) -> Result<()> {
         self.effects.get_mut(&id).unwrap().state = EffectState::InFlight;
         // On a save error do not submit, and keep the memory state conservative.
-        store.save(self)?;
-        match provider.submit(&request) {
+        store.save(self).map(|_| ())
+    }
+    fn finish_model_delivery(
+        &mut self,
+        store: &mut CheckpointStore,
+        id: EffectId,
+        result: Result<Vec<u16>>,
+    ) -> Result<ObjectId> {
+        match result {
             Ok(response) => self.complete_model(store, id, response),
             Err(error) => {
                 self.effects.get_mut(&id).unwrap().state = EffectState::OutcomeUnknown {
@@ -366,14 +438,37 @@ impl Vm<'_> {
         id: EffectId,
         provider: &mut impl ModelProvider,
     ) -> Result<Option<ObjectId>> {
-        require(
-            self.effect(id)?.capability == provider.capability(),
-            "provider does not match the effect capability",
-        )?;
-        require(
+        self.check_model_provider(
+            id,
+            provider.capability(),
             provider.supports_model(&self.effect(id)?.model),
-            "provider does not support the saved model",
         )?;
+        if let Some(response) = self.reconciliation_response(id)? {
+            return Ok(Some(response));
+        }
+        let request = self.model_request(id)?;
+        let result = provider.reconcile(&request)?;
+        self.finish_model_reconciliation(store, id, result)
+    }
+    pub async fn reconcile_model_async(
+        &mut self,
+        store: &mut CheckpointStore,
+        id: EffectId,
+        provider: &mut impl AsyncModelProvider,
+    ) -> Result<Option<ObjectId>> {
+        self.check_model_provider(
+            id,
+            provider.capability(),
+            provider.supports_model(&self.effect(id)?.model),
+        )?;
+        if let Some(response) = self.reconciliation_response(id)? {
+            return Ok(Some(response));
+        }
+        let request = self.model_request(id)?;
+        let result = provider.reconcile(&request).await?;
+        self.finish_model_reconciliation(store, id, result)
+    }
+    fn reconciliation_response(&self, id: EffectId) -> Result<Option<ObjectId>> {
         match self.effect(id)?.state {
             EffectState::Completed { response } => return Ok(Some(response)),
             EffectState::InFlight | EffectState::OutcomeUnknown { .. } => {}
@@ -381,8 +476,15 @@ impl Vm<'_> {
                 return Err(Error("prepared effect has not been dispatched".into()));
             }
         }
-        let request = self.model_request(id)?;
-        match provider.reconcile(&request)? {
+        Ok(None)
+    }
+    fn finish_model_reconciliation(
+        &mut self,
+        store: &mut CheckpointStore,
+        id: EffectId,
+        result: Option<Vec<u16>>,
+    ) -> Result<Option<ObjectId>> {
+        match result {
             Some(response) => self.complete_model(store, id, response).map(Some),
             None => Ok(None),
         }

@@ -74,6 +74,12 @@ and do not inherit persistence.
   driver identities/hashes, deterministic options, and structured diagnostics.
   The compiler never executes the emitted guest code. See
   [compilation and installation boundaries](compilation.md).
+- Executor-independent asynchronous provider/dispatch/reconciliation/driver APIs.
+  Blocking and async paths share checkpoint transitions and driver accounting.
+  Independent universes progress on one executor thread while delivery waits;
+  async guest quanta yield after at most 1024 instructions. Dropped delivery
+  futures recover via receipts, without automatic resubmission. The native
+  OpenAI transport is still blocking pending the next integration step.
 
 ## Validation
 
@@ -81,7 +87,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 119 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 125 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -89,6 +95,10 @@ Thirteen driver tests cover budget accounting, automatic delivery, first/second
 submission and completion SIGKILL recovery, missing receipts, stale writers,
 fault persistence, and CLI authorization and recovery. The full CLI harness
 also runs end to end with `drive-local`.
+Six asynchronous-driver tests additionally verify independent-universe progress,
+CPU yielding, dropped futures before/after acceptance and during preflight,
+receipt wakeup of original frames, precise bounded accounting across restores,
+and stale-writer fencing. See [asynchronous host delivery](async-delivery.md).
 Eight structured-model tests cover frozen histories/bindings, malformed chains,
 full-body receipts, model rejection, limits, per-instruction and SIGKILL recovery,
 and upgrade of a legacy waiting call with its accepted receipt. A golden canonical

@@ -1,7 +1,7 @@
 //! Bounded host coordination. Delivery stays outside guest instruction execution.
 use crate::{
     checkpoint::CheckpointStore,
-    effects::{EffectState, ModelProvider},
+    effects::{AsyncModelProvider, EffectState, ModelProvider},
     error::{Error, Result, require},
     execution::ExecutionStatus,
     identity::EffectId,
@@ -32,90 +32,184 @@ pub struct DriverReport {
     pub provider_operations: u64,
 }
 
+// One state machine keeps blocking and asynchronous drivers on the same budget,
+// fault, dispatch, and recovery rules. It never contains a native provider future.
+struct Invocation {
+    limits: DriverLimits,
+    initial_instructions: u64,
+    operations: u64,
+}
+enum Action {
+    Dispatch(EffectId),
+    Reconcile(EffectId),
+    Stop(DriverStop),
+    Yield,
+}
+impl Invocation {
+    fn new(vm: &Vm<'_>, capability: &str, limits: DriverLimits) -> Result<Self> {
+        require(
+            vm.model_calls_enabled,
+            "model driver is disabled by the host",
+        )?;
+        crate::model::validate_identifier(capability)?;
+        require(
+            limits.checkpoint_interval > 0,
+            "checkpoint interval must be positive",
+        )?;
+        require(
+            vm.instructions_executed
+                .checked_add(limits.instructions)
+                .is_some(),
+            "driver instruction budget exceeds the cumulative counter range",
+        )?;
+        Ok(Self {
+            limits,
+            initial_instructions: vm.instructions_executed,
+            operations: 0,
+        })
+    }
+    fn next(
+        &mut self,
+        vm: &mut Vm<'_>,
+        store: &mut CheckpointStore,
+        cooperative: bool,
+    ) -> Result<Action> {
+        loop {
+            match vm.context.status {
+                ExecutionStatus::Completed { result } => {
+                    return Ok(Action::Stop(DriverStop::Completed(result)));
+                }
+                ExecutionStatus::Waiting { effect } => {
+                    if self.operations == self.limits.provider_operations {
+                        return Ok(Action::Stop(DriverStop::ProviderBudget { effect }));
+                    }
+                    self.operations += 1;
+                    return match vm.effect(effect)?.state {
+                        EffectState::Prepared => Ok(Action::Dispatch(effect)),
+                        EffectState::InFlight | EffectState::OutcomeUnknown { .. } => {
+                            Ok(Action::Reconcile(effect))
+                        }
+                        EffectState::Completed { .. } => {
+                            Err(Error("waiting guest already has a completed effect".into()))
+                        }
+                    };
+                }
+                ExecutionStatus::Runnable | ExecutionStatus::Paused => {
+                    let remaining = self.limits.instructions
+                        - (vm.instructions_executed - self.initial_instructions);
+                    if remaining == 0 {
+                        vm.context.status = ExecutionStatus::Paused;
+                        return Ok(Action::Stop(DriverStop::InstructionBudget));
+                    }
+                    // Limit each async poll's guest work even when the caller's
+                    // instruction/checkpoint budgets are much larger.
+                    let quantum = if cooperative {
+                        remaining.min(self.limits.checkpoint_interval).min(1024)
+                    } else {
+                        remaining
+                    };
+                    if let Err(error) =
+                        vm.run_checkpointed(store, quantum, self.limits.checkpoint_interval)
+                    {
+                        if matches!(vm.context.status, ExecutionStatus::Faulted { .. }) {
+                            store.save(vm)?;
+                        }
+                        return Err(error);
+                    }
+                    if cooperative {
+                        return Ok(Action::Yield);
+                    }
+                }
+                ExecutionStatus::Faulted { ref message } => {
+                    let error = Error(message.clone());
+                    store.save(vm)?;
+                    return Err(error);
+                }
+            }
+        }
+    }
+    fn finish(
+        self,
+        vm: &Vm<'_>,
+        store: &mut CheckpointStore,
+        stop: DriverStop,
+    ) -> Result<DriverReport> {
+        store.save(vm)?;
+        Ok(DriverReport {
+            stop,
+            instructions: vm.instructions_executed - self.initial_instructions,
+            provider_operations: self.operations,
+        })
+    }
+}
+async fn yield_once() {
+    let mut yielded = false;
+    std::future::poll_fn(|context| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            context.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+}
 impl Vm<'_> {
-    /// Run one bounded invocation, committing the final state on every successful
-    /// return. Limits reset on the next explicit invocation; they are host policy.
-    /// Only the active guest's waiting request is delivered. A zero instruction
-    /// budget still permits delivery to an already waiting guest.
+    /// Run one bounded invocation. Limits are per-invocation host policy. Only
+    /// the active guest's waiting request is delivered; every successful stop saves.
     pub fn drive_model(
         &mut self,
         store: &mut CheckpointStore,
         provider: &mut impl ModelProvider,
         limits: DriverLimits,
     ) -> Result<DriverReport> {
-        require(
-            self.model_calls_enabled,
-            "model driver is disabled by the host",
-        )?;
-        // Supplying a host provider grants that capability for this invocation.
-        // Each waiting effect must still match its capability and model exactly.
-        crate::model::validate_identifier(provider.capability())?;
-        require(
-            limits.checkpoint_interval > 0,
-            "checkpoint interval must be positive",
-        )?;
-        require(
-            self.instructions_executed
-                .checked_add(limits.instructions)
-                .is_some(),
-            "driver instruction budget exceeds the cumulative counter range",
-        )?;
-        let initial_instructions = self.instructions_executed;
-        let mut operations = 0;
+        let mut invocation = Invocation::new(self, provider.capability(), limits)?;
         let stop = loop {
-            match self.context.status {
-                ExecutionStatus::Completed { result } => break DriverStop::Completed(result),
-                ExecutionStatus::Waiting { effect } => {
-                    if operations == limits.provider_operations {
-                        break DriverStop::ProviderBudget { effect };
-                    }
-                    operations += 1;
-                    match self.effect(effect)?.state {
-                        EffectState::Prepared => {
-                            self.dispatch_model(store, effect, provider)?;
-                        }
-                        EffectState::InFlight | EffectState::OutcomeUnknown { .. } => {
-                            if self.reconcile_model(store, effect, provider)?.is_none() {
-                                break DriverStop::OutcomeUnknown { effect };
-                            }
-                        }
-                        EffectState::Completed { .. } => {
-                            return Err(Error(
-                                "waiting guest already has a completed effect".into(),
-                            ));
-                        }
+            match invocation.next(self, store, false)? {
+                Action::Dispatch(effect) => {
+                    self.dispatch_model(store, effect, provider)?;
+                }
+                Action::Reconcile(effect) => {
+                    if self.reconcile_model(store, effect, provider)?.is_none() {
+                        break DriverStop::OutcomeUnknown { effect };
                     }
                 }
-                ExecutionStatus::Runnable | ExecutionStatus::Paused => {
-                    let remaining =
-                        limits.instructions - (self.instructions_executed - initial_instructions);
-                    if remaining == 0 {
-                        self.context.status = ExecutionStatus::Paused;
-                        break DriverStop::InstructionBudget;
-                    }
-                    if let Err(error) =
-                        self.run_checkpointed(store, remaining, limits.checkpoint_interval)
-                    {
-                        // Fault diagnostics are durable too. A checkpoint failure
-                        // is propagated rather than acknowledging an unsaved fault.
-                        if matches!(self.context.status, ExecutionStatus::Faulted { .. }) {
-                            store.save(self)?;
-                        }
-                        return Err(error);
-                    }
-                }
-                ExecutionStatus::Faulted { ref message } => {
-                    let error = Error(message.clone());
-                    store.save(self)?;
-                    return Err(error);
-                }
+                Action::Stop(stop) => break stop,
+                Action::Yield => unreachable!(),
             }
         };
-        store.save(self)?;
-        Ok(DriverReport {
-            stop,
-            instructions: self.instructions_executed - initial_instructions,
-            provider_operations: operations,
-        })
+        invocation.finish(self, store, stop)
+    }
+    /// Await host delivery without blocking an executor worker. Independent
+    /// universes can be driven concurrently. This VM still has one guest context.
+    /// Native futures are never saved. Dropping this future after dispatch keeps
+    /// its request InFlight, requiring reconciliation on the next invocation.
+    pub async fn drive_model_async(
+        &mut self,
+        store: &mut CheckpointStore,
+        provider: &mut impl AsyncModelProvider,
+        limits: DriverLimits,
+    ) -> Result<DriverReport> {
+        let mut invocation = Invocation::new(self, provider.capability(), limits)?;
+        let stop = loop {
+            match invocation.next(self, store, true)? {
+                Action::Dispatch(effect) => {
+                    self.dispatch_model_async(store, effect, provider).await?;
+                }
+                Action::Reconcile(effect) => {
+                    if self
+                        .reconcile_model_async(store, effect, provider)
+                        .await?
+                        .is_none()
+                    {
+                        break DriverStop::OutcomeUnknown { effect };
+                    }
+                }
+                Action::Stop(stop) => break stop,
+                Action::Yield => yield_once().await,
+            }
+        };
+        invocation.finish(self, store, stop)
     }
 }
