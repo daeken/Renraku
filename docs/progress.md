@@ -68,6 +68,12 @@ and do not inherit persistence.
   provider operation. A fresh process reopened the saved result with zero
   instructions and provider operations. Headerless SSE is accepted through the
   same bounded terminal parser; explicitly different transport types fail.
+- Reusable external Roslyn compiler in `tools/Compiler`: arbitrary UTF-8 source
+  files compile against an exact supplied Renraku core, without inheriting the
+  host BCL. New output bundles capture source/reference/DLL bytes, Roslyn and
+  driver identities/hashes, deterministic options, and structured diagnostics.
+  The compiler never executes the emitted guest code. See
+  [compilation and installation boundaries](compilation.md).
 
 ## Validation
 
@@ -75,7 +81,7 @@ Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 114 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 119 tests pass. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -98,6 +104,13 @@ after completion receipt commit, missing MIME headers, and non-SSE diagnostics.
 A CLI integration test verifies opt-in,
 durable preflight rejection, zero budgets, and credential absence from snapshots.
 Both ignored subprocess probes are launched by their parent crash tests.
+Five compiler tests verify deterministic multi-file output and exact manifests,
+structured diagnostics, no implicit host framework references, preserved outputs,
+input limits, and explicit loader rejection of unsupported emitted CIL. A nested
+frame checkpoint resumes after deleting its source/bundle, retains static state
+on a second execution, and reopens with the native CLI under an empty PATH.
+The external Hello example returned 36 in 11 instructions; its CLI checkpoint
+paused at instruction 10 and resumed to the same result.
 Production discovery and CLI status were smoke-tested in the auth milestone.
 The user completed interactive login. Plan permission, account model discovery,
 live inference, and a zero-operation restore have now been verified. Initial
@@ -125,6 +138,22 @@ the smoke test, not made a default; continue selecting models from account
 discovery. Keep subscription access as the intended path, with no API-key billing
 fallback. Do not start login or more real inference in an unattended heartbeat.
 Existing local fixtures allow independent progress.
+
+The latest user direction includes website hosting and runtime compilation, with
+Roslyn explicitly allowed to remain external and return a DLL. The reusable host
+compiler seam is implemented; it does not add a guest Compile intrinsic, durable
+compiler requests, or installation into an already running Program. Those need
+separate versioned code-registry transactions and active-frame retention. Keep
+the original architecture's self-hosting/non-arbitrary-.NET limits; do not turn
+running Roslyn inside Renraku into a prerequisite for runtime compilation.
+
+For website work, use a host HTTP edge with managed handlers/state and a durable
+request inbox, bounded parsing, and local binding first. Persist accepted work
+before executing it and response/state before sending. A crashed socket is not
+recoverable, so define client request IDs/retry deduplication explicitly. The
+first proof should retain page state and avoid duplicate mutations across
+request recovery. HTTP guest APIs are not implemented yet; see the
+[workload direction](compilation.md#website-workload).
 
 The user raised async-by-default as an early replacement-BCL direction.
 [Suspension by default](suspension.md) now records the proposed contract and

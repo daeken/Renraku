@@ -38,8 +38,9 @@ Recovery validates this state and resumes without needing the original assembly
 files or the .NET SDK. Checkpoint intervals and execution budgets are measured
 in guest instructions. The CLI can inspect both live and saved state.
 
-Live code replacement, type initializers, multiple simultaneous contexts, and
-real model providers remain to be implemented. The [CIL profile](docs/cil-profile.md)
+Live code replacement, type initializers, and multiple simultaneous contexts
+remain to be implemented. Subscription-backed model inference is available.
+The [CIL profile](docs/cil-profile.md)
 and [checkpoint contract](docs/checkpoints.md) specify the current limits.
 
 ## Run the demonstration
@@ -69,6 +70,22 @@ cargo run -p renraku-vm -- run target/guest/Renraku.CoreLib.dll target/guest/Ren
 The budgeted CLI prints the paused state and exits; it does not save that state.
 Embedding applications can continue execution by calling `Vm::run` again on the
 same VM.
+
+## Compile your own guest
+
+The [external compiler](docs/compilation.md) runs Roslyn on the host and emits a
+bundle against the supplied Renraku core. Choose a new output directory:
+
+```sh
+dotnet run --project tools/Compiler -- --core target/guest/Renraku.CoreLib.dll --output target/compiled-hello --name Example.Hello guest/examples/Hello.cs
+cargo run -p renraku-vm -- run target/compiled-hello/Renraku.CoreLib.dll target/compiled-hello/Example.Hello.dll Example.Hello::Run
+```
+
+The result is **36**. The bundle captures exact sources, reference bytes, compiler
+identities/hashes, options, and emitted CIL. Compilation and runtime acceptance
+remain separate; unsupported CIL is rejected. Saved universes retain code and
+resume after the original compiler, source, and DLL files are gone. Loading new
+code into an already running universe remains future work.
 
 ## Save and resume a universe
 

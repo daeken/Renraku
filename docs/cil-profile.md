@@ -12,6 +12,11 @@ references; the guest compiles with only that CoreLib as a reference. The same
 simulation also compiles against the host BCL for differential tests under
 CoreCLR.
 
+`tools/Compiler` also compiles arbitrary source files against an explicitly
+supplied Renraku core and emits a captured build bundle. It runs on the host CLR;
+the resulting DLL still passes this loader's supported-profile checks. It does
+not install new assemblies into a running universe. See [external compilation](compilation.md).
+
 The Rust loader reads PE32 and PE32+ containers, the CLI header, compressed
 metadata tables, string and blob heaps, signatures, and tiny or fat method
 bodies. It requires managed IL-only assemblies. References resolve among the
