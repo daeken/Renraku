@@ -266,7 +266,7 @@ impl BuildArtifact {
             manifest.assembly.file == format!("{name}.dll") && !image.is_reference_assembly()?,
             "captured implementation is a facade or has a different module identity",
         )?;
-        let mut scopes = BTreeSet::from(["Renraku.CoreLib".to_owned()]);
+        let mut scopes = BTreeSet::new();
         for reference in &manifest.references {
             let view = ReferenceView::from_json(&self.files[&reference.view.file])?;
             require(
@@ -285,11 +285,13 @@ impl BuildArtifact {
                     && reference.view.file == format!("references/{name}.view.json")
                     && facade.string(facade.row(32, 1)?[7])? == name
                     && facade.is_reference_assembly()?
+                    && (name != "Renraku.CoreLib" || view.is_scoped())
                     && scopes.insert(name.into()),
                 "invalid/duplicate captured reference module",
             )?;
         }
         check_reference_views(&self.views()?)?;
+        scopes.insert("Renraku.CoreLib".to_owned());
         for row in image.rows(35) {
             require(
                 scopes.contains(image.string(row[6])?),
@@ -462,6 +464,7 @@ pub fn install_once_with_observer(
         runtime_core.is_some(),
         "compiler core does not match this universe",
     )?;
+    crate::bootstrap::authorize_views(&vm, &artifact.views()?)?;
     let linked = vm
         .program
         .link_modules(&[artifact.implementation()?], &artifact.views()?)?;
@@ -514,6 +517,7 @@ impl Vm<'_> {
                 "installation core is absent",
             )?;
             validate_reference_views(&record.artifact.views()?, self.program)?;
+            crate::bootstrap::authorize_views(self, &record.artifact.views()?)?;
         }
         Ok(())
     }

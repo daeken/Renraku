@@ -60,7 +60,7 @@ static partial class Compiler
             else inputs.Add(bytes);
             if (inputs.Count > 16) throw new ArgumentException("reference set exceeds 16 modules");
         }
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Renraku.CoreLib", request.Name };
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { request.Name };
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var typeNames = new HashSet<string>(StringComparer.Ordinal);
         var specs = inputs.Select(bytes =>
@@ -70,21 +70,28 @@ static partial class Compiler
             string schema = root.GetProperty("schemaJson").GetString() ?? throw new ArgumentException("missing schemaJson");
             string schemaHash = root.GetProperty("schemaHash").GetString() ?? throw new ArgumentException("missing schemaHash");
             int format = root.GetProperty("format").GetInt32();
-            if (format is not (1 or 2) || Hash(Encoding.UTF8.GetBytes(schema)) != schemaHash || root.GetProperty("coreSha256").GetString() != Hash(core))
+            if (format is not (1 or 2 or 3) || Hash(Encoding.UTF8.GetBytes(schema)) != schemaHash || root.GetProperty("coreSha256").GetString() != Hash(core))
                 throw new ArgumentException("reference view hash, core, or format mismatch");
             using var metadata = JsonDocument.Parse(schema);
             var data = metadata.RootElement;
             string name = data.GetProperty("moduleName").GetString()!;
             string id = data.GetProperty("moduleId").GetString()!;
             ValidateName(name);
-            if (!names.Add(name) || !ids.Add(id)) throw new ArgumentException("duplicate reference module name/identity");
+            if ((name.Equals("Renraku.CoreLib", StringComparison.OrdinalIgnoreCase) && (name != "Renraku.CoreLib" || format != 3)) || !names.Add(name) || !ids.Add(id)) throw new ArgumentException("duplicate reference module name/identity");
             bool dependencies = data.TryGetProperty("dependencies", out var deps) && deps.GetArrayLength() != 0;
-            if ((format == 2) != dependencies) throw new ArgumentException("reference dependency format mismatch");
+            if ((format == 3) != data.TryGetProperty("scope",out _) || (format != 3 && (format == 2) != dependencies)) throw new ArgumentException("reference dependency format mismatch");
             return new FacadeSpec(name, id, bytes, schemaHash, data.Clone());
         }).ToArray();
         if (strictNames || specs.Any(s=>s.Schema.TryGetProperty("dependencies",out var deps)&&deps.GetArrayLength()!=0))
             foreach(var binding in specs.SelectMany(s=>s.Schema.GetProperty("bindings").EnumerateArray()).Where(b=>b.GetProperty("kind").GetString()=="type"))
                 if (!typeNames.Add(binding.GetProperty("name").GetString()!)) throw new ArgumentException("ambiguous type name across reference modules");
+        var scoped = specs.Where(s => s.Schema.TryGetProperty("scope", out _)).ToArray();
+        FacadeSpec? filteredCore = null;
+        if(scoped.Length != 0) {
+            string scope = scoped[0].Schema.GetProperty("scope").GetRawText();
+            if(scoped.Length != specs.Length || scoped.Any(s=>s.Schema.GetProperty("scope").GetRawText()!=scope)) throw new ArgumentException("mixed scoped compiler views");
+            filteredCore = specs.SingleOrDefault(s=>s.Name=="Renraku.CoreLib") ?? throw new ArgumentException("missing filtered core");
+        }
         var built = new Dictionary<string, ReferenceInput>(StringComparer.Ordinal);
         var active = new HashSet<string>(StringComparer.Ordinal);
         ReferenceInput Emit(FacadeSpec spec)
@@ -114,9 +121,10 @@ static partial class Compiler
                     AddDependency(target);
                 }
             }
+            if(filteredCore is not null && spec != filteredCore) AddDependency(filteredCore);
             string declaration = "[assembly: global::System.Runtime.CompilerServices.ReferenceAssembly]\n" + spec.Schema.GetProperty("declaration").GetString();
             var facade = CSharpCompilation.Create(spec.Name, new[] { CSharpSyntaxTree.ParseText(declaration, parse, "reference.cs", Encoding.UTF8) },
-                new[] { MetadataReference.CreateFromImage(core) }.Concat(references.OrderBy(r => r.Key, StringComparer.Ordinal).Select(r => r.Value)), options);
+                (filteredCore is null ? new[] { MetadataReference.CreateFromImage(core) } : Array.Empty<MetadataReference>()).Concat(references.OrderBy(r => r.Key, StringComparer.Ordinal).Select(r => r.Value)), options);
             using var buffer = new BoundedImage(MaxAssembly);
             var emitted = facade.Emit(buffer, options: new Microsoft.CodeAnalysis.Emit.EmitOptions(metadataOnly: true, includePrivateMembers: false, runtimeMetadataVersion: "v4.0.30319"));
             if (!emitted.Success) throw new ArgumentException("invalid reference declaration: " + string.Join("; ", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Take(8).Select(d => Limit(d.GetMessage(System.Globalization.CultureInfo.InvariantCulture), 256))));

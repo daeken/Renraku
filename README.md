@@ -98,7 +98,10 @@ calls through durable guest waits and atomic reply/wakeup recovery. General
 foreign references and copying/mobility remain ahead; the initial contract allows
 one object/method per fieldless local type. [Closed child endowments](docs/child-endowments.md)
 now enforce explicit code/class/object/field/effect rights and a filtered child
-tool surface. Dynamic child compilation, delegation and a general hostile-agent
+tool surface. [Scoped compiler bootstrap](docs/scoped-bootstrap.md) now compiles
+captured C# against selected declarations before sealing, including opaque
+remote handles, without exposing private APIs or opening the sealed registry.
+Dynamic child compilation, delegation and a general hostile-agent
 sandbox remain future work.
 
 ## Run the demonstration

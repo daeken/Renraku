@@ -4,10 +4,10 @@ use super::*;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Dependency {
-    module_id: String,
-    module_name: String,
-    schema_hash: String,
-    types: Vec<String>,
+    pub(super) module_id: String,
+    pub(super) module_name: String,
+    pub(super) schema_hash: String,
+    pub(super) types: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -22,7 +22,13 @@ fn schema(view: &ReferenceView) -> Result<Schema> {
     serde_json::from_str(&view.schema_json).map_err(|_| Error("invalid reference schema".into()))
 }
 pub(super) fn view(schema: Schema, core: String) -> Result<ReferenceView> {
-    let format = if schema.dependencies.is_empty() { 1 } else { 2 };
+    let format = if schema.scope.is_some() {
+        3
+    } else if schema.dependencies.is_empty() {
+        1
+    } else {
+        2
+    };
     let schema_json = serde_json::to_string(&schema).map_err(|e| Error(e.to_string()))?;
     Ok(ReferenceView {
         format,
@@ -31,7 +37,7 @@ pub(super) fn view(schema: Schema, core: String) -> Result<ReferenceView> {
         schema_json,
     })
 }
-fn ordering(schemas: &[Schema]) -> Result<Vec<usize>> {
+pub(super) fn ordering(schemas: &[Schema]) -> Result<Vec<usize>> {
     fn visit(
         index: usize,
         schemas: &[Schema],
@@ -73,7 +79,7 @@ fn ordering(schemas: &[Schema]) -> Result<Vec<usize>> {
 }
 /// Validate a complete frozen dependency graph without consulting live state.
 pub fn check_reference_views(views: &[ReferenceView]) -> Result<()> {
-    check_graph(views, views.iter().any(|view| view.format == 2))
+    check_graph(views, views.iter().any(|view| matches!(view.format, 2 | 3)))
 }
 fn check_graph(views: &[ReferenceView], strict_names: bool) -> Result<()> {
     require(views.len() <= 16, "reference set exceeds 16 modules")?;
@@ -100,6 +106,20 @@ fn check_graph(views: &[ReferenceView], strict_names: bool) -> Result<()> {
                 "ambiguous type name across reference modules",
             )?;
         }
+    }
+    if let Some(scope) = schemas.iter().find_map(|s| s.scope.as_ref()) {
+        require(
+            schemas.iter().all(|s| s.scope.as_ref() == Some(scope)),
+            "mixed or mismatched scoped reference set",
+        )?;
+        require(
+            schemas
+                .iter()
+                .filter(|s| s.module_name == "Renraku.CoreLib")
+                .count()
+                == 1,
+            "scoped references require one filtered core",
+        )?;
     }
     ordering(&schemas)?;
     for s in &schemas {
@@ -138,7 +158,7 @@ fn check_graph(views: &[ReferenceView], strict_names: bool) -> Result<()> {
 pub fn validate_reference_views(views: &[ReferenceView], program: &Program) -> Result<()> {
     // Original isolated views were independently validated, including callers
     // that supplied overlapping views of one module to raw installation.
-    if views.iter().any(|view| view.format == 2) {
+    if views.iter().any(|view| matches!(view.format, 2 | 3)) {
         check_reference_views(views)?;
     }
     let schemas = views.iter().map(schema).collect::<Result<Vec<_>>>()?;
@@ -148,7 +168,8 @@ pub fn validate_reference_views(views: &[ReferenceView], program: &Program) -> R
             .iter()
             .map(|id| program.find_type(id))
             .collect::<Result<Vec<_>>>()?;
-        let (mut actual, core, foreign) = program.reference_schema(&roots, true)?;
+        let (mut actual, core, foreign) =
+            program.filtered_schema(&roots, true, data.scope.as_ref())?;
         for (module, types) in foreign {
             let index = schemas
                 .iter()

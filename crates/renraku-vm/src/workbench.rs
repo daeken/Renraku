@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 mod references;
+mod scoped;
 pub use references::{ReferenceSet, check_reference_views, validate_reference_views};
+pub(crate) use scoped::{ApiFilter, ScopeBinding};
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -37,6 +39,8 @@ struct Schema {
     bindings: Vec<Binding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dependencies: Vec<references::Dependency>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<ScopeBinding>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -58,13 +62,14 @@ impl ReferenceView {
         let view: Self =
             serde_json::from_slice(bytes).map_err(|_| Error("invalid reference view".into()))?;
         require(
-            matches!(view.format, 1 | 2) && hash(view.schema_json.as_bytes()) == view.schema_hash,
+            matches!(view.format, 1..=3) && hash(view.schema_json.as_bytes()) == view.schema_hash,
             "reference schema hash or format mismatch",
         )?;
         let schema: Schema = serde_json::from_str(&view.schema_json)
             .map_err(|_| Error("invalid reference schema".into()))?;
         require(
-            (view.format == 1) == schema.dependencies.is_empty(),
+            ((view.format == 3) == schema.scope.is_some())
+                && (view.format == 3 || (view.format == 1) == schema.dependencies.is_empty()),
             "reference dependency format mismatch",
         )?;
         require(
@@ -75,7 +80,18 @@ impl ReferenceView {
                 && schema.dependencies.len() <= 16,
             "reference schema exceeds limits",
         )?;
+        if let Some(scope) = &schema.scope {
+            scope.validate()?;
+        }
         Ok(view)
+    }
+    pub(crate) fn scope(&self) -> Result<Option<ScopeBinding>> {
+        Ok(serde_json::from_str::<Schema>(&self.schema_json)
+            .map_err(|_| Error("invalid reference schema".into()))?
+            .scope)
+    }
+    pub fn is_scoped(&self) -> bool {
+        self.format == 3
     }
     pub fn validate(&self, program: &Program) -> Result<()> {
         validate_reference_views(std::slice::from_ref(self), program)
@@ -170,6 +186,18 @@ impl Program {
         roots: &[TypeId],
         allow_foreign: bool,
     ) -> Result<(Schema, String, BTreeMap<AssemblyId, BTreeSet<TypeId>>)> {
+        self.filtered_schema(roots, allow_foreign, None)
+    }
+    fn filtered_schema(
+        &self,
+        roots: &[TypeId],
+        allow_foreign: bool,
+        scope: Option<&ScopeBinding>,
+    ) -> Result<(Schema, String, BTreeMap<AssemblyId, BTreeSet<TypeId>>)> {
+        if let Some(s) = scope {
+            s.validate()?;
+            s.filter.validate_against(self)?;
+        }
         require(
             !roots.is_empty() && roots.len() <= 32,
             "select between 1 and 32 reference roots",
@@ -191,7 +219,7 @@ impl Program {
         let image = Image::parse(&self.images[&module])?;
         let module_name = image.string(image.row(32, 1)?[7])?.to_owned();
         require(
-            module_name != "Renraku.CoreLib",
+            module_name != "Renraku.CoreLib" || scope.is_some(),
             "use the bootstrap core image as a compiler reference",
         )?;
         require(
@@ -209,6 +237,9 @@ impl Program {
                 })
             })
             .ok_or_else(|| Error("bootstrap core is missing".into()))?;
+        if module_name == "Renraku.CoreLib" {
+            return scoped::core_schema(self, roots, scope.unwrap(), module, &image, hash(core));
+        }
         let mut builder = ViewBuilder {
             program: self,
             image,
@@ -220,6 +251,7 @@ impl Program {
             bindings: Vec::new(),
             allow_foreign,
             foreign: BTreeMap::new(),
+            scope: scope.cloned(),
         };
         while let Some(id) = builder.pending.pop() {
             if builder.seen.insert(id) {
@@ -252,6 +284,7 @@ impl Program {
             declaration,
             bindings: builder.bindings,
             dependencies: Vec::new(),
+            scope: scope.cloned(),
         };
         Ok((schema, hash(core), builder.foreign))
     }
@@ -267,6 +300,7 @@ struct ViewBuilder<'a> {
     bindings: Vec<Binding>,
     allow_foreign: bool,
     foreign: BTreeMap<AssemblyId, BTreeSet<TypeId>>,
+    scope: Option<ScopeBinding>,
 }
 fn identifier(name: &str) -> Result<String> {
     require(
@@ -298,7 +332,34 @@ fn access(flags: u32) -> Result<&'static str> {
     }
 }
 impl ViewBuilder<'_> {
+    fn field_selected(&self, rid: u32) -> bool {
+        self.scope.as_ref().is_none_or(|s| {
+            self.program
+                .field_tokens
+                .get(&(self.module, 0x04000000 | rid))
+                .is_some_and(|id| s.filter.field(*id))
+        })
+    }
+    fn method_selected(&self, rid: u32, owner: TypeId) -> bool {
+        self.scope.as_ref().is_none_or(|s| {
+            let Some(id) = self
+                .program
+                .method_tokens
+                .get(&(self.module, 0x06000000 | rid))
+            else {
+                return false;
+            };
+            let Ok(m) = self.program.method(*id) else {
+                return false;
+            };
+            s.filter.method(m.binding.code)
+                && (m.name != ".ctor" || s.filter.construct.contains(&owner.to_string()))
+        })
+    }
     fn type_name(&mut self, id: TypeId) -> Result<String> {
+        if let Some(scope) = &self.scope {
+            scope.filter.allow_type(id)?;
+        }
         let ty = self
             .program
             .types
@@ -417,6 +478,9 @@ impl ViewBuilder<'_> {
         Ok((result, parameters))
     }
     fn render(&mut self, id: TypeId) -> Result<()> {
+        if let Some(scope) = &self.scope {
+            scope.filter.allow_type(id)?;
+        }
         let ty = &self.program.types[&id];
         require(
             ty.flags & !0x00100187 == 0 && ty.flags & 7 <= 1,
@@ -439,8 +503,9 @@ impl ViewBuilder<'_> {
             .map(|((_, t), _)| t & 0xffffff)
             .unwrap();
         require(
-            !self.image.rows(21).iter().any(|r| r[0] == rid)
-                && !self.image.rows(18).iter().any(|r| r[0] == rid),
+            self.scope.is_some()
+                || (!self.image.rows(21).iter().any(|r| r[0] == rid)
+                    && !self.image.rows(18).iter().any(|r| r[0] == rid)),
             "properties and events are not supported by reference export yet",
         )?;
         let row = self.image.row(2, rid)?.to_vec();
@@ -462,8 +527,8 @@ impl ViewBuilder<'_> {
                 let parent = attribute[0] >> 5;
                 match attribute[0] & 31 {
                     3 => parent == rid,
-                    0 => (row[5]..method_end).contains(&parent),
-                    1 => (row[4]..field_end).contains(&parent),
+                    0 => (row[5]..method_end).contains(&parent) && self.method_selected(parent, id),
+                    1 => (row[4]..field_end).contains(&parent) && self.field_selected(parent),
                     4 => (parameter_start..parameter_end).contains(&parent),
                     _ => false,
                 }
@@ -474,6 +539,9 @@ impl ViewBuilder<'_> {
         let (namespace, short) = name.rsplit_once('.').unwrap_or(("", &name));
         let mut body = Vec::new();
         for field_rid in row[4]..field_end {
+            if !self.field_selected(field_rid) {
+                continue;
+            }
             let field = self.image.row(4, field_rid)?.to_vec();
             require(
                 field[0] & !0x37 == 0,
@@ -505,7 +573,11 @@ impl ViewBuilder<'_> {
                 signature: declaration,
             });
         }
+        let mut constructor = false;
         for method_rid in row[5]..method_end {
+            if !self.method_selected(method_rid, id) {
+                continue;
+            }
             let method = self.image.row(6, method_rid)?.to_vec();
             let method_name = self.image.string(method[3])?.to_owned();
             require(
@@ -536,6 +608,7 @@ impl ViewBuilder<'_> {
             }
             let (result, parameters) = self.signature(&blob, &parameter_names)?;
             let declaration = if method_name == ".ctor" {
+                constructor = true;
                 format!(
                     "{} extern {}({});",
                     access(method[2])?,
@@ -559,6 +632,9 @@ impl ViewBuilder<'_> {
                 name: format!("{name}::{method_name}"),
                 signature: declaration,
             });
+        }
+        if self.scope.is_some() && !constructor && ty.flags & 0x180 != 0x180 {
+            body.push(format!("private extern {}();", identifier(short)?));
         }
         body.sort();
         let modifier = match ty.flags & 0x180 {

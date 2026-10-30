@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod artifact;
+pub mod bootstrap;
 pub mod checkpoint;
 pub mod cil;
 pub mod compiler;

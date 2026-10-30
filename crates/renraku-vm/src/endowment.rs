@@ -100,7 +100,7 @@ fn registry(program: &Program) -> String {
     }
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
-fn imports_hash(vm: &Vm<'_>) -> Result<String> {
+pub(crate) fn imports_hash(vm: &Vm<'_>) -> Result<String> {
     let mut h = Sha256::new();
     h.update(b"renraku.child.imports.v1\0");
     for (name, id) in vm
@@ -442,6 +442,7 @@ pub fn seal(store: &mut CheckpointStore, endowment: &Endowment) -> Result<()> {
         objects: endowment.objects.iter().map(ToString::to_string).collect(),
         effects: endowment.effects.iter().cloned().collect(),
     };
+    crate::bootstrap::admit_seal(&vm, endowment)?;
     admission(&vm, &p)?;
     for id in &p.objects {
         let object = vm.heap.object(oid(id)?)?;

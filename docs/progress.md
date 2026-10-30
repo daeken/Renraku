@@ -885,15 +885,50 @@ and do not inherit persistence.
   sandbox. See [closed child endowments](child-endowments.md). No inference used.
 
 
+- Trusted scoped compiler bootstrap now connects child endowments to captured
+  external C# compilation before sealing. `bootstrap::prepare` commits immutable
+  approval of original module images/logical bindings, imports/handles, API IDs,
+  objects/effects and the idle execution/instruction counter. Format-3 subset
+  views carry a common approval/scope binding and one metadata-only filtered
+  core; legacy full format-1/2 views and set bytes remain unchanged. Custom
+  facades omit denied classes/fields/statics/helpers/constructors/source while
+  preserving selected signedness/visibility/readonly/member IDs. Fixed core
+  scaffolding supports C# predefined types, fieldless String data and optional
+  explicit Object construction; other scoped CoreLib member APIs currently
+  reject. Original runtime core bytes remain captured separately and unchanged.
+  Pure pinned compiler jobs use the existing durable service; no guest compiler
+  capability is added. Installation checks actual schema and the saved trusted
+  approval, not facade possession or hashes. Seal permits only attenuation over
+  original rights plus selected captured caller code, checks every actual CIL
+  body and rejects execution since approval. Closed post-seal registry/import
+  rules remain. New metadata uses bounded canonical managed roots under
+  renraku.bootstrap-v1, retaining original endowed objects with no release API;
+  no binary/value/frame representation changes.
+  Five integrations cover compiler/private API denial, scope/hash forgery,
+  mixed/missing core, unknown IDs/rebinding/widening, failed preparation and
+  terminal saves, repaired-digest corruption and unsigned readonly declarations.
+  A deliberately forged captured private-field caller returns 8675309 in the
+  trusted unsealed VM but rejects final child admission. The ordinary original
+  Node changes19->26->23 with every instruction checkpointed/collected, pinned
+  receipt arguments and old replay26/Calls2. A captured C# caller uses only
+  Node.Value and a remote handle in SDK-free native processes, retaining original
+  local node19->20/owner Counter19->26 and returning46 once after a saved remote
+  wait/GC. Key/server/compiler-ledger-free replay keeps Calls1 and provenance;
+  no Counter declaration/state is copied. No inference used; bounded servers
+  exit. See [scoped bootstrap](scoped-bootstrap.md). This is pre-seal bootstrap,
+  not dynamic child code installation, broader CoreLib export or delegation.
+
+
 ## Validation
 
 Run `cargo test --workspace`, `cargo fmt --all -- --check`, and
 `cargo clippy --workspace --all-targets -- -D warnings`. The full suite includes
 CoreCLR comparisons for twenty guest cases, per-instruction checkpoint tests,
 actual process kills, format upgrades, exact UTF-16 recovery, and stale writers.
-All 378 tests pass. One concurrent local authentication fixture hit an auth-store
-lock error on an earlier run; isolated and full default reruns passed without
-authentication/retry changes or live inference. Eighteen effect tests cover intent, dispatch, and response/wakeup
+All 383 tests pass, including five scoped-bootstrap integrations. The final
+compiler/approval reruns, formatting and strict clippy also pass. A prior milestone
+had a transient local auth fixture lock failure; its isolated/full reruns passed
+without authentication/retry changes or live inference. Eighteen effect tests cover intent, dispatch, and response/wakeup
 crash windows with live CIL frames, per-instruction harness recovery, missing
 receipt uncertainty, failed response rollback, malformed waiting continuations,
 capability checks, legacy outbox upgrade, and linked-history retention after GC.
@@ -1209,13 +1244,17 @@ references, returned object grants and hostile child isolation remain absent.
 [Closed child endowments](child-endowments.md) now enforce fixed class/code/
 object/field/effect rights at admission, runtime and scoped tools, with real
 adversarial CIL and native remote-call evidence. The trusted workbench remains
-separate. Next build scope-filtered frozen compiler views and real C# bootstrap
-compilation against only endowed APIs/opaque handles, preserving original IDs,
-source and receipts without full-module/source fallback. Keep version-1 registry
-seals immutable; later dynamic child installation needs an explicit versioned
-atomic admission contract. Then extend per-reference/returned grants, privileged
-local code compartments, bounded method sets/multiple referents, graph copies,
-fenced mobility and cross-machine execution in verified steps.
+separate. [Scoped compiler bootstrap](scoped-bootstrap.md) now exports versioned
+subset views, compiles captured C# against selected APIs/opaque handles and
+checks saved approval at installation/sealing without full-module/source
+fallback. The closed seal stays immutable. Next broaden bounded remote method
+sets and multiple referents while preserving original authoritative identity,
+explicit recipient/member grants, caller type binding and every durable wait/
+receipt/uncertainty rule. Keep v1 import/wire/result contracts readable and do
+not silently widen returned object projection. Returned references then need
+versioned attenuation/type binding; graph copies, fenced mobility and cross-machine
+execution remain separate. Dynamic child installation and privileged local
+compartments still need explicit atomic admission/authority contracts.
 Preserve legacy readers and all current runtime,
 compiler, receipt, model/publication, library and demo contracts.
 

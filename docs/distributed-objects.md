@@ -4,7 +4,9 @@ This is the next development direction selected by the user on October 29,
 2026. It specifies the implementation sequence and acceptance boundaries;
 a narrow imported-method handle and portable CIL wait are now implemented,
 and an opt-in [closed child profile](child-endowments.md) now enforces explicit
-endowments. General foreign references, graph copying and dynamic child security
+endowments. [Scoped pre-seal C# bootstrap](scoped-bootstrap.md) now compiles
+against selected frozen APIs without opening the closed registry. General
+foreign references, graph copying and dynamic child security
 remain ahead. [Fixed-owner placement and method-grant preflight](placement.md)
 now persists and validates explicit policies, but does not enforce placement on
 all local execution or execute remote calls. The existing localhost website is an HTTP
@@ -120,7 +122,9 @@ The [closed child endowment profile](child-endowments.md) now enforces fixed
 code/class/object/member/effect permissions at admission, execution and scoped
 inspection. It has no ambient parent or sibling controller. It supports opaque
 remote-method endowments and explicitly authorized local data, without privileged
-local implementation frames or dynamic installation. The existing coding agent
+local implementation frames or dynamic installation. Scoped compiler views and
+captured C# bootstrap are now checked against a saved trusted approval before
+sealing; they do not confer extra authority or expose full modules/source. The existing coding agent
 still controls trusted computation and is **not** a hostile code sandbox. That claim cannot change until runtime enforcement and adversarial
 escape tests exist. ObjectMap is a useful container of endowed references, not
 an enforcement boundary by itself.
@@ -197,9 +201,12 @@ protocol design alone is not network transparency.
 
 ## Follow-on exits
 
-1. Enforce the initial endowment throughout child-universe metadata, execution
-   and inspection; prove attempted parent/sibling escape with handcrafted CIL.
-   Denial tests are a prerequisite to advertising a security sandbox.
+1. The closed endowment profile and pre-seal scoped compiler bootstrap now enforce
+   their stated execution/inspection/admission boundaries with handcrafted CIL
+   denial evidence. Broader dynamic child code/privileged compartments require
+   explicit new contracts. Extend bounded remote method sets and multiple
+   referents before returned-object delegation; retain original identity and
+   per-method grants.
 2. Extend remote references deliberately to returned object capabilities and
    selected field operations, retaining identity, attenuation and durable waits.
 3. Publish bounded independent graph copies with fresh IDs, preserved cycles and

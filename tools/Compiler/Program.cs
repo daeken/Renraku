@@ -60,7 +60,7 @@ static partial class Compiler
             var views = BuildReferences(request, core, parse, options);
             var compilation = CSharpCompilation.Create(request.Name,
                 inputs.Select(input => CSharpSyntaxTree.ParseText(input.Text, parse, input.Name, Encoding.UTF8)),
-                new[] { MetadataReference.CreateFromImage(core) }.Concat(views.OrderBy(view=>view.Name,StringComparer.Ordinal).Select(view => MetadataReference.CreateFromImage(view.Image))), options);
+                (views.Any(v=>v.Name=="Renraku.CoreLib") ? Array.Empty<MetadataReference>() : new[] { MetadataReference.CreateFromImage(core) }).Concat(views.OrderBy(view=>view.Name,StringComparer.Ordinal).Select(view => MetadataReference.CreateFromImage(view.Image))), options);
             using var image = new BoundedImage(MaxAssembly);
             var result = compilation.Emit(image, options:
                 new Microsoft.CodeAnalysis.Emit.EmitOptions(runtimeMetadataVersion: "v4.0.30319"));

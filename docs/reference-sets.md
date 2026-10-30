@@ -17,7 +17,10 @@ dependencies and do not enter the facade closure.
 An isolated view keeps its exact original format-1 envelope and schema hashing.
 The existing Rust `reference_view` method remains the single-module API and still
 rejects foreign non-core declarations; use `reference_set` for those declarations.
-The original core image remains the bootstrap compiler reference.
+The original core image remains the bootstrap compiler reference for these
+full views. [Scoped pre-seal bootstrap](scoped-bootstrap.md) adds explicit
+format-3 subset views and a filtered metadata-only core, preserving the full
+format-1/2 bytes and validation rules.
 
 A complete set has `format: 1`, `kind: "referenceSet"`, `setHash`, and `views`.
 Each member remains scoped to its original logical module. Views without foreign

@@ -2438,3 +2438,819 @@ fn frozen_reference_cast_caller_keeps_saved_counter_identity_provenance_and_sdk_
     assert_eq!(code["sourceAvailable"], true);
     assert_eq!(code["sources"][0]["text"], source_text);
 }
+
+#[test]
+fn scoped_bootstrap_compiles_only_endowed_declarations_and_seals_original_objects() {
+    use renraku_vm::{
+        bootstrap,
+        endowment::{self, Endowment},
+    };
+    let directory = Directory::new();
+    let dll = fs::read(fixtures().output.join("Renraku.ChildTests.dll")).unwrap();
+    let p = Program::load(&[&fixtures().core, &dll]).unwrap();
+    let mut vm = Vm::new(&p);
+    vm.start(p.entry("Renraku.ChildTests.Child::Seed").unwrap(), vec![])
+        .unwrap();
+    vm.run(10000).unwrap();
+    let node = p.find_type("Renraku.ChildTests.Node").unwrap();
+    let field = p
+        .fields()
+        .find(|f| f.owner == node && f.name == "Value")
+        .unwrap()
+        .id;
+    let shared_field = p.fields().find(|f| f.name == "Shared").unwrap().id;
+    let shared = vm.static_fields()[&shared_field]
+        .referenced_object()
+        .unwrap();
+    let mut e = Endowment::default();
+    e.types
+        .extend([p.find_type("System.Object").unwrap(), node]);
+    e.read.insert(field);
+    e.write.insert(field);
+    e.objects.insert(shared);
+    let mut store = CheckpointStore::open(directory.0.join("scoped.db")).unwrap();
+    store.save(&vm).unwrap();
+    let set = bootstrap::prepare(&mut store, &e).unwrap();
+    set.validate(&p).unwrap();
+    let json = set.to_json().unwrap();
+    let text = String::from_utf8(json.clone()).unwrap();
+    for name in [
+        "PrivateParent",
+        "Hidden",
+        "Next",
+        "Child::",
+        "Seed",
+        "Renraku.Model",
+        "8675309",
+        "parent-private-text",
+    ] {
+        assert!(!text.contains(name), "leaked {name}");
+    }
+    assert!(text.contains("Value") && text.contains("private extern @Node"));
+    assert!(set.views.iter().all(|v| v.is_scoped()));
+    let views = directory.0.join("scoped.json");
+    fs::write(&views, json).unwrap();
+    let source=directory.source("ScopedCaller.cs","public static class ScopedCaller { public static int Calls; public static int Run(Renraku.ChildTests.Node node,int delta) { Calls++; node.Value=node.Value+delta; return node.Value; } }");
+    let (output, report) = directory.compile_named(
+        &[source],
+        "scoped-bundle",
+        std::slice::from_ref(&views),
+        "Scoped.Caller",
+    );
+    assert_success(&output, &report);
+    let artifact = BuildArtifact::from_bundle(directory.0.join("scoped-bundle")).unwrap();
+    artifact.validate().unwrap();
+    let mut forged = set.views.clone();
+    for view in &mut forged {
+        let schema: Json = serde_json::from_str(&view.schema_json).unwrap();
+        view.schema_json = view.schema_json.replace(
+            schema["scope"]["approval"].as_str().unwrap(),
+            &"0".repeat(64),
+        );
+        view.schema_hash = Sha256::digest(view.schema_json.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+    }
+    let forged = ReferenceSet::from_views(forged).unwrap();
+    forged.validate(&p).unwrap();
+    let fake_path = directory.0.join("fake-scope.json");
+    fs::write(&fake_path, forged.to_json().unwrap()).unwrap();
+    let fake_source=directory.source("Fake.cs","public static class Fake { public static int Run(Renraku.ChildTests.Node node) { return node.Value; } }");
+    let (output, report) =
+        directory.compile_named(&[fake_source], "fake-bundle", &[fake_path], "Fake.Caller");
+    assert_success(&output, &report);
+    let fake = BuildArtifact::from_bundle(directory.0.join("fake-bundle")).unwrap();
+    assert!(
+        install_once(&mut store, "fake/install", &fake)
+            .unwrap_err()
+            .to_string()
+            .contains("outside trusted bootstrap approval")
+    );
+    let receipt = install_once(&mut store, "scoped-install", &artifact).unwrap();
+    let saved = store.load().unwrap();
+    let p = &saved.snapshot.program;
+    assert_eq!(p.find_type("Renraku.ChildTests.Node").unwrap(), node);
+    let caller = p.find_type("ScopedCaller").unwrap();
+    e.types.insert(caller);
+    let method = p
+        .method(p.entry("ScopedCaller::Run").unwrap())
+        .unwrap()
+        .binding;
+    e.methods.insert(method.code);
+    let calls = p
+        .fields()
+        .find(|f| f.owner == caller && f.name == "Calls")
+        .unwrap()
+        .id;
+    e.read.insert(calls);
+    e.write.insert(calls);
+    let mut widened = e.clone();
+    widened.read.insert(
+        p.fields()
+            .find(|f| f.owner == node && f.name == "Next")
+            .unwrap()
+            .id,
+    );
+    assert!(
+        endowment::seal(&mut store, &widened)
+            .unwrap_err()
+            .to_string()
+            .contains("widens")
+    );
+    endowment::seal(&mut store, &e).unwrap();
+    // Save and collect after every instruction, including a failed final save.
+    endowment::invoke_once(
+        &mut store,
+        "scoped-first",
+        method.code,
+        vec![Value::Reference(shared), Value::I32(7)],
+        0,
+    )
+    .unwrap();
+    let mut cuts = 0;
+    loop {
+        let s = store.load().unwrap();
+        let mut vm = s.snapshot.restore().unwrap();
+        let previous = vm.context().clone();
+        assert_eq!(vm.invocation("scoped-first").unwrap().method, method);
+        assert_eq!(
+            vm.invocation("scoped-first").unwrap().arguments[0],
+            Value::Reference(shared)
+        );
+        let out = vm.run(1).unwrap();
+        vm.collect_garbage().unwrap();
+        cuts += 1;
+        if matches!(out, RunOutcome::Completed(_)) {
+            let db = rusqlite::Connection::open(directory.0.join("scoped.db")).unwrap();
+            db.execute_batch("CREATE TRIGGER fail_scoped_terminal BEFORE UPDATE ON checkpoint BEGIN SELECT RAISE(ABORT,'scoped terminal failure'); END;").unwrap();
+            assert!(store.save(&vm).is_err());
+            db.execute_batch("DROP TRIGGER fail_scoped_terminal")
+                .unwrap();
+            assert_eq!(
+                *store.load().unwrap().snapshot.restore().unwrap().context(),
+                previous
+            );
+            break;
+        }
+        store.save(&vm).unwrap();
+        assert!(cuts < 100);
+    }
+    assert!(cuts > 10);
+    assert_eq!(
+        endowment::invoke_once(
+            &mut store,
+            "scoped-first",
+            method.code,
+            vec![Value::Reference(shared), Value::I32(7)],
+            1000
+        )
+        .unwrap()["result"]["value"],
+        26
+    );
+    assert_eq!(
+        endowment::invoke_once(
+            &mut store,
+            "scoped-second",
+            method.code,
+            vec![Value::Reference(shared), Value::I32(-3)],
+            10000
+        )
+        .unwrap()["result"]["value"],
+        23
+    );
+    assert_eq!(
+        endowment::invoke_once(
+            &mut store,
+            "scoped-first",
+            method.code,
+            vec![Value::Reference(shared), Value::I32(7)],
+            10000
+        )
+        .unwrap()["result"]["value"],
+        26
+    );
+    let s = store.load().unwrap();
+    let mut vm = s.snapshot.restore().unwrap();
+    vm.collect_garbage().unwrap();
+    store.save(&vm).unwrap();
+    assert_eq!(
+        vm.heap().object(shared).unwrap().fields()[&field],
+        Value::I32(23)
+    );
+    assert_eq!(vm.static_fields()[&calls], Value::I32(2));
+    assert_eq!(
+        vm.installation("scoped-install").unwrap().assembly,
+        receipt.assembly
+    );
+    assert!(
+        vm.read_code("ScopedCaller::Run").unwrap()["sourceAvailable"]
+            .as_bool()
+            .unwrap()
+    );
+    // C# visibility is useful, but runtime admission remains the authority.
+    for (i, body) in [
+        "return node.Next;",
+        "return Renraku.ChildTests.PrivateParent.Number;",
+        "return new Renraku.ChildTests.Node(1);",
+        "return Renraku.Model.Complete(null);",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let path=directory.source(&format!("Denied{i}.cs"),&format!("public static class Denied {{ public static object Run(Renraku.ChildTests.Node node) {{ {body} }} }}"));
+        let (output, report) = directory.compile_named(
+            &[path],
+            &format!("denied-{i}"),
+            std::slice::from_ref(&views),
+            "Denied.Caller",
+        );
+        assert!(!output.status.success(), "{report}");
+    }
+    // A real artifact carrying an authentic-looking scope has no authority in
+    // another universe, even if module images and captured source are identical.
+    let mut other = CheckpointStore::open(directory.0.join("other.db")).unwrap();
+    other.save(&Vm::new(&p_from_images(&dll))).unwrap();
+    assert!(install_once(&mut other, "forged", &artifact).is_err());
+    fs::remove_dir_all(directory.0.join("scoped-bundle")).unwrap();
+    fs::remove_file(views).unwrap();
+    assert_eq!(
+        install_once(&mut store, "scoped-install", &artifact)
+            .unwrap()
+            .assembly,
+        receipt.assembly
+    );
+}
+fn p_from_images(dll: &[u8]) -> Program {
+    Program::load(&[&fixtures().core, dll]).unwrap()
+}
+
+struct ScopedServer(std::process::Child);
+impl Drop for ScopedServer {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+#[test]
+fn scoped_captured_csharp_bootstrap_uses_original_remote_counter_and_recovers_sdk_free() {
+    use renraku_vm::{
+        bootstrap,
+        compiler::{CompilationRequest, CompilationStore, CompilerToolchain},
+        endowment::{self, Endowment},
+        execution::ExecutionStatus,
+        identity::{GrantId, NodeId},
+        peer::{Endpoint, PeerKey},
+        placement::{self, PlacementPolicy},
+        remote,
+    };
+    let d = Directory::new();
+    let dll = fs::read(fixtures().output.join("Renraku.ChildTests.dll")).unwrap();
+    let p = p_from_images(&dll);
+    let mut vm = Vm::new(&p);
+    vm.start(p.entry("Renraku.ChildTests.Child::Seed").unwrap(), vec![])
+        .unwrap();
+    vm.run(10000).unwrap();
+    let principal = vm.universe_id();
+    let shared = vm.static_fields()[&p.fields().find(|f| f.name == "Shared").unwrap().id]
+        .referenced_object()
+        .unwrap();
+    let db = d.0.join("child.db");
+    let mut child = CheckpointStore::open(&db).unwrap();
+    child.save(&vm).unwrap();
+    let op = common::program();
+    let mut ovm = Vm::new(&op);
+    ovm.start(
+        op.entry("Renraku.Guest.Simulation::SaveObject").unwrap(),
+        vec![],
+    )
+    .unwrap();
+    ovm.run(1000).unwrap();
+    let object = ovm.static_fields()[&op
+        .fields()
+        .find(|f| f.owner == op.find_type("Renraku.Guest.Simulation").unwrap() && f.name == "Saved")
+        .unwrap()
+        .id]
+        .referenced_object()
+        .unwrap();
+    let owner_id = ovm.universe_id();
+    let ownerdb = d.0.join("owner.db");
+    let mut owner = CheckpointStore::open(&ownerdb).unwrap();
+    owner.save(&ovm).unwrap();
+    let node = NodeId::fresh();
+    placement::initialize(&mut owner, node, 1).unwrap();
+    placement::register_object(&mut owner, object, PlacementPolicy::pinned(node)).unwrap();
+    let owner_method = op
+        .method(op.entry("Renraku.Guest.Counter::Add").unwrap())
+        .unwrap()
+        .binding;
+    let grant = GrantId::fresh();
+    placement::export_method(&mut owner, grant, principal, object, owner_method).unwrap();
+    let key = d.0.join("key");
+    PeerKey::from_bytes([0x63; 32]).write_new(&key).unwrap();
+    let mut server = ScopedServer(
+        Command::new(env!("CARGO_BIN_EXE_renraku-checkpoint-probe"))
+            .args([
+                "peer-server",
+                ownerdb.to_str().unwrap(),
+                &node.to_string(),
+                &principal.to_string(),
+                key.to_str().unwrap(),
+                "127.0.0.1:0",
+                "1000",
+                "1",
+                "-",
+            ])
+            .env("PATH", "/no-scoped-sdk")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    BufReader::new(server.0.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let address = serde_json::from_str::<Json>(&line).unwrap()["listening"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let contract = p
+        .method(p.entry("Renraku.ChildTests.CounterPort::Add").unwrap())
+        .unwrap()
+        .binding;
+    let handle = remote::import_method(
+        &mut owner,
+        &mut child,
+        &Endpoint {
+            owner: owner_id,
+            node,
+            epoch: 1,
+            address,
+        },
+        grant,
+        contract,
+    )
+    .unwrap();
+    let mut e = Endowment::default();
+    for name in [
+        "System.Object",
+        "Renraku.ChildTests.Node",
+        "Renraku.ChildTests.CounterPort",
+    ] {
+        e.types.insert(p.find_type(name).unwrap());
+    }
+    e.methods.insert(contract.code);
+    e.objects.extend([shared, handle]);
+    let value = p
+        .fields()
+        .find(|f| f.owner == p.find_type("Renraku.ChildTests.Node").unwrap() && f.name == "Value")
+        .unwrap()
+        .id;
+    e.read.insert(value);
+    e.write.insert(value);
+    let set = bootstrap::prepare(&mut child, &e).unwrap();
+    let saved = child.load().unwrap();
+    let vm = saved.snapshot.restore().unwrap();
+    let toolchain = CompilerToolchain::open("/usr/local/share/dotnet/dotnet", compiler()).unwrap();
+    let source=b"public static class ScopedRemoteCaller { public static int Calls; public static int Run(Renraku.ChildTests.Node node,Renraku.ChildTests.CounterPort counter,int delta) { Calls++; node.Value++; return counter.Add(delta)+node.Value; } }".to_vec();
+    let request = CompilationRequest::capture(
+        &saved.snapshot.program,
+        vm.universe_id(),
+        &toolchain,
+        "Scoped.RemoteCaller".into(),
+        vec![("Caller.cs".into(), source.clone())],
+        set.views.clone(),
+    )
+    .unwrap();
+    let ledger = d.0.join("compiler.db");
+    let mut service = CompilationStore::open(&ledger).unwrap();
+    service.prepare("bootstrap", &request).unwrap();
+    let result = service.drive(principal, "bootstrap", &toolchain).unwrap();
+    assert!(
+        result.report.as_ref().unwrap()["success"]
+            .as_bool()
+            .unwrap(),
+        "{:?}",
+        result.report
+    );
+    let artifact = result.artifact.unwrap();
+    let installed = install_once(&mut child, "bootstrap/install", &artifact).unwrap();
+    let s = child.load().unwrap();
+    let cp = &s.snapshot.program;
+    let caller = cp.find_type("ScopedRemoteCaller").unwrap();
+    e.types.insert(caller);
+    let code = cp
+        .method(cp.entry("ScopedRemoteCaller::Run").unwrap())
+        .unwrap()
+        .binding
+        .code;
+    e.methods.insert(code);
+    let calls = cp
+        .fields()
+        .find(|f| f.owner == caller && f.name == "Calls")
+        .unwrap()
+        .id;
+    e.read.insert(calls);
+    e.write.insert(calls);
+    endowment::seal(&mut child, &e).unwrap();
+    let tool_request = d.0.join("invoke.json");
+    fs::write(&tool_request,serde_json::to_vec(&serde_json::json!({"action":"invoke","operation":"bootstrap/run","code":code.to_string(),"budget":1000,"arguments":[{"kind":"object","value":shared.to_string()},{"kind":"object","value":handle.to_string()},{"kind":"i32","value":7}]})).unwrap()).unwrap();
+    let invoke = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+            .args([
+                "child-tool",
+                db.to_str().unwrap(),
+                tool_request.to_str().unwrap(),
+            ])
+            .env("PATH", "/no-scoped-sdk")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Json>(&output.stdout).unwrap()
+    };
+    let first = invoke();
+    assert_eq!(first["waitingRemote"], true);
+    let s = child.load().unwrap();
+    let mut vm = s.snapshot.restore().unwrap();
+    assert!(matches!(
+        vm.context().status,
+        ExecutionStatus::WaitingRemote { .. }
+    ));
+    assert_eq!(
+        vm.heap().object(shared).unwrap().fields()[&value],
+        Value::I32(20)
+    );
+    vm.collect_garbage().unwrap();
+    child.save(&vm).unwrap();
+    // Compiler terminal records and bootstrap artifacts are no longer required by
+    // either native process. The caller has only a handle, never Counter state.
+    drop(service);
+    fs::remove_file(&ledger).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_renraku-vm"))
+        .args(["remote-drive", db.to_str().unwrap(), key.to_str().unwrap()])
+        .env("PATH", "/no-scoped-sdk")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(server.0.wait().unwrap().success());
+    fs::remove_file(key).unwrap();
+    let terminal = invoke();
+    assert_eq!(terminal["result"]["value"], 46);
+    assert_eq!(invoke(), terminal);
+    let s = child.load().unwrap();
+    let vm = s.snapshot.restore().unwrap();
+    assert_eq!(vm.static_fields()[&calls], Value::I32(1));
+    assert_eq!(
+        vm.heap().object(shared).unwrap().fields()[&value],
+        Value::I32(20)
+    );
+    assert_eq!(
+        vm.installation("bootstrap/install").unwrap().assembly,
+        installed.assembly
+    );
+    assert!(
+        s.snapshot
+            .program
+            .find_type("Renraku.Guest.Counter")
+            .is_err()
+    );
+    assert_eq!(
+        bootstrap::references(&mut child)
+            .unwrap()
+            .to_json()
+            .unwrap(),
+        set.to_json().unwrap()
+    );
+    let retained = vm.read_code("ScopedRemoteCaller::Run").unwrap();
+    assert!(
+        retained
+            .to_string()
+            .contains(std::str::from_utf8(&source).unwrap())
+    );
+    let s = owner.load().unwrap();
+    let vm = s.snapshot.restore().unwrap();
+    let value = op
+        .fields()
+        .find(|f| f.owner == op.find_type("Renraku.Guest.Counter").unwrap() && f.name == "Value")
+        .unwrap()
+        .id;
+    assert_eq!(
+        vm.heap().object(object).unwrap().fields()[&value],
+        Value::I32(26)
+    );
+}
+
+#[test]
+fn scoped_bootstrap_approval_fails_closed_on_save_scope_rebinding_and_corruption() {
+    use renraku_vm::{
+        bootstrap,
+        endowment::Endowment,
+        identity::{CodeVersionId, FieldId},
+    };
+    let d = Directory::new();
+    let dll = fs::read(fixtures().output.join("Renraku.ChildTests.dll")).unwrap();
+    let p = p_from_images(&dll);
+    let mut store = CheckpointStore::open(d.0.join("scope.db")).unwrap();
+    store.save(&Vm::new(&p)).unwrap();
+    let mut e = Endowment::default();
+    e.types.extend([
+        p.find_type("System.Object").unwrap(),
+        p.find_type("Renraku.ChildTests.Node").unwrap(),
+    ]);
+    let field = p
+        .fields()
+        .find(|f| f.owner == p.find_type("Renraku.ChildTests.Node").unwrap() && f.name == "Value")
+        .unwrap()
+        .id;
+    e.read.insert(field);
+    let db = rusqlite::Connection::open(d.0.join("scope.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_bootstrap BEFORE UPDATE ON checkpoint BEGIN SELECT RAISE(ABORT,'bootstrap failure'); END;").unwrap();
+    assert!(bootstrap::prepare(&mut store, &e).is_err());
+    db.execute_batch("DROP TRIGGER fail_bootstrap").unwrap();
+    assert!(
+        !store
+            .load()
+            .unwrap()
+            .snapshot
+            .restore()
+            .unwrap()
+            .heap()
+            .roots()
+            .keys()
+            .any(|n| n.starts_with("renraku.bootstrap-v1/"))
+    );
+    let mut bad = e.clone();
+    bad.methods.insert(CodeVersionId::fresh());
+    assert!(bootstrap::prepare(&mut store, &bad).is_err());
+    bad = e.clone();
+    bad.read.insert(FieldId::fresh());
+    assert!(bootstrap::prepare(&mut store, &bad).is_err());
+    let set = bootstrap::prepare(&mut store, &e).unwrap();
+    assert_eq!(
+        bootstrap::prepare(&mut store, &e)
+            .unwrap()
+            .to_json()
+            .unwrap(),
+        set.to_json().unwrap()
+    );
+    bad = e.clone();
+    bad.write.insert(field);
+    assert!(bootstrap::prepare(&mut store, &bad).is_err());
+    assert!(
+        ReferenceSet::from_views(vec![
+            set.views
+                .iter()
+                .find(|v| !v.schema_json.contains("\"moduleName\":\"Renraku.CoreLib\""))
+                .unwrap()
+                .clone()
+        ])
+        .is_err()
+    );
+    let mut changed = set.views.clone();
+    let mut envelope: Json = serde_json::from_slice(&changed[0].to_json().unwrap()).unwrap();
+    let mut schema: Json = serde_json::from_str(envelope["schemaJson"].as_str().unwrap()).unwrap();
+    schema["scope"]["approval"] = Json::String("0".repeat(64));
+    let text = serde_json::to_string(&schema).unwrap();
+    envelope["schemaHash"] = Json::String(
+        Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    );
+    envelope["schemaJson"] = Json::String(text);
+    changed[0] = ReferenceView::from_json(&serde_json::to_vec(&envelope).unwrap()).unwrap();
+    assert!(ReferenceSet::from_views(changed).is_err());
+    let s = store.load().unwrap();
+    let mut executed = s.snapshot.restore().unwrap();
+    executed
+        .start(
+            s.snapshot
+                .program
+                .entry("Renraku.ChildTests.Child::RawCall")
+                .unwrap(),
+            vec![Value::I32(1)],
+        )
+        .unwrap();
+    executed.run(1000).unwrap();
+    store.save(&executed).unwrap();
+    assert!(
+        renraku_vm::endowment::seal(&mut store, &e)
+            .unwrap_err()
+            .to_string()
+            .contains("executed before sealing")
+    );
+    let s = store.load().unwrap();
+    let vm = s.snapshot.restore().unwrap();
+    let id = vm.heap().roots()["renraku.bootstrap-v1/approval"];
+    let text = String::from_utf16(vm.heap().object(id).unwrap().string_units().unwrap()).unwrap();
+    let changed = text.replacen("\"format\":1", "\"format\":2", 1);
+    let mut badvm = s.snapshot.restore().unwrap();
+    let replacement = badvm.new_string(changed.encode_utf16().collect()).unwrap();
+    badvm
+        .set_root("renraku.bootstrap-v1/approval", replacement)
+        .unwrap();
+    assert!(store.save(&badvm).is_err());
+    let mut payload: Vec<u8> = db
+        .query_row("SELECT payload FROM checkpoint", [], |r| r.get(0))
+        .unwrap();
+    let old: Vec<_> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let new: Vec<_> = changed.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let offset = payload.windows(old.len()).position(|b| b == old).unwrap();
+    payload[offset..offset + old.len()].copy_from_slice(&new);
+    db.execute(
+        "UPDATE checkpoint SET payload=?1,digest=?2",
+        rusqlite::params![payload, Sha256::digest(&payload).as_slice()],
+    )
+    .unwrap();
+    assert!(store.load().is_err());
+}
+#[test]
+fn scoped_views_preserve_original_unsigned_readonly_fields_and_hide_other_result_types() {
+    use renraku_vm::{
+        bootstrap,
+        endowment::{self, Endowment},
+    };
+    let d = Directory::new();
+    let dll = fs::read(fixtures().output.join("Renraku.UnsignedText.dll")).unwrap();
+    let p = Program::load(&[&fixtures().core, &dll]).unwrap();
+    let mut vm = Vm::new(&p);
+    let text = vm
+        .new_string("4294967295".encode_utf16().collect())
+        .unwrap();
+    vm.start(
+        p.entry("Renraku.Text.UnsignedIntegerText::ParseUInt32")
+            .unwrap(),
+        vec![Value::Reference(text)],
+    )
+    .unwrap();
+    let RunOutcome::Completed(Some(Value::Reference(object))) = vm.run(150000).unwrap() else {
+        panic!("parser did not finish")
+    };
+    let ty = p.find_type("Renraku.Text.UInt32ParseResult").unwrap();
+    let field = p
+        .fields()
+        .find(|f| f.owner == ty && f.name == "Value")
+        .unwrap()
+        .id;
+    let mut e = Endowment::default();
+    e.types.extend([p.find_type("System.Object").unwrap(), ty]);
+    e.read.insert(field);
+    e.objects.insert(object);
+    let mut store = CheckpointStore::open(d.0.join("unsigned.db")).unwrap();
+    store.save(&vm).unwrap();
+    let set = bootstrap::prepare(&mut store, &e).unwrap();
+    let exported = String::from_utf8(set.to_json().unwrap()).unwrap();
+    assert!(exported.contains("public readonly uint @Value;"));
+    assert!(
+        !exported.contains("UInt64ParseResult")
+            && !exported.contains("ParseUInt32")
+            && !exported.contains("@Success")
+            && !exported.contains("@Error")
+    );
+    let views = d.0.join("scope.json");
+    fs::write(&views, set.to_json().unwrap()).unwrap();
+    let source=d.source("UnsignedCaller.cs","public static class UnsignedCaller { public static ulong Run(Renraku.Text.UInt32ParseResult item) { return item.Value; } }");
+    let (output, report) = d.compile_named(
+        &[source],
+        "unsigned-bundle",
+        std::slice::from_ref(&views),
+        "Scoped.UnsignedCaller",
+    );
+    assert_success(&output, &report);
+    let artifact = BuildArtifact::from_bundle(d.0.join("unsigned-bundle")).unwrap();
+    install_once(&mut store, "unsigned/install", &artifact).unwrap();
+    let s = store.load().unwrap();
+    let p = &s.snapshot.program;
+    let code = p
+        .method(p.entry("UnsignedCaller::Run").unwrap())
+        .unwrap()
+        .binding
+        .code;
+    e.types.insert(p.find_type("UnsignedCaller").unwrap());
+    e.methods.insert(code);
+    endowment::seal(&mut store, &e).unwrap();
+    assert_eq!(
+        endowment::invoke_once(
+            &mut store,
+            "unsigned/run",
+            code,
+            vec![Value::Reference(object)],
+            10000
+        )
+        .unwrap()["result"]["value"],
+        "4294967295"
+    );
+    let source=d.source("WriteReadonly.cs","public static class Denied { public static void Run(Renraku.Text.UInt32ParseResult item) { item.Value=0; } }");
+    let (output, report) =
+        d.compile_named(&[source], "write-readonly", &[views], "Denied.Readonly");
+    assert!(!output.status.success(), "{report}");
+}
+
+#[test]
+fn forged_captured_private_field_tokens_cannot_escape_scoped_bootstrap_admission() {
+    use renraku_vm::{
+        bootstrap,
+        endowment::{self, Endowment},
+    };
+    let d = Directory::new();
+    let dll = fs::read(fixtures().output.join("Renraku.ChildTests.dll")).unwrap();
+    let p = p_from_images(&dll);
+    let mut vm = Vm::new(&p);
+    vm.start(p.entry("Renraku.ChildTests.Child::Seed").unwrap(), vec![])
+        .unwrap();
+    vm.run(10000).unwrap();
+    let mut store = CheckpointStore::open(d.0.join("forged.db")).unwrap();
+    store.save(&vm).unwrap();
+    let mut e = Endowment::default();
+    e.types.extend([
+        p.find_type("System.Object").unwrap(),
+        p.find_type("Renraku.ChildTests.Node").unwrap(),
+    ]);
+    let field = p
+        .fields()
+        .find(|f| f.owner == p.find_type("Renraku.ChildTests.Node").unwrap() && f.name == "Value")
+        .unwrap()
+        .id;
+    e.read.insert(field);
+    let scope = bootstrap::prepare(&mut store, &e).unwrap();
+    let filtered = d.0.join("scope.json");
+    fs::write(&filtered, scope.to_json().unwrap()).unwrap();
+    let source=d.source("Good.cs","public static class Good { public static int Run(Renraku.ChildTests.Node node) { return node.Value; } }");
+    let (output, report) = d.compile_named(&[source], "good", &[filtered], "Good.Scoped");
+    assert_success(&output, &report);
+    // This test alone uses the trusted full view to generate hostile metadata;
+    // the child-facing workflow never supplies this view or private source.
+    let full = d.0.join("full.json");
+    fs::write(
+        &full,
+        p.reference_view(&[p.find_type("Renraku.ChildTests.PrivateParent").unwrap()])
+            .unwrap()
+            .to_json()
+            .unwrap(),
+    )
+    .unwrap();
+    let source=d.source("Attack.cs","public static class Attack { public static int Run() { return Renraku.ChildTests.PrivateParent.Number; } }");
+    let (output, report) = d.compile_named(&[source], "attack", &[full], "Attack.Scoped");
+    assert_success(&output, &report);
+    // Forge the captured inputs to claim the subset facades. Hashes and names
+    // remain internally valid. Neither facade possession nor compiler visibility
+    // may replace the final admission check over actual executable CIL.
+    let mut manifest: Json =
+        serde_json::from_slice(&fs::read(d.0.join("attack/renraku-build.json")).unwrap()).unwrap();
+    let good: Json =
+        serde_json::from_slice(&fs::read(d.0.join("good/renraku-build.json")).unwrap()).unwrap();
+    manifest["references"] = good["references"].clone();
+    fs::remove_dir_all(d.0.join("attack/references")).unwrap();
+    fs::create_dir(d.0.join("attack/references")).unwrap();
+    for reference in good["references"].as_array().unwrap() {
+        for kind in ["view", "image"] {
+            let path = reference[kind]["file"].as_str().unwrap();
+            fs::copy(d.0.join("good").join(path), d.0.join("attack").join(path)).unwrap();
+        }
+    }
+    fs::write(
+        d.0.join("attack/renraku-build.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let artifact = BuildArtifact::from_bundle(d.0.join("attack")).unwrap();
+    install_once(&mut store, "attack/install", &artifact).unwrap();
+    let s = store.load().unwrap();
+    let p = &s.snapshot.program;
+    e.types.insert(p.find_type("Attack").unwrap());
+    let method = p.entry("Attack::Run").unwrap();
+    e.methods.insert(p.method(method).unwrap().binding.code);
+    let mut raw = s.snapshot.restore().unwrap();
+    raw.start(method, vec![]).unwrap();
+    assert_eq!(
+        raw.run(1000).unwrap(),
+        RunOutcome::Completed(Some(Value::I32(8675309)))
+    );
+    assert!(
+        endowment::seal(&mut store, &e)
+            .unwrap_err()
+            .to_string()
+            .contains("child authority denied")
+    );
+    assert!(
+        !store
+            .load()
+            .unwrap()
+            .snapshot
+            .restore()
+            .unwrap()
+            .heap()
+            .roots()
+            .contains_key("renraku.child-v1/policy")
+    );
+}

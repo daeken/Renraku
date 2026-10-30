@@ -33,6 +33,11 @@ prepares any [remote imports](remote-calls.md), and builds an `Endowment`:
 - `effects`: exact `(capability, model)` pairs. Transient host model authorization
   and provider credentials remain separately required and default off on restore.
 
+For a captured C# caller, [scoped bootstrap](scoped-bootstrap.md) now exports
+only approved declarations, compiles/installs before sealing, and checks the
+saved approval again at installation and sealing. The registry seal remains
+closed afterward.
+
 `endowment::seal` requires a completed idle context, no invocation/effect history,
 no owner placement registry and no peer calls. It does not discard accepted or
 uncertain work. Trusted bootstrap heap/statics remain, original IDs and lifetime
@@ -183,7 +188,9 @@ no key/server and does not mutate again; private-parent search returns no rows.
 Existing caller/owner crash/revocation tests and all older persistence/compiler/
 model/website/legacy-reader evidence remain required. No live inference is used.
 
-Next extend scoped compiler/reference admission and delegation deliberately.
+Scoped compiler bootstrap is now implemented before sealing; see its
+[workflow, versioned views and adversarial evidence](scoped-bootstrap.md).
+Next extend remote method sets/referents and delegation deliberately.
 Filtered class APIs must not become full-module/source authority; append-only
 child code requires a versioned atomic admission contract, not removal of the
 current registry seal. Returned object grants, per-reference attenuation,

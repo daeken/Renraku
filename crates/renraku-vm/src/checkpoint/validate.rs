@@ -59,6 +59,7 @@ pub(super) fn validate(vm: &Vm<'_>) -> Result<()> {
     crate::peer::validate(vm)?;
     crate::remote::validate(vm)?;
     crate::endowment::validate(vm)?;
+    crate::bootstrap::validate(vm)?;
     let retained = vm.retained_objects()?;
     let program = vm.program;
     for id in retained {
